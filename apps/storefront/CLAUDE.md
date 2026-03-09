@@ -3,7 +3,7 @@
 Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 
 ## Stack
-- Next.js (App Router), TypeScript, Tailwind CSS
+- Next.js 14+ (App Router), TypeScript, Tailwind CSS
 - next-themes (Light/Dark/Standard themes via CSS variables)
 - next-intl (English + Swahili)
 
@@ -19,9 +19,9 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - `/rentals` - Browse rentable items
 - `/rentals/[slug]` - Rental detail with date picker and booking
 - `/shop` - Redirects to `/products`
-- `/auth/login` - Login
-- `/auth/register` - Register
-- `/auth/forgot-password` - Password reset
+- `/auth/login` - Login (with logo branding panel)
+- `/auth/register` - Register (with logo branding panel)
+- `/auth/forgot-password` - Password reset (with logo branding panel)
 - `/account` - Dashboard (orders, rentals, wishlist stats)
 - `/account/orders` - Order history
 - `/account/rentals` - Active and past rentals
@@ -35,6 +35,11 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - API client in `lib/api.ts` with domain functions: productsApi, categoriesApi, cartApi, wishlistApi, ordersApi, rentalsApi, reviewsApi, flashSalesApi, cmsApi, authApi, idVerificationApi, shippingApi
 - Auth token from `localStorage('token')` auto-injected as Bearer header
 - `.env.local` contains `NEXT_PUBLIC_API_URL=http://localhost:4000/api/v1`
+
+## Assets
+- `public/logo.jpg` - Full Naro Fashion logo (auth page branding panels)
+- `public/icon.jpg` - Circular icon (header, footer, mobile menu, mobile auth)
+- `public/favicon.jpg` - Browser tab icon
 
 ## Conventions
 - Use `@naro/shared` for types/enums, `@naro/ui` for shared components

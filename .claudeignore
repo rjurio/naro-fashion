@@ -11,3 +11,16 @@ coverage/
 .nyc_output/
 *.log
 *.tsbuildinfo
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.ico
+*.svg
+*.woff
+*.woff2
+*.ttf
+*.eot
+*.mp4
+*.webm
+*.pdf
