@@ -1,0 +1,32 @@
+{
+  "name": "naro-fashion",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "clean": "turbo clean",
+    "dev:storefront": "turbo dev --filter=storefront",
+    "dev:admin": "turbo dev --filter=admin",
+    "dev:api": "turbo dev --filter=api",
+    "db:generate": "turbo db:generate --filter=@naro/database",
+    "db:push": "turbo db:push --filter=@naro/database",
+    "db:migrate": "turbo db:migrate --filter=@naro/database",
+    "db:studio": "turbo db:studio --filter=@naro/database"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild",
+      "@nestjs/core"
+    ]
+  }
+}

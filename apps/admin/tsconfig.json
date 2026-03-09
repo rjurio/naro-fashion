@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "incremental": true,
+    "noEmit": true,
+    "allowJs": true,
+    "plugins": [
+      { "name": "next" }
+    ],
+    "paths": {
+      "@/*": ["./*"],
+      "@naro/shared": ["../../packages/shared/src"],
+      "@naro/shared/*": ["../../packages/shared/src/*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
+}

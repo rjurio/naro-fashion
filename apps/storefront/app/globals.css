@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ===== LIGHT THEME (default) ===== */
+  :root,
+  [data-theme="light"] {
+    --color-background: #FFFFFF;
+    --color-foreground: #1A1A1A;
+    --color-primary: #D4AF37;
+    --color-primary-foreground: #FFFFFF;
+    --color-accent: #D4AF37;
+    --color-accent-foreground: #1A1A1A;
+    --color-muted: #F3F4F6;
+    --color-muted-foreground: #6B7280;
+    --color-card: #FFFFFF;
+    --color-card-foreground: #1A1A1A;
+    --color-border: #E5E7EB;
+    --color-input: #E5E7EB;
+    --color-ring: #D4AF37;
+  }
+
+  /* ===== DARK THEME ===== */
+  [data-theme="dark"] {
+    --color-background: #1A1A1A;
+    --color-foreground: #FFFFFF;
+    --color-primary: #D4AF37;
+    --color-primary-foreground: #FFFFFF;
+    --color-accent: #D4AF37;
+    --color-accent-foreground: #FFFFFF;
+    --color-muted: #2A2A2A;
+    --color-muted-foreground: #A1A1AA;
+    --color-card: #242424;
+    --color-card-foreground: #FFFFFF;
+    --color-border: #3A3A3A;
+    --color-input: #3A3A3A;
+    --color-ring: #D4AF37;
+  }
+
+  /* ===== STANDARD THEME ===== */
+  [data-theme="standard"] {
+    --color-background: #F9FAFB;
+    --color-foreground: #374151;
+    --color-primary: #D4AF37;
+    --color-primary-foreground: #FFFFFF;
+    --color-accent: #B8952A;
+    --color-accent-foreground: #1F2937;
+    --color-muted: #F3F4F6;
+    --color-muted-foreground: #6B7280;
+    --color-card: #FFFFFF;
+    --color-card-foreground: #374151;
+    --color-border: #D1D5DB;
+    --color-input: #D1D5DB;
+    --color-ring: #D4AF37;
+  }
+
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-gold-500 text-white hover:bg-gold-600 active:bg-gold-700
+           px-6 py-2.5 rounded-lg font-medium transition-colors duration-200;
+  }
+
+  .btn-accent {
+    @apply bg-gold-500 text-dark-500 hover:bg-gold-600 active:bg-gold-700
+           px-6 py-2.5 rounded-lg font-medium transition-colors duration-200;
+  }
+
+  .gradient-brand {
+    @apply bg-gradient-to-r from-dark-500 to-gold-500;
+  }
+
+  .text-gradient-brand {
+    @apply bg-gradient-to-r from-dark-500 to-gold-500 bg-clip-text text-transparent;
+  }
+}
+
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}

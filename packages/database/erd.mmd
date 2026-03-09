@@ -1,0 +1,471 @@
+erDiagram
+    User {
+        string id PK
+        string email UK
+        string phone UK
+        string passwordHash
+        string firstName
+        string lastName
+        string avatarUrl
+        boolean isVerified
+        boolean isActive
+        string preferredTheme
+        string preferredLocale
+        string googleId UK
+        string facebookId UK
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    Address {
+        string id PK
+        string userId FK
+        string label
+        string fullName
+        string phone
+        string street
+        string city
+        string region
+        string postalCode
+        string country
+        boolean isDefault
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    AdminUser {
+        string id PK
+        string email UK
+        string passwordHash
+        string firstName
+        string lastName
+        string role
+        boolean is2FAEnabled
+        string twoFASecret
+        boolean isActive
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    AdminActivityLog {
+        string id PK
+        string adminUserId FK
+        string action
+        string entity
+        string entityId
+        json details
+        string ipAddress
+        datetime createdAt
+    }
+
+    Category {
+        string id PK
+        string name
+        string nameSwahili
+        string slug UK
+        string description
+        string imageUrl
+        string parentId FK
+        int sortOrder
+        boolean isActive
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    Product {
+        string id PK
+        string name
+        string nameSwahili
+        string slug UK
+        string description
+        string descriptionSwahili
+        string categoryId FK
+        string availabilityMode
+        decimal basePrice
+        decimal compareAtPrice
+        string sku UK
+        boolean isActive
+        boolean isFeatured
+        json sizeGuide
+        json specifications
+        decimal rentalPricePerDay
+        decimal rentalDepositAmount
+        int rentalDownPaymentPct
+        int minRentalDays
+        int maxRentalDays
+        int bufferDaysOverride
+        float avgRating
+        int reviewCount
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    ProductVariant {
+        string id PK
+        string productId FK
+        string name
+        string sku UK
+        string size
+        string color
+        string colorHex
+        decimal price
+        int stock
+        boolean isActive
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    ProductImage {
+        string id PK
+        string productId FK
+        string url
+        string altText
+        int sortOrder
+        boolean isPrimary
+        datetime createdAt
+    }
+
+    ProductVideo {
+        string id PK
+        string productId FK
+        string url
+        string title
+        int sortOrder
+        datetime createdAt
+    }
+
+    CartItem {
+        string id PK
+        string userId FK
+        string productId FK
+        string variantId FK
+        int quantity
+        string notes
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    WishlistItem {
+        string id PK
+        string userId FK
+        string productId FK
+        datetime createdAt
+    }
+
+    Order {
+        string id PK
+        string orderNumber UK
+        string userId FK
+        string addressId FK
+        string status
+        decimal subtotal
+        decimal shippingCost
+        decimal discount
+        decimal total
+        string paymentMethod
+        string paymentStatus
+        string notes
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    OrderItem {
+        string id PK
+        string orderId FK
+        string productId FK
+        string variantId FK
+        int quantity
+        decimal unitPrice
+        decimal total
+    }
+
+    Payment {
+        string id PK
+        string orderId FK
+        string rentalOrderId FK
+        decimal amount
+        string method
+        string status
+        string transactionRef UK
+        json gatewayResponse
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    Shipment {
+        string id PK
+        string orderId FK "UK"
+        string trackingCode
+        string carrier
+        string status
+        string shippingZoneId FK
+        datetime estimatedDelivery
+        datetime shippedAt
+        datetime deliveredAt
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    Invoice {
+        string id PK
+        string orderId FK "UK"
+        string invoiceNumber UK
+        string pdfUrl
+        datetime issuedAt
+    }
+
+    ShippingZone {
+        string id PK
+        string name
+        string description
+        string[] regions
+        boolean isActive
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    ShippingRate {
+        string id PK
+        string shippingZoneId FK
+        string name
+        decimal minWeight
+        decimal maxWeight
+        decimal minOrderAmount
+        decimal price
+        decimal isFreeAbove
+        int estimatedDays
+        boolean isActive
+    }
+
+    Review {
+        string id PK
+        string userId FK
+        string productId FK
+        int rating
+        string title
+        string comment
+        boolean isVerified
+        boolean isApproved
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    CustomerIDDocument {
+        string id PK
+        string userId FK
+        string idType
+        string idNumber
+        string frontImageUrl
+        string backImageUrl
+        string verificationStatus
+        string rejectionReason
+        datetime verifiedAt
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    RentalOrder {
+        string id PK
+        string rentalNumber UK
+        string userId FK
+        string productId FK
+        string variantId FK
+        datetime startDate
+        datetime returnDate
+        datetime pickupDate
+        datetime actualReturnDate
+        decimal totalRentalPrice
+        decimal downPaymentAmount
+        decimal damageDeposit
+        decimal lateFee
+        string status
+        boolean isReadyForPickup
+        string notes
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    RentalPreparationReminder {
+        string id PK
+        string rentalOrderId FK
+        datetime sentAt
+        int daysUntilPickup
+        string sentVia
+    }
+
+    RentalChecklistTemplate {
+        string id PK
+        string name
+        string description
+        boolean isDefault
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    RentalChecklistTemplateItem {
+        string id PK
+        string templateId FK
+        string label
+        string labelSwahili
+        string itemType
+        int sortOrder
+    }
+
+    RentalChecklistEntry {
+        string id PK
+        string rentalOrderId FK
+        string label
+        string itemType
+        boolean isChecked
+        string checkedById FK
+        datetime checkedAt
+        string notes
+        int sortOrder
+    }
+
+    RentalPolicy {
+        string id PK
+        int bufferDaysBetweenRentals
+        int defaultDownPaymentPct
+        decimal lateFeePerDay
+        int maxRentalDurationDays
+        int advancePreparationReminderDays
+        datetime updatedAt
+    }
+
+    FlashSale {
+        string id PK
+        string title
+        string titleSwahili
+        string description
+        datetime startDate
+        datetime endDate
+        boolean isActive
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    FlashSaleItem {
+        string id PK
+        string flashSaleId FK
+        string productId FK
+        decimal salePrice
+    }
+
+    ReferralCode {
+        string id PK
+        string userId FK "UK"
+        string code UK
+        decimal discount
+        boolean isActive
+        datetime createdAt
+    }
+
+    Referral {
+        string id PK
+        string referralCodeId FK
+        string referrerId FK
+        string referredUserId FK "UK"
+        boolean isCompleted
+        boolean rewardGiven
+        datetime createdAt
+    }
+
+    Banner {
+        string id PK
+        string title
+        string titleSwahili
+        string subtitle
+        string subtitleSwahili
+        string imageUrl
+        string linkUrl
+        int sortOrder
+        boolean isActive
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    Page {
+        string id PK
+        string title
+        string titleSwahili
+        string slug UK
+        string content
+        string contentSwahili
+        boolean isPublished
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    SiteSetting {
+        string id PK
+        string key UK
+        string value
+        string type
+    }
+
+    PickupPoint {
+        string id PK
+        string name
+        string address
+        string city
+        string region
+        string phone
+        float latitude
+        float longitude
+        boolean isActive
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    %% Relationships
+    User ||--o{ Address : "has"
+    User ||--o{ Order : "places"
+    User ||--o{ Review : "writes"
+    User ||--o{ WishlistItem : "saves"
+    User ||--o{ CartItem : "adds"
+    User ||--o{ RentalOrder : "rents"
+    User ||--o{ CustomerIDDocument : "uploads"
+    User ||--o| ReferralCode : "owns"
+    User ||--o| Referral : "referredBy"
+    User ||--o{ Referral : "refers"
+
+    AdminUser ||--o{ AdminActivityLog : "generates"
+    AdminUser ||--o{ RentalChecklistEntry : "checks"
+
+    Category ||--o{ Product : "contains"
+    Category ||--o{ Category : "parent-child"
+
+    Product ||--o{ ProductVariant : "has"
+    Product ||--o{ ProductImage : "has"
+    Product ||--o{ ProductVideo : "has"
+    Product ||--o{ Review : "receives"
+    Product ||--o{ WishlistItem : "in"
+    Product ||--o{ CartItem : "in"
+    Product ||--o{ OrderItem : "in"
+    Product ||--o{ FlashSaleItem : "in"
+    Product ||--o{ RentalOrder : "rented"
+
+    ProductVariant ||--o{ CartItem : "in"
+    ProductVariant ||--o{ OrderItem : "in"
+    ProductVariant ||--o{ RentalOrder : "rented"
+
+    Address ||--o{ Order : "ships-to"
+
+    Order ||--o{ OrderItem : "contains"
+    Order ||--o{ Payment : "paid-by"
+    Order ||--o| Shipment : "shipped-via"
+    Order ||--o| Invoice : "invoiced"
+
+    RentalOrder ||--o{ Payment : "paid-by"
+    RentalOrder ||--o{ RentalChecklistEntry : "has"
+    RentalOrder ||--o{ RentalPreparationReminder : "reminded"
+
+    ShippingZone ||--o{ ShippingRate : "has"
+    ShippingZone ||--o{ Shipment : "covers"
+
+    FlashSale ||--o{ FlashSaleItem : "includes"
+
+    ReferralCode ||--o{ Referral : "generates"
+
+    RentalChecklistTemplate ||--o{ RentalChecklistTemplateItem : "has"
