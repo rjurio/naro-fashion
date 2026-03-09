@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
-import { ThemeProvider } from 'next-themes';
+import Providers from './providers';
 import './globals.css';
 
 const inter = Inter({
@@ -11,6 +11,10 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: 'Naro Fashion Admin',
   description: 'Admin dashboard for Naro Fashion ecommerce platform',
+  icons: {
+    icon: '/favicon.jpg',
+    apple: '/icon.jpg',
+  },
 };
 
 export default function RootLayout({
@@ -21,14 +25,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.variable} font-sans antialiased`}>
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="light"
-          themes={['light', 'dark', 'luxury']}
-          enableSystem={false}
-        >
-          {children}
-        </ThemeProvider>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

@@ -47,29 +47,39 @@ export class AuthService {
   }
 
   async validateUser(email: string, password: string) {
+    // Check regular User table first
     const user = await this.prisma.user.findUnique({
       where: { email },
     });
 
-    if (!user) {
-      return null;
+    if (user && user.passwordHash) {
+      const isValid = await bcrypt.compare(password, user.passwordHash);
+      if (isValid) {
+        const { passwordHash: _, ...result } = user;
+        return result;
+      }
     }
 
-    if (!user.passwordHash) {
-      return null;
+    // Check AdminUser table
+    const admin = await this.prisma.adminUser.findUnique({
+      where: { email },
+    });
+
+    if (admin) {
+      const isValid = await bcrypt.compare(password, admin.passwordHash);
+      if (isValid) {
+        const { passwordHash: _, ...result } = admin;
+        return { ...result, isAdmin: true };
+      }
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
-    if (!isPasswordValid) {
-      return null;
-    }
-
-    const { passwordHash: _, ...result } = user;
-    return result;
+    return null;
   }
 
-  generateTokens(user: { id: string; email: string | null }) {
-    const payload = { sub: user.id, email: user.email };
+  generateTokens(user: { id: string; email: string | null; isAdmin?: boolean; role?: string }) {
+    const payload: Record<string, any> = { sub: user.id, email: user.email };
+    if (user.isAdmin) payload.isAdmin = true;
+    if (user.role) payload.role = user.role;
 
     const accessToken = this.jwtService.sign(payload, {
       secret: this.configService.get('JWT_SECRET', 'naro-secret-key'),
@@ -111,8 +121,24 @@ export class AuthService {
     }
   }
 
-  async getProfile(userId: string) {
-    return this.prisma.user.findUnique({
+  async getProfile(userId: string, isAdmin?: boolean) {
+    if (isAdmin) {
+      const admin = await this.prisma.adminUser.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          role: true,
+          is2FAEnabled: true,
+          createdAt: true,
+        },
+      });
+      if (admin) return { ...admin, isAdmin: true };
+    }
+
+    const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true,
@@ -123,6 +149,94 @@ export class AuthService {
         phone: true,
         createdAt: true,
       },
+    });
+
+    if (user) return user;
+
+    // Fallback: check AdminUser if not found in User table
+    const adminFallback = await this.prisma.adminUser.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        role: true,
+        createdAt: true,
+      },
+    });
+    if (adminFallback) return { ...adminFallback, isAdmin: true };
+
+    return null;
+  }
+
+  async updateProfile(
+    userId: string,
+    data: { firstName?: string; lastName?: string; phone?: string },
+    isAdmin?: boolean,
+  ) {
+    if (isAdmin) {
+      const admin = await this.prisma.adminUser.findUnique({ where: { id: userId } });
+      if (admin) {
+        return this.prisma.adminUser.update({
+          where: { id: userId },
+          data: { firstName: data.firstName, lastName: data.lastName },
+          select: { id: true, email: true, firstName: true, lastName: true, role: true },
+        });
+      }
+    }
+
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { firstName: data.firstName, lastName: data.lastName, phone: data.phone },
+      select: { id: true, email: true, firstName: true, lastName: true, phone: true },
+    });
+  }
+
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    isAdmin?: boolean,
+  ) {
+    let user: any;
+    if (isAdmin) {
+      user = await this.prisma.adminUser.findUnique({ where: { id: userId } });
+    }
+    if (!user) {
+      user = await this.prisma.user.findUnique({ where: { id: userId } });
+    }
+    if (!user || !user.passwordHash) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!isValid) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+    if (isAdmin) {
+      await this.prisma.adminUser.update({
+        where: { id: userId },
+        data: { passwordHash: hashedPassword },
+      });
+    } else {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { passwordHash: hashedPassword },
+      });
+    }
+
+    return { message: 'Password changed successfully' };
+  }
+
+  async toggle2FA(userId: string, enabled: boolean) {
+    return this.prisma.adminUser.update({
+      where: { id: userId },
+      data: { is2FAEnabled: enabled },
+      select: { id: true, is2FAEnabled: true },
     });
   }
 }

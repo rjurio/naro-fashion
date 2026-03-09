@@ -32,6 +32,10 @@ export const metadata: Metadata = {
     "Naro Fashion",
     "Dar es Salaam",
   ],
+  icons: {
+    icon: '/favicon.jpg',
+    apple: '/icon.jpg',
+  },
   openGraph: {
     title: "Naro Fashion | Premium Fashion & Clothing in Tanzania",
     description:

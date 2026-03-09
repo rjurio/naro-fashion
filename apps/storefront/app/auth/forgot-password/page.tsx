@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { Mail, ArrowLeft, CheckCircle } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useTranslation } from "@/lib/i18n";
@@ -33,10 +34,7 @@ export default function ForgotPasswordPage() {
 
         <div className="relative z-10 max-w-md">
           <Link href="/" className="inline-block mb-8">
-            <span className="text-3xl font-heading font-bold">
-              <span className="text-[#D4AF37]">NARO</span>{" "}
-              <span className="text-[#D4AF37]">FASHION</span>
-            </span>
+            <Image src="/logo.jpg" alt="Naro Fashion" width={280} height={140} className="rounded-lg" />
           </Link>
           <h2 className="text-3xl font-heading font-bold text-white leading-tight">
             {t("resetTitle")}
@@ -53,10 +51,8 @@ export default function ForgotPasswordPage() {
           {/* Mobile Logo */}
           <div className="lg:hidden text-center mb-8">
             <Link href="/">
-              <span className="text-2xl font-heading font-bold">
-                <span className="text-gold-500">NARO</span>{" "}
-                <span className="text-gold-500">FASHION</span>
-              </span>
+              <Image src="/icon.jpg" alt="Naro Fashion" width={64} height={64} className="mx-auto rounded-full" />
+              <span className="block mt-2 text-2xl font-heading font-bold text-gold-500">NARO FASHION</span>
             </Link>
           </div>
 

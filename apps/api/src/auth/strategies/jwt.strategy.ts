@@ -21,7 +21,21 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string; email: string }) {
+  async validate(payload: { sub: string; email: string; isAdmin?: boolean; role?: string }) {
+    if (payload.isAdmin) {
+      const admin = await this.prisma.adminUser.findUnique({
+        where: { id: payload.sub },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          role: true,
+        },
+      });
+      if (admin) return { ...admin, isAdmin: true };
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       select: {
@@ -33,10 +47,21 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       },
     });
 
-    if (!user) {
-      throw new UnauthorizedException('User not found');
-    }
+    if (user) return user;
 
-    return user;
+    // Fallback: check AdminUser
+    const adminFallback = await this.prisma.adminUser.findUnique({
+      where: { id: payload.sub },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        role: true,
+      },
+    });
+    if (adminFallback) return { ...adminFallback, isAdmin: true };
+
+    throw new UnauthorizedException('User not found');
   }
 }

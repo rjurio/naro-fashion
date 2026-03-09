@@ -2,7 +2,9 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   LayoutDashboard,
   ShoppingBag,
@@ -18,7 +20,7 @@ import {
   Zap,
   Gift,
   PanelLeft,
-  Image,
+  Image as ImageIcon,
   FileEdit,
   Settings,
   BarChart3,
@@ -63,7 +65,7 @@ const navItems: NavItem[] = [
     label: 'CMS',
     icon: PanelLeft,
     children: [
-      { label: 'Banners', href: '/dashboard/cms/banners', icon: Image },
+      { label: 'Banners', href: '/dashboard/cms/banners', icon: ImageIcon },
       { label: 'Pages', href: '/dashboard/cms/pages', icon: FileEdit },
       { label: 'Settings', href: '/dashboard/cms/settings', icon: Settings },
     ],
@@ -79,6 +81,7 @@ interface SidebarProps {
 
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
+  const { user } = useAuth();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const toggleExpanded = (label: string) => {
@@ -111,8 +114,8 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         {/* Logo */}
         <div className="flex items-center justify-between h-16 px-6 border-b border-[hsl(var(--sidebar-border))]">
           <Link href="/dashboard" className="flex items-center gap-2">
-            <span className="text-xl font-bold text-brand-gold">NARO</span>
-            <span className="text-xl font-bold text-brand-gold">FASHION</span>
+            <Image src="/icon.jpg" alt="Naro Fashion" width={36} height={36} className="rounded-full" />
+            <span className="text-xl font-bold text-brand-gold">NARO FASHION</span>
           </Link>
           <button
             onClick={onClose}
@@ -199,14 +202,16 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         <div className="p-4 border-t border-[hsl(var(--sidebar-border))]">
           <div className="flex items-center gap-3 px-3 py-2">
             <div className="w-8 h-8 rounded-full bg-brand-gold flex items-center justify-center">
-              <span className="text-white text-sm font-bold">N</span>
+              <span className="text-white text-sm font-bold">
+                {user ? `${user.firstName[0]}${user.lastName[0]}`.toUpperCase() : '?'}
+              </span>
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-[hsl(var(--sidebar-fg))] truncate">
-                Naro Admin
+                {user ? `${user.firstName} ${user.lastName}` : 'Loading...'}
               </p>
               <p className="text-xs text-[hsl(var(--muted-foreground))] truncate">
-                admin@narofashion.co.tz
+                {user?.email || ''}
               </p>
             </div>
           </div>

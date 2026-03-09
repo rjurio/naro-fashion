@@ -1,64 +1,55 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import {
   DollarSign,
   ShoppingCart,
-  CalendarClock,
-  Users,
-  TrendingUp,
-  TrendingDown,
   Package,
   Repeat,
-  ArrowUpRight,
+  Users,
   Loader2,
 } from 'lucide-react';
 import StatsCard from '@/components/ui/StatsCard';
-import Button from '@/components/ui/Button';
 import { formatCurrency } from '@/lib/utils';
 import { adminApi } from '@/lib/api';
 
-interface RevenueEntry {
-  month: string;
-  sales: number;
-  rentals: number;
-}
+// Dynamically import chart components with SSR disabled
+const RevenueChart = dynamic(() => import('./charts').then(m => ({ default: m.RevenueChart })), { ssr: false });
+const CategoryPieChart = dynamic(() => import('./charts').then(m => ({ default: m.CategoryPieChart })), { ssr: false });
+const DailyOrdersChart = dynamic(() => import('./charts').then(m => ({ default: m.DailyOrdersChart })), { ssr: false });
+const CustomerGrowthChart = dynamic(() => import('./charts').then(m => ({ default: m.CustomerGrowthChart })), { ssr: false });
+const StatusPieChart = dynamic(() => import('./charts').then(m => ({ default: m.StatusPieChart })), { ssr: false });
+const PaymentPieChart = dynamic(() => import('./charts').then(m => ({ default: m.PaymentPieChart })), { ssr: false });
 
-interface TopProduct {
-  name: string;
-  revenue: number;
-  units: number;
-  type: string;
-}
-
-interface CategoryEntry {
-  name: string;
-  percentage: number;
-  color: string;
-}
-
-interface AnalyticsStats {
+interface DashboardData {
   totalRevenue?: number;
-  revenueChange?: string;
   totalOrders?: number;
-  ordersChange?: string;
+  customerCount?: number;
+  activeRentals?: number;
   rentalRevenue?: number;
-  rentalRevenueChange?: string;
   avgOrderValue?: number;
+  revenueChange?: string;
+  ordersChange?: string;
+  rentalRevenueChange?: string;
   avgOrderValueChange?: string;
-  avgOrderValueTrend?: string;
-  topProducts?: TopProduct[];
-  categoryBreakdown?: CategoryEntry[];
-  metrics?: { label: string; value: string; trend: string; change: string }[];
+  topProducts?: { name: string; revenue: number; units: number; type: string }[];
+  categoryBreakdown?: { name: string; revenue: number; percentage: number }[];
+  orderStatusDistribution?: { status: string; count: number }[];
+  paymentMethodDistribution?: { method: string; count: number; total: number }[];
+  customerGrowth?: { month: string; count: number }[];
+  rentalStatusDistribution?: { status: string; count: number }[];
+  dailyOrders?: { day: string; count: number; revenue: number }[];
 }
 
-const categoryColors = ['bg-brand-gold', 'bg-brand-gold', 'bg-blue-500', 'bg-emerald-500', 'bg-purple-500'];
+const formatLabel = (s: string) =>
+  s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()).toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
 
 export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState('6months');
-  const [stats, setStats] = useState<AnalyticsStats>({});
-  const [monthlyRevenue, setMonthlyRevenue] = useState<RevenueEntry[]>([]);
+  const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('monthly');
+  const [stats, setStats] = useState<DashboardData | null>(null);
+  const [revenueData, setRevenueData] = useState<any[]>([]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -71,34 +62,19 @@ export default function AnalyticsPage() {
           adminApi.getDashboardStats(),
           adminApi.getRevenueChart(period),
         ]);
-
-        if (statsRes.status === 'fulfilled') {
-          setStats(statsRes.value || {});
-        }
+        if (statsRes.status === 'fulfilled') setStats(statsRes.value);
         if (revenueRes.status === 'fulfilled') {
-          const data = revenueRes.value;
-          setMonthlyRevenue(Array.isArray(data) ? data : data?.data || []);
+          const d = revenueRes.value;
+          setRevenueData(Array.isArray(d) ? d : d?.data || []);
         }
       } catch (err) {
-        console.error('Failed to fetch analytics data:', err);
+        console.error('Failed to fetch analytics:', err);
       } finally {
         setLoading(false);
       }
     };
-
     fetchData();
   }, [period]);
-
-  const topProducts: TopProduct[] = stats.topProducts || [];
-  const categoryBreakdown: CategoryEntry[] = (stats.categoryBreakdown || []).map((cat, i) => ({
-    ...cat,
-    color: cat.color || categoryColors[i % categoryColors.length],
-  }));
-  const metrics = stats.metrics || [];
-
-  const maxRevenue = monthlyRevenue.length > 0
-    ? Math.max(...monthlyRevenue.map((m) => m.sales + m.rentals))
-    : 1;
 
   if (loading) {
     return (
@@ -108,193 +84,162 @@ export default function AnalyticsPage() {
     );
   }
 
+  if (!stats) {
+    return <p className="text-center text-[hsl(var(--muted-foreground))]">Failed to load analytics data.</p>;
+  }
+
+  const changeType = (change?: string): 'positive' | 'negative' | 'neutral' => {
+    if (!change) return 'neutral';
+    return change.startsWith('+') && change !== '+0%' ? 'positive' : change.startsWith('-') ? 'negative' : 'neutral';
+  };
+
   return (
     <div className="space-y-6">
-      {/* Page Header */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-[hsl(var(--foreground))]">Analytics</h1>
-          <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">
-            Detailed performance metrics and insights
-          </p>
+          <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">Detailed performance metrics and insights</p>
         </div>
         <div className="flex items-center gap-3">
           <select
             className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-sm text-[hsl(var(--foreground))] outline-none"
             value={period}
-            onChange={(e) => setPeriod(e.target.value)}
+            onChange={(e) => setPeriod(e.target.value as any)}
           >
-            <option value="7days">Last 7 days</option>
-            <option value="30days">Last 30 days</option>
-            <option value="3months">Last 3 months</option>
-            <option value="6months">Last 6 months</option>
-            <option value="12months">Last 12 months</option>
+            <option value="daily">Daily (30 days)</option>
+            <option value="weekly">Weekly (3 months)</option>
+            <option value="monthly">Monthly (12 months)</option>
           </select>
-          <Button variant="outline" size="sm">Export CSV</Button>
         </div>
       </div>
 
-      {/* Stats */}
+      {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatsCard
-          title="Total Revenue"
-          value={formatCurrency(stats.totalRevenue ?? 0)}
-          change={stats.revenueChange ?? 'N/A'}
-          changeType="positive"
-          icon={DollarSign}
-          iconColor="text-emerald-600"
-        />
-        <StatsCard
-          title="Total Orders"
-          value={String(stats.totalOrders ?? 0)}
-          change={stats.ordersChange ?? 'N/A'}
-          changeType="positive"
-          icon={ShoppingCart}
-          iconColor="text-brand-gold"
-        />
-        <StatsCard
-          title="Rental Revenue"
-          value={formatCurrency(stats.rentalRevenue ?? 0)}
-          change={stats.rentalRevenueChange ?? 'N/A'}
-          changeType="positive"
-          icon={Repeat}
-          iconColor="text-brand-gold"
-        />
-        <StatsCard
-          title="Avg. Order Value"
-          value={formatCurrency(stats.avgOrderValue ?? 0)}
-          change={stats.avgOrderValueChange ?? 'N/A'}
-          changeType={(stats.avgOrderValueTrend as 'positive' | 'negative' | 'neutral') ?? 'neutral'}
-          icon={Package}
-          iconColor="text-blue-600"
-        />
+        <StatsCard title="Total Revenue" value={formatCurrency(stats.totalRevenue ?? 0)} change={stats.revenueChange || '0%'} changeType={changeType(stats.revenueChange)} icon={DollarSign} iconColor="text-emerald-600" />
+        <StatsCard title="Total Orders" value={String(stats.totalOrders ?? 0)} change={stats.ordersChange || '0%'} changeType={changeType(stats.ordersChange)} icon={ShoppingCart} iconColor="text-brand-gold" />
+        <StatsCard title="Rental Revenue" value={formatCurrency(stats.rentalRevenue ?? 0)} change={stats.rentalRevenueChange || '0%'} changeType={changeType(stats.rentalRevenueChange)} icon={Repeat} iconColor="text-brand-gold" />
+        <StatsCard title="Avg. Order Value" value={formatCurrency(stats.avgOrderValue ?? 0)} change={stats.avgOrderValueChange || '0%'} changeType={changeType(stats.avgOrderValueChange)} icon={Package} iconColor="text-blue-600" />
       </div>
 
-      {/* Revenue Chart + Category Breakdown */}
+      {/* Revenue Chart + Category Pie */}
       <div className="grid lg:grid-cols-3 gap-6">
-        {/* Revenue Chart */}
         <div className="lg:col-span-2 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))] mb-1">Revenue Breakdown</h2>
-          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6">Sales vs Rental revenue</p>
-
-          {/* Legend */}
-          <div className="flex gap-6 mb-4 text-sm">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded bg-brand-gold" />
-              <span className="text-[hsl(var(--muted-foreground))]">Sales</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded bg-brand-gold/50" />
-              <span className="text-[hsl(var(--muted-foreground))]">Rentals</span>
-            </div>
-          </div>
-
-          {/* Bar Chart */}
-          {monthlyRevenue.length > 0 ? (
-            <div className="h-64 flex items-end gap-3 px-2">
-              {monthlyRevenue.map((bar) => {
-                const salesHeight = (bar.sales / maxRevenue) * 100;
-                const rentalHeight = (bar.rentals / maxRevenue) * 100;
-                return (
-                  <div key={bar.month} className="flex-1 flex flex-col items-center gap-2">
-                    <div className="w-full flex flex-col gap-0.5 relative" style={{ height: '220px' }}>
-                      <div className="flex-1" />
-                      <div
-                        className="w-full rounded-t-sm bg-brand-gold/80 hover:bg-brand-gold transition-colors cursor-pointer"
-                        style={{ height: `${salesHeight}%` }}
-                        title={`Sales: ${formatCurrency(bar.sales)}`}
-                      />
-                      <div
-                        className="w-full rounded-t-sm bg-brand-gold/40 hover:bg-brand-gold/60 transition-colors cursor-pointer"
-                        style={{ height: `${rentalHeight}%` }}
-                        title={`Rentals: ${formatCurrency(bar.rentals)}`}
-                      />
-                    </div>
-                    <span className="text-xs text-[hsl(var(--muted-foreground))]">{bar.month}</span>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="h-64 flex items-center justify-center text-[hsl(var(--muted-foreground))] text-sm">
-              No revenue data available for this period.
-            </div>
-          )}
+          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Sales vs Rental revenue</p>
+          <RevenueChart data={revenueData} />
         </div>
 
-        {/* Category Breakdown */}
         <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))] mb-1">Sales by Category</h2>
-          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6">Revenue distribution</p>
-
-          {categoryBreakdown.length > 0 ? (
-            <div className="space-y-4">
-              {categoryBreakdown.map((cat) => (
-                <div key={cat.name}>
-                  <div className="flex justify-between text-sm mb-1.5">
-                    <span className="font-medium text-[hsl(var(--card-foreground))]">{cat.name}</span>
-                    <span className="text-[hsl(var(--muted-foreground))]">{cat.percentage}%</span>
-                  </div>
-                  <div className="h-2 rounded-full bg-[hsl(var(--muted))]">
-                    <div className={`h-full rounded-full ${cat.color} transition-all`} style={{ width: `${cat.percentage}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-[hsl(var(--muted-foreground))]">No category data available.</p>
-          )}
+          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Revenue distribution</p>
+          <CategoryPieChart data={stats.categoryBreakdown || []} />
         </div>
       </div>
 
-      {/* Top Products + Growth */}
+      {/* Daily Orders Trend + Customer Growth */}
       <div className="grid lg:grid-cols-2 gap-6">
-        {/* Top Products */}
         <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))] mb-1">Top Products</h2>
-          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">By revenue this month</p>
-
-          {topProducts.length > 0 ? (
-            <div className="space-y-3">
-              {topProducts.map((product, i) => (
-                <div key={product.name} className="flex items-center justify-between py-2 border-b border-[hsl(var(--border))] last:border-0">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-bold text-[hsl(var(--muted-foreground))] w-5">{i + 1}</span>
-                    <div>
-                      <p className="font-medium text-sm text-[hsl(var(--card-foreground))]">{product.name}</p>
-                      <p className="text-xs text-[hsl(var(--muted-foreground))]">{product.units} units &middot; {product.type}</p>
-                    </div>
-                  </div>
-                  <span className="font-semibold text-sm text-[hsl(var(--card-foreground))]">{formatCurrency(product.revenue)}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-[hsl(var(--muted-foreground))]">No product data available.</p>
-          )}
+          <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))] mb-1">Daily Orders (14 days)</h2>
+          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Order count and revenue trend</p>
+          <DailyOrdersChart data={stats.dailyOrders || []} />
         </div>
 
-        {/* Key Metrics */}
         <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))] mb-1">Key Metrics</h2>
-          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Performance indicators</p>
+          <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))] mb-1">Customer Growth</h2>
+          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">New registrations (last 6 months)</p>
+          <CustomerGrowthChart data={stats.customerGrowth || []} />
+        </div>
+      </div>
 
-          {metrics.length > 0 ? (
-            <div className="grid grid-cols-2 gap-4">
-              {metrics.map((metric) => (
-                <div key={metric.label} className="rounded-lg bg-[hsl(var(--muted))] p-4">
-                  <p className="text-xs text-[hsl(var(--muted-foreground))] mb-1">{metric.label}</p>
-                  <p className="text-xl font-bold text-[hsl(var(--card-foreground))]">{metric.value}</p>
-                  <div className={`flex items-center gap-1 text-xs mt-1 ${metric.trend === 'up' ? 'text-emerald-600' : metric.trend === 'down' ? 'text-red-500' : 'text-[hsl(var(--muted-foreground))]'}`}>
-                    {metric.trend === 'up' ? <TrendingUp className="w-3 h-3" /> : metric.trend === 'down' ? <TrendingDown className="w-3 h-3" /> : null}
-                    {metric.change}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-[hsl(var(--muted-foreground))]">No metrics data available.</p>
-          )}
+      {/* Order Status + Payment Methods + Rental Status */}
+      <div className="grid lg:grid-cols-3 gap-6">
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))] mb-1">Order Status</h2>
+          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Distribution</p>
+          <StatusPieChart data={stats.orderStatusDistribution || []} />
+        </div>
+
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))] mb-1">Payment Methods</h2>
+          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Usage breakdown</p>
+          <PaymentPieChart data={stats.paymentMethodDistribution || []} />
+        </div>
+
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))] mb-1">Rental Status</h2>
+          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Distribution</p>
+          <StatusPieChart data={stats.rentalStatusDistribution || []} />
+        </div>
+      </div>
+
+      {/* Top Products Table */}
+      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))] mb-1">Top Products</h2>
+        <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">By revenue (last 30 days)</p>
+        {(stats.topProducts || []).length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[hsl(var(--border))]">
+                  <th className="text-left py-2 text-[hsl(var(--muted-foreground))] font-medium">#</th>
+                  <th className="text-left py-2 text-[hsl(var(--muted-foreground))] font-medium">Product</th>
+                  <th className="text-left py-2 text-[hsl(var(--muted-foreground))] font-medium">Type</th>
+                  <th className="text-right py-2 text-[hsl(var(--muted-foreground))] font-medium">Units</th>
+                  <th className="text-right py-2 text-[hsl(var(--muted-foreground))] font-medium">Revenue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(stats.topProducts || []).map((product, i) => (
+                  <tr key={i} className="border-b border-[hsl(var(--border))] last:border-0 hover:bg-[hsl(var(--muted))] transition-colors">
+                    <td className="py-3 text-[hsl(var(--muted-foreground))] font-bold">{i + 1}</td>
+                    <td className="py-3 font-medium text-[hsl(var(--card-foreground))]">{product.name}</td>
+                    <td className="py-3">
+                      <span className={`px-2 py-0.5 text-xs rounded-full ${product.type === 'RENTAL_ONLY' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' : product.type === 'BOTH' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'}`}>
+                        {formatLabel(product.type)}
+                      </span>
+                    </td>
+                    <td className="py-3 text-right text-[hsl(var(--card-foreground))]">{product.units}</td>
+                    <td className="py-3 text-right font-semibold text-[hsl(var(--card-foreground))]">{formatCurrency(product.revenue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-sm text-[hsl(var(--muted-foreground))]">No product data available.</p>
+        )}
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-2">
+            <Users className="w-4 h-4 text-blue-500" />
+            <span className="text-sm text-[hsl(var(--muted-foreground))]">Total Customers</span>
+          </div>
+          <p className="text-2xl font-bold text-[hsl(var(--card-foreground))]">{stats.customerCount ?? 0}</p>
+        </div>
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-2">
+            <Repeat className="w-4 h-4 text-emerald-500" />
+            <span className="text-sm text-[hsl(var(--muted-foreground))]">Active Rentals</span>
+          </div>
+          <p className="text-2xl font-bold text-[hsl(var(--card-foreground))]">{stats.activeRentals ?? 0}</p>
+        </div>
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-2">
+            <DollarSign className="w-4 h-4 text-brand-gold" />
+            <span className="text-sm text-[hsl(var(--muted-foreground))]">Combined Revenue</span>
+          </div>
+          <p className="text-2xl font-bold text-[hsl(var(--card-foreground))]">{formatCurrency((stats.totalRevenue ?? 0) + (stats.rentalRevenue ?? 0))}</p>
+        </div>
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-2">
+            <ShoppingCart className="w-4 h-4 text-purple-500" />
+            <span className="text-sm text-[hsl(var(--muted-foreground))]">Avg. Order Value</span>
+          </div>
+          <p className="text-2xl font-bold text-[hsl(var(--card-foreground))]">{formatCurrency(stats.avgOrderValue ?? 0)}</p>
         </div>
       </div>
     </div>

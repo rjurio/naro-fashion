@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import {
   Search,
   ShoppingBag,
@@ -52,6 +53,7 @@ export default function Header() {
 
             {/* Logo */}
             <Link href="/" className="flex items-center gap-2 shrink-0">
+              <Image src="/icon.jpg" alt="Naro Fashion" width={32} height={32} className="rounded-full" />
               <span className="text-xl sm:text-2xl font-heading font-bold">
                 <span className="text-dark-500">NARO</span>
                 <span className="text-gold-500"> FASHION</span>

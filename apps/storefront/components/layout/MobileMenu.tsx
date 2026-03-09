@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import {
   X,
   Home,
@@ -71,9 +72,10 @@ export default function MobileMenu({
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
-          <span className="text-lg font-heading font-bold">
+          <span className="flex items-center gap-2 text-lg font-heading font-bold">
+            <Image src="/icon.jpg" alt="Naro Fashion" width={28} height={28} className="rounded-full" />
             <span className="text-dark-500">NARO</span>
-            <span className="text-gold-500"> FASHION</span>
+            <span className="text-gold-500">FASHION</span>
           </span>
           <button
             onClick={onClose}

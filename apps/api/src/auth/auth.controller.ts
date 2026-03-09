@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Patch,
   Body,
   Req,
   Res,
@@ -36,7 +37,7 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const user = req.user as { id: string; email: string };
+    const user = req.user as { id: string; email: string; isAdmin?: boolean; role?: string };
     const tokens = this.authService.generateTokens(user);
 
     res.cookie('access_token', tokens.accessToken, {
@@ -54,7 +55,7 @@ export class AuthController {
       path: '/api/v1/auth/refresh',
     });
 
-    return { message: 'Login successful', user };
+    return { message: 'Login successful', user, accessToken: tokens.accessToken };
   }
 
   @Public()
@@ -95,7 +96,35 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  async me(@CurrentUser() user: { id: string }) {
-    return this.authService.getProfile(user.id);
+  async me(@CurrentUser() user: { id: string; isAdmin?: boolean }) {
+    return this.authService.getProfile(user.id, user.isAdmin);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('me')
+  async updateMe(
+    @CurrentUser() user: { id: string; isAdmin?: boolean },
+    @Body() data: { firstName?: string; lastName?: string; phone?: string },
+  ) {
+    return this.authService.updateProfile(user.id, data, user.isAdmin);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  async changePassword(
+    @CurrentUser() user: { id: string; isAdmin?: boolean },
+    @Body() data: { currentPassword: string; newPassword: string },
+  ) {
+    return this.authService.changePassword(user.id, data.currentPassword, data.newPassword, user.isAdmin);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('2fa')
+  async toggle2FA(
+    @CurrentUser() user: { id: string },
+    @Body() data: { enabled: boolean },
+  ) {
+    return this.authService.toggle2FA(user.id, data.enabled);
   }
 }

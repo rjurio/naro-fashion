@@ -1,14 +1,20 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useTheme } from 'next-themes';
 import { User, Shield, Bell, Palette, Save, Eye, EyeOff, Monitor, Moon, Sun } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import { useAuth } from '@/contexts/AuthContext';
+import adminApi from '@/lib/api';
 
 export default function AdminSettingsPage() {
-  const [profile, setProfile] = useState({
-    name: 'Admin User',
-    email: 'admin@narofashion.co.tz',
-  });
+  const { user, refreshUser } = useAuth();
+  const { theme, setTheme: setAppTheme } = useTheme();
+
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+
   const [passwords, setPasswords] = useState({
     current: '',
     newPassword: '',
@@ -17,7 +23,7 @@ export default function AdminSettingsPage() {
   const [showPasswords, setShowPasswords] = useState(false);
 
   const [twoFA, setTwoFA] = useState(false);
-  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
+  const [selectedTheme, setSelectedTheme] = useState<string>('light');
 
   const [notifications, setNotifications] = useState({
     emailOrders: true,
@@ -28,11 +34,117 @@ export default function AdminSettingsPage() {
     smsLowStock: false,
   });
 
-  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [messageType, setMessageType] = useState<'success' | 'error'>('success');
 
-  const handleSave = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+  useEffect(() => {
+    if (user) {
+      setFirstName(user.firstName);
+      setLastName(user.lastName);
+      setEmail(user.email);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (theme) setSelectedTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const settings: any[] = await adminApi.get('/cms/settings');
+        const notifSetting = settings.find((s: any) => s.key === 'admin_notifications');
+        if (notifSetting) {
+          try { setNotifications(JSON.parse(notifSetting.value)); } catch {}
+        }
+      } catch {}
+      try {
+        const profile: any = await adminApi.get('/auth/me');
+        if (profile.is2FAEnabled !== undefined) setTwoFA(profile.is2FAEnabled);
+      } catch {}
+    };
+    if (user) loadSettings();
+  }, [user]);
+
+  const showMsg = (msg: string, type: 'success' | 'error') => {
+    setMessage(msg);
+    setMessageType(type);
+    setTimeout(() => setMessage(''), 4000);
+  };
+
+  const handleSaveProfile = async () => {
+    setSaving(true);
+    try {
+      await adminApi.patch('/auth/me', { firstName, lastName });
+      await refreshUser();
+      showMsg('Profile updated successfully.', 'success');
+    } catch {
+      showMsg('Failed to update profile.', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (!passwords.current || !passwords.newPassword) {
+      showMsg('Please fill in current and new password.', 'error');
+      return;
+    }
+    if (passwords.newPassword !== passwords.confirm) {
+      showMsg('New passwords do not match.', 'error');
+      return;
+    }
+    if (passwords.newPassword.length < 6) {
+      showMsg('New password must be at least 6 characters.', 'error');
+      return;
+    }
+    setSaving(true);
+    try {
+      await adminApi.post('/auth/change-password', {
+        currentPassword: passwords.current,
+        newPassword: passwords.newPassword,
+      });
+      setPasswords({ current: '', newPassword: '', confirm: '' });
+      showMsg('Password changed successfully.', 'success');
+    } catch (err: any) {
+      const msg = err?.message?.includes('401') ? 'Current password is incorrect.' : 'Failed to change password.';
+      showMsg(msg, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggle2FA = async (enabled: boolean) => {
+    setTwoFA(enabled);
+    try {
+      await adminApi.patch('/auth/2fa', { enabled });
+      showMsg('Two-factor authentication ' + (enabled ? 'enabled' : 'disabled') + '.', 'success');
+    } catch {
+      setTwoFA(!enabled);
+      showMsg('Failed to update 2FA setting.', 'error');
+    }
+  };
+
+  const handleThemeChange = (value: string) => {
+    setSelectedTheme(value);
+    setAppTheme(value);
+    showMsg('Theme updated.', 'success');
+  };
+
+  const handleSaveNotifications = async () => {
+    setSaving(true);
+    try {
+      await adminApi.post('/cms/settings', {
+        key: 'admin_notifications',
+        value: JSON.stringify(notifications),
+      });
+      showMsg('Notification preferences saved.', 'success');
+    } catch {
+      showMsg('Failed to save notification preferences.', 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const sessions = [
@@ -49,23 +161,20 @@ export default function AdminSettingsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-[hsl(var(--foreground))]">Admin Settings</h1>
-          <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">
-            Manage your profile, security, and preferences
-          </p>
-        </div>
-        <Button onClick={handleSave}>
-          <Save className="w-4 h-4" />
-          {saved ? 'Saved!' : 'Save Changes'}
-        </Button>
+      <div>
+        <h1 className="text-2xl font-bold text-[hsl(var(--foreground))]">Admin Settings</h1>
+        <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">
+          Manage your profile, security, and preferences
+        </p>
       </div>
 
-      {saved && (
-        <div className="bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 rounded-lg px-4 py-3 text-sm">
-          Settings saved successfully.
+      {message && (
+        <div className={`rounded-lg px-4 py-3 text-sm border ${
+          messageType === 'success'
+            ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
+            : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400 border-red-200 dark:border-red-800'
+        }`}>
+          {message}
         </div>
       )}
 
@@ -78,23 +187,38 @@ export default function AdminSettingsPage() {
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">Full Name</label>
+              <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">First Name</label>
               <input
                 type="text"
-                value={profile.name}
-                onChange={(e) => setProfile({ ...profile, name: e.target.value })}
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
                 className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">Email</label>
+              <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">Last Name</label>
               <input
-                type="email"
-                value={profile.email}
-                onChange={(e) => setProfile({ ...profile, email: e.target.value })}
+                type="text"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
                 className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold"
               />
             </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">Email</label>
+            <input
+              type="email"
+              value={email}
+              disabled
+              className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-3 py-2 text-sm text-[hsl(var(--muted-foreground))] cursor-not-allowed"
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={handleSaveProfile} disabled={saving}>
+              <Save className="w-4 h-4" />
+              Save Profile
+            </Button>
           </div>
 
           <div className="pt-4 border-t border-[hsl(var(--border))]">
@@ -128,6 +252,12 @@ export default function AdminSettingsPage() {
                 </div>
               ))}
             </div>
+            <div className="flex justify-end mt-4">
+              <Button onClick={handleChangePassword} disabled={saving}>
+                <Shield className="w-4 h-4" />
+                Change Password
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -144,7 +274,7 @@ export default function AdminSettingsPage() {
               <p className="text-sm font-medium text-[hsl(var(--foreground))]">Two-Factor Authentication</p>
               <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Add an extra layer of security to your account</p>
             </div>
-            <Toggle checked={twoFA} onChange={setTwoFA} />
+            <Toggle checked={twoFA} onChange={handleToggle2FA} />
           </div>
 
           <div className="pt-4 border-t border-[hsl(var(--border))]">
@@ -179,15 +309,15 @@ export default function AdminSettingsPage() {
           <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Choose the admin panel theme</p>
           <div className="grid grid-cols-3 gap-3 max-w-md">
             {[
-              { value: 'light' as const, label: 'Light', icon: Sun },
-              { value: 'dark' as const, label: 'Dark', icon: Moon },
-              { value: 'system' as const, label: 'System', icon: Monitor },
+              { value: 'light', label: 'Light', icon: Sun },
+              { value: 'dark', label: 'Dark', icon: Moon },
+              { value: 'luxury', label: 'Luxury', icon: Monitor },
             ].map(({ value, label, icon: Icon }) => (
               <button
                 key={value}
-                onClick={() => setTheme(value)}
+                onClick={() => handleThemeChange(value)}
                 className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all ${
-                  theme === value
+                  selectedTheme === value
                     ? 'border-brand-gold bg-brand-gold/5 text-brand-gold'
                     : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:border-[hsl(var(--foreground))]'
                 }`}
@@ -247,6 +377,12 @@ export default function AdminSettingsPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className="flex justify-end mt-4">
+            <Button onClick={handleSaveNotifications} disabled={saving}>
+              <Save className="w-4 h-4" />
+              Save Notifications
+            </Button>
           </div>
         </div>
       </div>

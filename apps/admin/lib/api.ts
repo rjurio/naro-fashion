@@ -34,8 +34,9 @@ class AdminApiClient {
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
     };
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
+    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
     return headers;
   }
@@ -111,6 +112,10 @@ class AdminApiClient {
   // ===== Auth =====
   login(email: string, password: string) {
     return this.post<any>('/auth/login', { email, password });
+  }
+
+  getProfile() {
+    return this.get<any>('/auth/me');
   }
 
   // ===== Dashboard / Analytics =====

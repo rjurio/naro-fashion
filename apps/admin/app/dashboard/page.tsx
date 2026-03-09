@@ -19,6 +19,8 @@ import OverdueRentals from '@/components/rental/OverdueRentals';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { adminApi } from '@/lib/api';
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
+
 interface RecentOrder {
   id: string;
   customer: string;
@@ -124,13 +126,48 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              try {
+                const token = localStorage.getItem('token');
+                const res = await fetch(`${API_BASE_URL}/analytics/dashboard`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                const data = await res.json();
+                const reportLines = [
+                  'Naro Fashion - Dashboard Report',
+                  `Generated: ${new Date().toLocaleString()}`,
+                  '',
+                  `Total Revenue: ${formatCurrency(data.totalRevenue ?? stats.totalRevenue ?? 0)}`,
+                  `Orders Today: ${data.ordersToday ?? stats.ordersToday ?? 0}`,
+                  `Active Rentals: ${data.activeRentals ?? stats.activeRentals ?? 0}`,
+                  `New Customers: ${data.newCustomers ?? stats.newCustomers ?? 0}`,
+                  '',
+                  'Recent Orders:',
+                  ...recentOrders.map((o) => `  #${o.id} - ${o.customer} - ${formatCurrency(o.total)} - ${o.status}`),
+                ];
+                const blob = new Blob([reportLines.join('\n')], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `naro-dashboard-report-${new Date().toISOString().slice(0, 10)}.txt`;
+                a.click();
+                URL.revokeObjectURL(url);
+              } catch {
+                alert('Failed to generate report. Please try again.');
+              }
+            }}
+          >
             Download Report
           </Button>
-          <Button size="sm" className="gap-1.5">
-            <ArrowUpRight className="w-4 h-4" />
-            View Store
-          </Button>
+          <a href="http://localhost:3000" target="_blank" rel="noopener noreferrer">
+            <Button size="sm" className="gap-1.5">
+              <ArrowUpRight className="w-4 h-4" />
+              View Store
+            </Button>
+          </a>
         </div>
       </div>
 
@@ -231,9 +268,11 @@ export default function DashboardPage() {
             <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))]">Recent Orders</h2>
             <p className="text-sm text-[hsl(var(--muted-foreground))]">Latest orders from your store</p>
           </div>
-          <Button variant="ghost" size="sm" className="gap-1.5 text-brand-gold">
-            View All <ArrowUpRight className="w-3.5 h-3.5" />
-          </Button>
+          <a href="/dashboard/orders">
+            <Button variant="ghost" size="sm" className="gap-1.5 text-brand-gold">
+              View All <ArrowUpRight className="w-3.5 h-3.5" />
+            </Button>
+          </a>
         </div>
 
         <DataTable columns={orderColumns} data={recentOrders} pageSize={5} />

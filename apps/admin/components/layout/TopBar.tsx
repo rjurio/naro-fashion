@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useTheme } from 'next-themes';
 import {
   Menu,
@@ -15,13 +17,23 @@ import {
   Settings,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface TopBarProps {
   onMenuClick: () => void;
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  SUPER_ADMIN: 'Super Admin',
+  MANAGER: 'Manager',
+  STAFF: 'Staff',
+  ADMIN: 'Admin',
+};
+
 export default function TopBar({ onMenuClick }: TopBarProps) {
   const { theme, setTheme } = useTheme();
+  const { user, logout } = useAuth();
+  const router = useRouter();
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -39,6 +51,10 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
   ];
 
   const unreadCount = notifications.filter((n) => n.unread).length;
+
+  const fullName = user ? `${user.firstName} ${user.lastName}` : 'Loading...';
+  const initials = user ? `${user.firstName[0]}${user.lastName[0]}`.toUpperCase() : '?';
+  const roleLabel = user ? (ROLE_LABELS[user.role] || user.role) : '';
 
   return (
     <header className="sticky top-0 z-30 h-16 flex items-center justify-between px-4 lg:px-6 border-b border-[hsl(var(--border))] bg-[hsl(var(--card))]/80 backdrop-blur-md">
@@ -193,32 +209,55 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
             className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] transition-colors"
           >
             <div className="w-8 h-8 rounded-full bg-brand-gold flex items-center justify-center">
-              <span className="text-white text-sm font-bold">N</span>
+              <span className="text-white text-sm font-bold">{initials}</span>
             </div>
-            <span className="hidden sm:block text-sm font-medium text-[hsl(var(--foreground))]">
-              Naro Admin
-            </span>
+            <div className="hidden sm:block text-left">
+              <p className="text-sm font-medium text-[hsl(var(--foreground))] leading-tight">
+                {fullName}
+              </p>
+              {roleLabel && (
+                <p className="text-[11px] text-brand-gold leading-tight">
+                  {roleLabel}
+                </p>
+              )}
+            </div>
             <ChevronDown className="hidden sm:block w-4 h-4 text-[hsl(var(--muted-foreground))]" />
           </button>
 
           {showUserMenu && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
-              <div className="absolute right-0 mt-2 w-48 z-50 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-lg py-1">
-                <div className="px-4 py-2 border-b border-[hsl(var(--border))]">
-                  <p className="text-sm font-medium text-[hsl(var(--foreground))]">Naro Admin</p>
-                  <p className="text-xs text-[hsl(var(--muted-foreground))]">admin@narofashion.co.tz</p>
+              <div className="absolute right-0 mt-2 w-56 z-50 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-lg py-1">
+                <div className="px-4 py-3 border-b border-[hsl(var(--border))]">
+                  <p className="text-sm font-medium text-[hsl(var(--foreground))]">{fullName}</p>
+                  <p className="text-xs text-[hsl(var(--muted-foreground))]">{user?.email}</p>
+                  {roleLabel && (
+                    <span className="inline-block mt-1.5 px-2 py-0.5 text-[10px] font-semibold rounded-full bg-brand-gold/10 text-brand-gold border border-brand-gold/20">
+                      {roleLabel}
+                    </span>
+                  )}
                 </div>
-                <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition-colors">
+                <Link
+                  href="/dashboard/profile"
+                  onClick={() => setShowUserMenu(false)}
+                  className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition-colors"
+                >
                   <User className="w-4 h-4" />
                   Profile
-                </button>
-                <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition-colors">
+                </Link>
+                <Link
+                  href="/dashboard/settings"
+                  onClick={() => setShowUserMenu(false)}
+                  className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition-colors"
+                >
                   <Settings className="w-4 h-4" />
                   Settings
-                </button>
+                </Link>
                 <div className="border-t border-[hsl(var(--border))]" />
-                <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+                <button
+                  onClick={logout}
+                  className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                >
                   <LogOut className="w-4 h-4" />
                   Sign out
                 </button>

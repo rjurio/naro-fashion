@@ -1,10 +1,15 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function LoginPage() {
+  const router = useRouter();
+  const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -17,16 +22,10 @@ export default function LoginPage() {
     setError('');
 
     try {
-      // Simulated login — replace with real API call
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-
-      if (email === 'admin@narofashion.co.tz' && password === 'admin123') {
-        window.location.href = '/dashboard';
-      } else {
-        setError('Invalid email or password');
-      }
+      await login(email, password);
+      router.push('/dashboard');
     } catch {
-      setError('Something went wrong. Please try again.');
+      setError('Invalid email or password');
     } finally {
       setIsLoading(false);
     }
@@ -44,11 +43,7 @@ export default function LoginPage() {
         <div className="relative z-10 text-center px-12">
           {/* Logo */}
           <div className="mb-8">
-            <h1 className="text-5xl font-bold">
-              <span className="text-brand-gold">NARO</span>
-              <span className="text-brand-gold ml-3">FASHION</span>
-            </h1>
-            <div className="mt-2 h-0.5 w-24 mx-auto bg-gradient-to-r from-brand-gold to-brand-gold" />
+            <Image src="/logo.jpg" alt="Naro Fashion" width={320} height={160} className="mx-auto rounded-lg" priority />
           </div>
           <p className="text-white/70 text-lg max-w-md">
             Admin Dashboard — Manage your products, orders, rentals, and customers all in one place.
@@ -61,10 +56,8 @@ export default function LoginPage() {
         <div className="w-full max-w-md">
           {/* Mobile logo */}
           <div className="lg:hidden text-center mb-10">
-            <h1 className="text-3xl font-bold">
-              <span className="text-brand-gold">NARO</span>
-              <span className="text-brand-gold ml-2">FASHION</span>
-            </h1>
+            <Image src="/icon.jpg" alt="Naro Fashion" width={80} height={80} className="mx-auto rounded-full" />
+            <h1 className="text-2xl font-bold text-brand-gold mt-3">NARO FASHION</h1>
           </div>
 
           <div className="mb-8">

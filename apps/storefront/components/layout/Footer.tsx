@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import {
   Facebook,
   Instagram,
@@ -87,11 +88,9 @@ export default function Footer() {
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-8">
           {/* Brand Column */}
           <div className="col-span-2 md:col-span-4 lg:col-span-1 mb-4 lg:mb-0">
-            <Link href="/" className="inline-block">
-              <span className="text-xl font-heading font-bold">
-                <span className="text-gold-500">NARO</span>
-                <span className="text-gold-500"> FASHION</span>
-              </span>
+            <Link href="/" className="inline-flex items-center gap-2">
+              <Image src="/icon.jpg" alt="Naro Fashion" width={32} height={32} className="rounded-full" />
+              <span className="text-xl font-heading font-bold text-gold-500">NARO FASHION</span>
             </Link>
             <p className="mt-3 text-sm text-dark-200 max-w-xs">
               {t('footer.footerDesc')}
