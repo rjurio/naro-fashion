@@ -10,6 +10,9 @@ import {
   Star,
   ChevronRight,
   Loader2,
+  Heart,
+  MapPin,
+  Calendar,
 } from "lucide-react";
 import Header from "@/components/layout/Header";
 import Footer from "@/components/layout/Footer";
@@ -18,6 +21,8 @@ import Button from "@/components/ui/Button";
 import { formatCountdown } from "@/lib/utils";
 import InstagramFeed from "@/components/social/InstagramFeed";
 import { categoriesApi, productsApi, flashSalesApi } from "@/lib/api";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
 
 interface Category {
   id: string;
@@ -65,6 +70,8 @@ export default function HomePage() {
   const [loadingArrivals, setLoadingArrivals] = useState(true);
   const [loadingFlashSales, setLoadingFlashSales] = useState(true);
   const [loadingRentals, setLoadingRentals] = useState(true);
+  const [realWeddings, setRealWeddings] = useState<any[]>([]);
+  const [loadingWeddings, setLoadingWeddings] = useState(true);
 
   // Fetch categories
   useEffect(() => {
@@ -141,6 +148,15 @@ export default function HomePage() {
       })
       .catch(() => setRentalGowns([]))
       .finally(() => setLoadingRentals(false));
+  }, []);
+
+  // Fetch real weddings events
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/events?page=1&limit=4`)
+      .then((res) => res.json())
+      .then((data) => setRealWeddings(data?.data || []))
+      .catch(() => setRealWeddings([]))
+      .finally(() => setLoadingWeddings(false));
   }, []);
 
   // Countdown timer
@@ -421,6 +437,83 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Real Weddings */}
+      {realWeddings.length > 0 && (
+        <section className="py-16 lg:py-20 bg-[#FFF8F0] dark:bg-muted/20">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+            <div className="text-center mb-12">
+              <span className="inline-flex items-center gap-2 rounded-full bg-[#D4AF37]/10 px-4 py-1.5 text-sm text-[#D4AF37] border border-[#D4AF37]/30 mb-4">
+                <Heart className="h-4 w-4" />
+                Love Stories
+              </span>
+              <h2 className="text-3xl sm:text-4xl font-heading font-bold text-foreground">
+                Real <span className="text-gold-500">Weddings</span>
+              </h2>
+              <p className="mt-3 text-muted-foreground max-w-md mx-auto">
+                See our beautiful brides and their special moments
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              {realWeddings.map((event: any) => (
+                <Link
+                  key={event.id}
+                  href={`/events/${event.slug}`}
+                  className="group relative aspect-[3/4] rounded-2xl overflow-hidden bg-muted"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent z-10" />
+                  {event.coverImageUrl ? (
+                    <img
+                      src={event.coverImageUrl}
+                      alt={event.title}
+                      className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                    />
+                  ) : event.media?.[0]?.url ? (
+                    <img
+                      src={event.media[0].url}
+                      alt={event.title}
+                      className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 bg-gradient-to-br from-[#D4AF37]/20 to-[#1A1A1A]/40" />
+                  )}
+                  <div className="absolute bottom-0 left-0 right-0 z-20 p-4 border-l-4 border-[#D4AF37]">
+                    <h3 className="text-lg font-bold text-white line-clamp-1">
+                      {event.title}
+                    </h3>
+                    {event.eventDate && (
+                      <p className="flex items-center gap-1 text-sm text-gray-300 mt-1">
+                        <Calendar className="h-3 w-3" />
+                        {new Date(event.eventDate).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        })}
+                      </p>
+                    )}
+                    {event.location && (
+                      <p className="flex items-center gap-1 text-sm text-gray-300 mt-0.5">
+                        <MapPin className="h-3 w-3" />
+                        {event.location}
+                      </p>
+                    )}
+                  </div>
+                </Link>
+              ))}
+            </div>
+            <div className="mt-10 text-center">
+              <Link href="/events">
+                <Button
+                  variant="outline"
+                  size="md"
+                  className="gap-2 border-[#D4AF37] text-[#D4AF37] hover:bg-[#D4AF37] hover:text-[#1A1A1A]"
+                >
+                  View All Real Weddings <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+            </div>
+          </div>
+        </section>
+      )}
       {/* Flash Sales */}
       <section className="py-16 lg:py-20 bg-background">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">

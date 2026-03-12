@@ -34,6 +34,11 @@ export class RentalChecklistsController {
     return this.rentalChecklistsService.createTemplate(dto);
   }
 
+  @Get('templates/active')
+  getActiveTemplates() {
+    return this.rentalChecklistsService.getActiveTemplates();
+  }
+
   @Get('templates/:id')
   getTemplate(@Param('id') id: string) {
     return this.rentalChecklistsService.getTemplate(id);
@@ -47,6 +52,21 @@ export class RentalChecklistsController {
   @Delete('templates/:id')
   deleteTemplate(@Param('id') id: string) {
     return this.rentalChecklistsService.deleteTemplate(id);
+  }
+
+  @Patch('templates/:id/toggle-active')
+  toggleActive(@Param('id') id: string) {
+    return this.rentalChecklistsService.toggleActive(id);
+  }
+
+  @Patch('templates/:id/restore')
+  restoreTemplate(@Param('id') id: string) {
+    return this.rentalChecklistsService.restoreTemplate(id);
+  }
+
+  @Get('templates-deleted')
+  findDeletedTemplates() {
+    return this.rentalChecklistsService.findDeletedTemplates();
   }
 
   @Post('assign')

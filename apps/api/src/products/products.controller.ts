@@ -24,6 +24,24 @@ export class ProductsController {
     return this.productsService.findAll(query);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get('admin')
+  findAllAdmin(@Query() query: QueryProductsDto) {
+    return this.productsService.findAllAdmin(query);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('deleted')
+  findDeleted() {
+    return this.productsService.findDeleted();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('by-id/:id')
+  findById(@Param('id') id: string) {
+    return this.productsService.findById(id);
+  }
+
   @Public()
   @Get(':slug')
   findBySlug(@Param('slug') slug: string) {
@@ -43,8 +61,26 @@ export class ProductsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Patch(':id/toggle-active')
+  toggleActive(@Param('id') id: string) {
+    return this.productsService.toggleActive(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/restore')
+  restore(@Param('id') id: string) {
+    return this.productsService.restore(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   delete(@Param('id') id: string) {
     return this.productsService.delete(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/permanent')
+  permanentDelete(@Param('id') id: string) {
+    return this.productsService.permanentDelete(id);
   }
 }

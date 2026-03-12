@@ -1,20 +1,26 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Search, Download, Loader2 } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Search, Download, Loader2, UserX, UserCheck } from 'lucide-react';
 import DataTable, { type Column } from '@/components/ui/DataTable';
 import Button from '@/components/ui/Button';
-import { adminApi } from '@/lib/api';
+import { Badge } from '@/components/ui/Badge';
+import adminApi from '@/lib/api';
+import { useToast } from '@/contexts/ToastContext';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
 
 interface Customer {
   id: string;
   name: string;
+  firstName: string;
+  lastName: string;
   email: string;
   phone: string;
   orders: number;
   rentals: number;
   totalSpent: string;
   joined: string;
+  isActive: boolean;
   status: string;
   [key: string]: unknown;
 }
@@ -40,54 +46,101 @@ const columns: Column<Customer>[] = [
     key: 'status',
     header: 'Status',
     render: (customer) => {
-      const colors: Record<string, string> = {
-        Active: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400',
-        VIP: 'bg-[#D4AF37]/20 text-[#D4AF37] dark:bg-[#D4AF37]/10 dark:text-[#D4AF37]',
-        New: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
-        Inactive: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400',
+      if (!customer.isActive) return <Badge variant="error">Suspended</Badge>;
+      const colors: Record<string, any> = {
+        Active: 'success', VIP: 'gold', New: 'info', Inactive: 'neutral',
       };
-      return (
-        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${colors[customer.status] || ''}`}>
-          {customer.status}
-        </span>
-      );
+      return <Badge variant={colors[customer.status] ?? 'neutral'}>{customer.status || (customer.isActive ? 'Active' : 'Inactive')}</Badge>;
     },
   },
 ];
 
 export default function CustomersPage() {
+  const toast = useToast();
+  const confirm = useConfirm();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
-    const fetchCustomers = async () => {
-      try {
-        setLoading(true);
-        const data = await adminApi.getCustomers();
-        setCustomers(Array.isArray(data) ? data : data?.data || data?.users || []);
-      } catch (err) {
-        console.error('Failed to fetch customers:', err);
-        setCustomers([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchCustomers();
+  const fetchCustomers = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await adminApi.getCustomers();
+      setCustomers(Array.isArray(data) ? data : (data as any)?.data || (data as any)?.users || []);
+    } catch {
+      toast.error('Failed to load customers');
+      setCustomers([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  useEffect(() => { fetchCustomers(); }, [fetchCustomers]);
+
+  const handleSuspend = async (customer: Customer) => {
+    const ok = await confirm({ title: 'Suspend Customer', message: `Suspend ${customer.firstName || customer.name}? They will not be able to log in.`, confirmLabel: 'Suspend', variant: 'warning' });
+    if (!ok) return;
+    try {
+      await adminApi.suspendUser(customer.id);
+      toast.success('Customer suspended');
+      fetchCustomers();
+    } catch {
+      toast.error('Failed to suspend customer');
+    }
+  };
+
+  const handleActivate = async (customer: Customer) => {
+    try {
+      await adminApi.activateUser(customer.id);
+      toast.success('Customer reactivated');
+      fetchCustomers();
+    } catch {
+      toast.error('Failed to reactivate customer');
+    }
+  };
+
   const filteredCustomers = customers.filter((c) => {
+    const name = c.name || `${c.firstName || ''} ${c.lastName || ''}`.trim();
     const matchesSearch =
-      (c.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (c.email || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (c.phone || '').includes(searchQuery);
-    const matchesStatus = statusFilter === 'all' || (c.status || '').toLowerCase() === statusFilter;
+    const matchesStatus = statusFilter === 'all'
+      || (statusFilter === 'suspended' && !c.isActive)
+      || (statusFilter === 'active' && c.isActive && c.status?.toLowerCase() === 'active')
+      || (c.status || '').toLowerCase() === statusFilter;
     return matchesSearch && matchesStatus;
   });
+
+  const allColumns = [
+    ...columns,
+    {
+      key: 'actions' as const,
+      header: 'Actions',
+      render: (customer: Customer) => (
+        <div className="flex items-center gap-1">
+          {customer.isActive !== false ? (
+            <button
+              onClick={() => handleSuspend(customer)}
+              title="Suspend customer"
+              className="p-1.5 rounded hover:bg-amber-100 dark:hover:bg-amber-900 transition-colors text-amber-600"
+            >
+              <UserX className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              onClick={() => handleActivate(customer)}
+              title="Reactivate customer"
+              className="p-1.5 rounded hover:bg-green-100 dark:hover:bg-green-900 transition-colors text-green-600"
+            >
+              <UserCheck className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      ),
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -124,6 +177,7 @@ export default function CustomersPage() {
         >
           <option value="all">All Statuses</option>
           <option value="active">Active</option>
+          <option value="suspended">Suspended</option>
           <option value="vip">VIP</option>
           <option value="new">New</option>
           <option value="inactive">Inactive</option>
@@ -136,7 +190,7 @@ export default function CustomersPage() {
           <Loader2 className="w-8 h-8 animate-spin text-brand-gold" />
         </div>
       ) : (
-        <DataTable columns={columns} data={filteredCustomers} pageSize={10} />
+        <DataTable columns={allColumns as any} data={filteredCustomers} pageSize={10} />
       )}
     </div>
   );

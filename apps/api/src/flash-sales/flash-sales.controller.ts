@@ -26,6 +26,12 @@ export class FlashSalesController {
     return this.flashSalesService.findAllActive();
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get('deleted')
+  findDeleted() {
+    return this.flashSalesService.findDeleted();
+  }
+
   @Public()
   @Get(':id')
   findOne(@Param('id') id: string) {
@@ -42,6 +48,12 @@ export class FlashSalesController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateFlashSaleDto) {
     return this.flashSalesService.update(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/restore')
+  restore(@Param('id') id: string) {
+    return this.flashSalesService.restore(id);
   }
 
   @UseGuards(JwtAuthGuard)

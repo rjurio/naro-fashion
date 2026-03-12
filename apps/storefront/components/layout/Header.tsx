@@ -27,6 +27,7 @@ export default function Header() {
     { name: t('common.categories'), href: '/categories' },
     { name: t('common.rentals'), href: '/rentals' },
     { name: t('common.flashSales'), href: '/flash-sales' },
+    { name: 'Real Weddings', href: '/events' },
   ];
 
   return (

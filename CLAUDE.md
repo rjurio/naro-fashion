@@ -35,7 +35,7 @@ GitHub: https://github.com/rjurio/naro-fashion
 ## Database
 - PostgreSQL 17, database: `naro_fashion`, user: `naro_admin`, password: `Admin123`
 - Schema lives in `packages/database/prisma/schema.prisma`
-- 30+ models: Users, AdminUser, Products, Categories, Cart, Wishlist, Orders, Payments, Shipping, Reviews, Rentals, RentalChecklists, RentalPolicies, FlashSales, Referrals, CMS (Banners, Pages, Settings)
+- 40+ models: Users, AdminUser, Products, Categories, Cart, Wishlist, Orders, Payments, Shipping, Reviews, Rentals, RentalChecklists, RentalPolicies, FlashSales, Referrals, CMS (Banners, Pages, Settings), InventoryTransaction, ExpenseCategory, BusinessExpense, FinancialPeriod, Permission, Role, RolePermission, AdminUserRole, LoginAttempt, CustomerEvent, EventMedia
 - Database is seeded with initial data (admin user, categories, products, shipping zones, rental policies, CMS content)
 
 ## Authentication
@@ -49,10 +49,15 @@ GitHub: https://github.com/rjurio/naro-fashion
 - **Rental System**: Gowns/formal wear rentals with National ID verification, 25% down payment, 7-day buffer between rentals, admin checklists (DISPATCH + RETURN)
 - **Product Availability**: PURCHASE_ONLY, RENTAL_ONLY, or BOTH
 - **Themes**: Light, Dark, Luxury (CSS variables via next-themes)
-- **Payments**: Mobile Money (M-Pesa, Tigo Pesa, Airtel Money), cards, bank transfer, COD
+- **Payments**: Mobile Money (M-Pesa, Selcom Pesa, Airtel Money), cards, bank transfer, COD
+- **POS**: Point of Sale module with shift management (open/close), product search (barcode scan + text), split payments, realistic payment method icons (horizontal layout with brand SVG logos)
+- **Customer Events/Gallery**: Real wedding showcases. Admin creates events (auto-approved) or customers submit (max 1, needs approval). Each event has title, date, location, social links, linked product, and media gallery (photos/videos). Storefront shows approved events with masonry gallery and lightbox.
+- **Rental Registration**: Customers must complete profile (name, phone, email, address) before renting. Validated server-side in rentals.service.ts.
+- **Soft Delete**: All major entities (Product, Category, FlashSale, Banner, Page, ChecklistTemplate, CustomerEvent) use `deletedAt` field for soft delete. Deleted items go to Recycle Bin in admin, can be restored.
+- **Activate/Deactivate**: Products and checklist templates have `isActive` toggle. Only active items are shown to customers. Admin can toggle via Power button.
 
 ## API Modules (all fully implemented with Prisma CRUD)
-analytics, auth, cart, categories, cms, flash-sales, id-verification, notifications, orders, payments, products, referrals, rental-checklists, rental-policies, rentals, reviews, scheduler, shipping, upload, users, wishlist
+analytics, auth, cart, categories, cms, events, flash-sales, id-verification, notifications, orders, payments, products, referrals, rental-checklists, rental-policies, rentals, reviews, scheduler, shipping, upload, users, wishlist, permissions, roles, admin-users, expense-categories, expenses, inventory, reports, pos
 
 ## Frontend Data Flow
 - Both storefront and admin fetch data from the NestJS API at `http://localhost:4000/api/v1`
@@ -75,3 +80,6 @@ analytics, auth, cart, categories, cms, flash-sales, id-verification, notificati
 - OneDrive sync can cause EPERM errors during `prisma generate` — retry usually works, or use `prisma db push` which also triggers generate
 - Recharts must be dynamically imported with `{ ssr: false }` in Next.js to avoid server-side rendering errors
 - API response fields may be undefined when database has no data — always use `?? 0`, `|| '0%'`, `|| []` fallbacks
+- `analytics.service.ts` uses `subtotal` field on OrderItem but the Prisma model field is `total` — fix references to `subtotal` → `total` in that file
+- RBAC: Permission → RolePermission → Role → AdminUserRole → AdminUser; `AdminUser.role` string kept for JWT backward compat
+- Account lockout: 5 failed login attempts → 30-min lock; tracked in `AdminUser.lockedUntil` + `LoginAttempt` table

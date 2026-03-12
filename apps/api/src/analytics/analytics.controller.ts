@@ -16,4 +16,29 @@ export class AnalyticsController {
   getRevenue(@Query('period') period: RevenuePeriod = 'daily') {
     return this.analyticsService.getRevenue(period);
   }
+
+  @Get('sales')
+  getSales() {
+    return this.analyticsService.getSalesAnalytics();
+  }
+
+  @Get('rentals')
+  getRentals() {
+    return this.analyticsService.getRentalsAnalytics();
+  }
+
+  @Get('inventory')
+  getInventory() {
+    return this.analyticsService.getInventoryAnalytics();
+  }
+
+  @Get('customers')
+  getCustomers() {
+    return this.analyticsService.getCustomersAnalytics();
+  }
+
+  @Get('products')
+  getProducts() {
+    return this.analyticsService.getProductsAnalytics();
+  }
 }

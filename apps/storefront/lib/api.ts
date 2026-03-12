@@ -179,5 +179,15 @@ function toQuery(params?: Record<string, string | number>): string {
   return s ? `?${s}` : '';
 }
 
+export const eventsApi = {
+  getAll: (params?: Record<string, string | number>) =>
+    api.get<{ data: any[]; meta: { total: number; page: number; limit: number; totalPages: number } }>(`/events${toQuery(params)}`),
+  getBySlug: (slug: string) => api.get<any>(`/events/by-slug/${slug}`),
+  getMyEvent: () => api.get<any>('/events/my-event'),
+  submit: (data: any) => api.post<any>('/events/customer', data),
+  addMedia: (eventId: string, data: { url: string; type?: string; caption?: string }) =>
+    api.post<any>(`/events/${eventId}/media`, data),
+};
+
 export { ApiError };
 export default api;

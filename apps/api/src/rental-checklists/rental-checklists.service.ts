@@ -13,6 +13,7 @@ export class RentalChecklistsService {
 
   async getTemplates() {
     return this.prisma.rentalChecklistTemplate.findMany({
+      where: { deletedAt: null },
       include: { items: { orderBy: { sortOrder: 'asc' } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -60,6 +61,7 @@ export class RentalChecklistsService {
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.description !== undefined) data.description = dto.description;
     if (dto.isDefault !== undefined) data.isDefault = dto.isDefault;
+    if (dto.isActive !== undefined) data.isActive = dto.isActive;
 
     if (dto.items !== undefined) {
       // Delete existing items and recreate
@@ -91,8 +93,57 @@ export class RentalChecklistsService {
       throw new NotFoundException('Checklist template not found');
     }
 
-    await this.prisma.rentalChecklistTemplate.delete({ where: { id } });
-    return { message: 'Checklist template deleted' };
+    await this.prisma.rentalChecklistTemplate.update({
+      where: { id },
+      data: { deletedAt: new Date(), isActive: false },
+    });
+    return { message: 'Checklist template moved to recycle bin' };
+  }
+
+  async restoreTemplate(id: string) {
+    const template = await this.prisma.rentalChecklistTemplate.findUnique({
+      where: { id },
+    });
+    if (!template || !template.deletedAt) {
+      throw new NotFoundException('Deleted template not found');
+    }
+
+    return this.prisma.rentalChecklistTemplate.update({
+      where: { id },
+      data: { deletedAt: null },
+      include: { items: { orderBy: { sortOrder: 'asc' } } },
+    });
+  }
+
+  async findDeletedTemplates() {
+    return this.prisma.rentalChecklistTemplate.findMany({
+      where: { deletedAt: { not: null } },
+      include: { items: { orderBy: { sortOrder: 'asc' } } },
+      orderBy: { deletedAt: 'desc' },
+    });
+  }
+
+  async toggleActive(id: string) {
+    const template = await this.prisma.rentalChecklistTemplate.findUnique({
+      where: { id },
+    });
+    if (!template) {
+      throw new NotFoundException('Checklist template not found');
+    }
+
+    return this.prisma.rentalChecklistTemplate.update({
+      where: { id },
+      data: { isActive: !template.isActive },
+      include: { items: { orderBy: { sortOrder: 'asc' } } },
+    });
+  }
+
+  async getActiveTemplates() {
+    return this.prisma.rentalChecklistTemplate.findMany({
+      where: { isActive: true, deletedAt: null },
+      include: { items: { orderBy: { sortOrder: 'asc' } } },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   async assignToRental(rentalOrderId: string, templateId: string) {
@@ -109,6 +160,10 @@ export class RentalChecklistsService {
     });
     if (!template) {
       throw new NotFoundException('Checklist template not found');
+    }
+
+    if (!template.isActive) {
+      throw new BadRequestException('Cannot assign an inactive template');
     }
 
     if (template.items.length === 0) {

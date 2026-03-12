@@ -25,6 +25,10 @@ export class UpdateTemplateDto {
   isDefault?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => TemplateItemDto)

@@ -125,13 +125,46 @@ class AdminApiClient {
   getRevenueChart(period: string) {
     return this.get<any[]>('/analytics/revenue', { params: { period } });
   }
+  getAnalyticsSales() {
+    return this.get<any>('/analytics/sales');
+  }
+  getAnalyticsRentals() {
+    return this.get<any>('/analytics/rentals');
+  }
+  getAnalyticsInventory() {
+    return this.get<any>('/analytics/inventory');
+  }
+  getAnalyticsCustomers() {
+    return this.get<any>('/analytics/customers');
+  }
+  getAnalyticsProducts() {
+    return this.get<any>('/analytics/products');
+  }
 
   // ===== Products =====
   getProducts(params?: Record<string, string>) {
-    return this.get<any>('/products', { params });
+    return this.get<any>('/products/admin', { params });
   }
   getProduct(slug: string) {
     return this.get<any>(`/products/${slug}`);
+  }
+  getProductById(id: string) {
+    return this.get<any>(`/products/by-id/${id}`);
+  }
+  async uploadImage(file: File): Promise<{ url: string; filename: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const res = await fetch(`${this.baseUrl}/upload/image`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
+      throw new Error(err.message || 'Upload failed');
+    }
+    return res.json();
   }
   createProduct(data: any) {
     return this.post<any>('/products', data);
@@ -139,8 +172,17 @@ class AdminApiClient {
   updateProduct(id: string, data: any) {
     return this.patch<any>(`/products/${id}`, data);
   }
+  toggleProduct(id: string) {
+    return this.patch<any>(`/products/${id}/toggle-active`, {});
+  }
   deleteProduct(id: string) {
     return this.delete<any>(`/products/${id}`);
+  }
+  getDeletedProducts() {
+    return this.get<any[]>('/products/deleted');
+  }
+  restoreProduct(id: string) {
+    return this.patch<any>(`/products/${id}/restore`, {});
   }
 
   // ===== Categories =====
@@ -155,6 +197,12 @@ class AdminApiClient {
   }
   deleteCategory(id: string) {
     return this.delete<any>(`/categories/${id}`);
+  }
+  getDeletedCategories() {
+    return this.get<any[]>('/categories/deleted');
+  }
+  restoreCategory(id: string) {
+    return this.patch<any>(`/categories/${id}/restore`, {});
   }
 
   // ===== Orders =====
@@ -210,6 +258,18 @@ class AdminApiClient {
   deleteChecklistTemplate(id: string) {
     return this.delete<any>(`/rental-checklists/templates/${id}`);
   }
+  getDeletedChecklistTemplates() {
+    return this.get<any[]>('/rental-checklists/templates-deleted');
+  }
+  restoreChecklistTemplate(id: string) {
+    return this.patch<any>(`/rental-checklists/templates/${id}/restore`, {});
+  }
+  toggleChecklistTemplate(id: string) {
+    return this.patch<any>(`/rental-checklists/templates/${id}/toggle-active`, {});
+  }
+  getActiveChecklistTemplates() {
+    return this.get<any[]>('/rental-checklists/templates/active');
+  }
   assignChecklist(rentalOrderId: string, templateId: string) {
     return this.post<any>('/rental-checklists/assign', { rentalOrderId, templateId });
   }
@@ -254,6 +314,12 @@ class AdminApiClient {
   }
   deleteFlashSale(id: string) {
     return this.delete<any>(`/flash-sales/${id}`);
+  }
+  getDeletedFlashSales() {
+    return this.get<any[]>('/flash-sales/deleted');
+  }
+  restoreFlashSale(id: string) {
+    return this.patch<any>(`/flash-sales/${id}/restore`, {});
   }
 
   // ===== Customers =====
@@ -302,6 +368,12 @@ class AdminApiClient {
   deleteBanner(id: string) {
     return this.delete<any>(`/cms/banners/${id}`);
   }
+  getDeletedBanners() {
+    return this.get<any[]>('/cms/banners/deleted');
+  }
+  restoreBanner(id: string) {
+    return this.patch<any>(`/cms/banners/${id}/restore`, {});
+  }
   getPages() {
     return this.get<any[]>('/cms/pages');
   }
@@ -317,6 +389,12 @@ class AdminApiClient {
   deletePage(id: string) {
     return this.delete<any>(`/cms/pages/${id}`);
   }
+  getDeletedPages() {
+    return this.get<any[]>('/cms/pages/deleted');
+  }
+  restorePage(id: string) {
+    return this.patch<any>(`/cms/pages/${id}/restore`, {});
+  }
   getSettings() {
     return this.get<any[]>('/cms/settings');
   }
@@ -330,8 +408,311 @@ class AdminApiClient {
   }
 
   // ===== Inventory =====
+  getInventoryList(params?: Record<string, string>) {
+    return this.get<any>('/inventory', { params });
+  }
   getLowStockAlerts() {
-    return this.get<any>('/products', { params: { lowStock: 'true', limit: '20' } });
+    return this.get<any[]>('/inventory/low-stock');
+  }
+  getInventoryValuation() {
+    return this.get<any>('/inventory/valuation');
+  }
+  getInventoryTransactions(productId: string, params?: Record<string, string>) {
+    return this.get<any>(`/inventory/${productId}/transactions`, { params });
+  }
+  updateInventorySettings(productId: string, data: any) {
+    return this.patch<any>(`/inventory/${productId}/settings`, data);
+  }
+  adjustStock(data: any) {
+    return this.post<any>('/inventory/adjust', data);
+  }
+
+  // ===== Expense Categories =====
+  getExpenseCategories(params?: Record<string, string>) {
+    return this.get<any[]>('/expense-categories', { params });
+  }
+  getExpenseCategory(id: string) {
+    return this.get<any>(`/expense-categories/${id}`);
+  }
+  createExpenseCategory(data: any) {
+    return this.post<any>('/expense-categories', data);
+  }
+  updateExpenseCategory(id: string, data: any) {
+    return this.patch<any>(`/expense-categories/${id}`, data);
+  }
+  toggleExpenseCategory(id: string) {
+    return this.patch<any>(`/expense-categories/${id}/toggle`, {});
+  }
+  deleteExpenseCategory(id: string) {
+    return this.delete<any>(`/expense-categories/${id}`);
+  }
+  restoreExpenseCategory(id: string) {
+    return this.patch<any>(`/expense-categories/${id}/restore`, {});
+  }
+
+  // ===== Expenses =====
+  getExpenses(params?: Record<string, string>) {
+    return this.get<any>('/expenses', { params });
+  }
+  getExpenseSummary(period: string) {
+    return this.get<any>('/expenses/summary', { params: { period } });
+  }
+  getExpense(id: string) {
+    return this.get<any>(`/expenses/${id}`);
+  }
+  createExpense(data: any) {
+    return this.post<any>('/expenses', data);
+  }
+  updateExpense(id: string, data: any) {
+    return this.patch<any>(`/expenses/${id}`, data);
+  }
+  deleteExpense(id: string) {
+    return this.delete<any>(`/expenses/${id}`);
+  }
+
+  // ===== Reports =====
+  getRentalReportByProduct(params?: Record<string, string>) {
+    return this.get<any>('/reports/rentals/by-product', { params });
+  }
+  getRentalHistoryForProduct(productId: string, params?: Record<string, string>) {
+    return this.get<any>(`/reports/rentals/by-product/${productId}`, { params });
+  }
+  getIncomeStatement(period: string) {
+    return this.get<any>('/reports/financials/income-statement', { params: { period } });
+  }
+  getFinancialSummary(year: number) {
+    return this.get<any[]>('/reports/financials/summary', { params: { year: String(year) } });
+  }
+  getExpenseBreakdown(period: string) {
+    return this.get<any[]>('/reports/financials/expense-breakdown', { params: { period } });
+  }
+  getFinancialPeriods() {
+    return this.get<any[]>('/reports/financials/periods');
+  }
+  createFinancialPeriod(data: any) {
+    return this.post<any>('/reports/financials/periods', data);
+  }
+  closeFinancialPeriod(id: string) {
+    return this.patch<any>(`/reports/financials/periods/${id}/close`, {});
+  }
+
+  // ===== Admin Users =====
+  getAdminUsers(params?: Record<string, string>) {
+    return this.get<any[]>('/admin-users', { params });
+  }
+  getAdminUser(id: string) {
+    return this.get<any>(`/admin-users/${id}`);
+  }
+  createAdminUser(data: any) {
+    return this.post<any>('/admin-users', data);
+  }
+  updateAdminUser(id: string, data: any) {
+    return this.patch<any>(`/admin-users/${id}`, data);
+  }
+  deleteAdminUser(id: string) {
+    return this.delete<any>(`/admin-users/${id}`);
+  }
+  toggleAdminUser(id: string) {
+    return this.patch<any>(`/admin-users/${id}/toggle`, {});
+  }
+  unlockAdminUser(id: string) {
+    return this.patch<any>(`/admin-users/${id}/unlock`, {});
+  }
+  assignAdminUserRole(userId: string, roleId: string) {
+    return this.post<any>(`/admin-users/${userId}/roles`, { roleId });
+  }
+  removeAdminUserRole(userId: string, roleId: string) {
+    return this.delete<any>(`/admin-users/${userId}/roles/${roleId}`);
+  }
+  getAdminUserActivity(id: string) {
+    return this.get<any[]>(`/admin-users/${id}/activity`);
+  }
+
+  // ===== Roles =====
+  getRoles(params?: Record<string, string>) {
+    return this.get<any[]>('/roles', { params });
+  }
+  getRole(id: string) {
+    return this.get<any>(`/roles/${id}`);
+  }
+  createRole(data: any) {
+    return this.post<any>('/roles', data);
+  }
+  updateRole(id: string, data: any) {
+    return this.patch<any>(`/roles/${id}`, data);
+  }
+  deleteRole(id: string) {
+    return this.delete<any>(`/roles/${id}`);
+  }
+  restoreRole(id: string) {
+    return this.patch<any>(`/roles/${id}/restore`, {});
+  }
+  getRolePermissions(id: string) {
+    return this.get<any[]>(`/roles/${id}/permissions`);
+  }
+  addRolePermissions(id: string, permissionIds: string[]) {
+    return this.post<any>(`/roles/${id}/permissions`, { permissionIds });
+  }
+  removeRolePermission(roleId: string, permissionId: string) {
+    return this.delete<any>(`/roles/${roleId}/permissions/${permissionId}`);
+  }
+
+  // ===== Permissions =====
+  getPermissions(params?: Record<string, string>) {
+    return this.get<any[]>('/permissions', { params });
+  }
+  getPermissionModules() {
+    return this.get<string[]>('/permissions/modules');
+  }
+
+  // ===== Events =====
+  getEvents(params?: Record<string, string>) {
+    return this.get<any>('/events/admin', { params });
+  }
+  getEvent(id: string) {
+    return this.get<any>(`/events/${id}`);
+  }
+  getPendingEvents() {
+    return this.get<any[]>('/events/pending');
+  }
+  createEvent(data: any) {
+    return this.post<any>('/events', data);
+  }
+  updateEvent(id: string, data: any) {
+    return this.patch<any>(`/events/${id}`, data);
+  }
+  deleteEvent(id: string) {
+    return this.delete<any>(`/events/${id}`);
+  }
+  approveEvent(id: string) {
+    return this.patch<any>(`/events/${id}/approve`, {});
+  }
+  rejectEvent(id: string, reason: string) {
+    return this.patch<any>(`/events/${id}/reject`, { reason });
+  }
+  restoreEvent(id: string) {
+    return this.patch<any>(`/events/${id}/restore`, {});
+  }
+  getDeletedEvents() {
+    return this.get<any[]>('/events/deleted');
+  }
+  addEventMedia(eventId: string, data: any) {
+    return this.post<any>(`/events/${eventId}/media`, data);
+  }
+  deleteEventMedia(eventId: string, mediaId: string) {
+    return this.delete<any>(`/events/${eventId}/media/${mediaId}`);
+  }
+  reorderEventMedia(eventId: string, mediaIds: string[]) {
+    return this.patch<any>(`/events/${eventId}/media/reorder`, { mediaIds });
+  }
+
+  // ===== Users (suspend/activate) =====
+  suspendUser(id: string) {
+    return this.patch<any>(`/users/${id}/suspend`, {});
+  }
+  activateUser(id: string) {
+    return this.patch<any>(`/users/${id}/activate`, {});
+  }
+
+  // ===== POS - Sessions =====
+  posOpenSession(data: { openingCash: number }) {
+    return this.post<any>('/pos/sessions/open', data);
+  }
+  posCloseSession(data: { closingCash: number; notes?: string }) {
+    return this.post<any>('/pos/sessions/close', data);
+  }
+  posGetCurrentSession() {
+    return this.get<any>('/pos/sessions/current');
+  }
+  posGetSessions(params?: Record<string, string>) {
+    return this.get<any>('/pos/sessions', { params });
+  }
+  posGetSessionSummary(id: string) {
+    return this.get<any>(`/pos/sessions/${id}/summary`);
+  }
+
+  // ===== POS - Product & Customer Search =====
+  posSearchProducts(q: string) {
+    return this.get<any[]>('/pos/products/search', { params: { q } });
+  }
+  posLookupBarcode(code: string) {
+    return this.get<any>(`/pos/products/barcode/${code}`);
+  }
+  posUpdateBarcode(variantId: string, barcode: string) {
+    return this.patch<any>(`/pos/products/${variantId}/barcode`, { barcode });
+  }
+  posSearchCustomers(q: string) {
+    return this.get<any[]>('/pos/customers/search', { params: { q } });
+  }
+  posQuickCreateCustomer(data: { firstName: string; phone: string; lastName?: string; email?: string }) {
+    return this.post<any>('/pos/customers/quick', data);
+  }
+
+  // ===== POS - Sales =====
+  posCreateSale(data: any) {
+    return this.post<any>('/pos/sales', data);
+  }
+  posGetSales(params?: Record<string, string>) {
+    return this.get<any>('/pos/sales', { params });
+  }
+  posGetSale(id: string) {
+    return this.get<any>(`/pos/sales/${id}`);
+  }
+  posGetReceipt(id: string) {
+    return this.get<any>(`/pos/sales/${id}/receipt`);
+  }
+  posRefundSale(id: string, data: any) {
+    return this.post<any>(`/pos/sales/${id}/refund`, data);
+  }
+
+  // ===== POS - Hold/Park =====
+  posHoldSale(data: any) {
+    return this.post<any>('/pos/held', data);
+  }
+  posGetHeldSales() {
+    return this.get<any[]>('/pos/held');
+  }
+  posResumeHeldSale(id: string) {
+    return this.post<any>(`/pos/held/${id}/resume`, {});
+  }
+  posDiscardHeldSale(id: string) {
+    return this.delete<any>(`/pos/held/${id}`);
+  }
+
+  // ===== POS - Layaway =====
+  posCreateLayaway(data: any) {
+    return this.post<any>('/pos/layaways', data);
+  }
+  posGetLayaways(params?: Record<string, string>) {
+    return this.get<any>('/pos/layaways', { params });
+  }
+  posGetLayaway(id: string) {
+    return this.get<any>(`/pos/layaways/${id}`);
+  }
+  posLayawayPayment(id: string, data: any) {
+    return this.post<any>(`/pos/layaways/${id}/payment`, data);
+  }
+  posCompleteLayaway(id: string) {
+    return this.post<any>(`/pos/layaways/${id}/complete`, {});
+  }
+  posCancelLayaway(id: string) {
+    return this.post<any>(`/pos/layaways/${id}/cancel`, {});
+  }
+
+  // ===== POS - Exchange =====
+  posCreateExchange(data: any) {
+    return this.post<any>('/pos/exchanges', data);
+  }
+  posGetExchanges(params?: Record<string, string>) {
+    return this.get<any>('/pos/exchanges', { params });
+  }
+  posGetExchange(id: string) {
+    return this.get<any>(`/pos/exchanges/${id}`);
+  }
+
+  // ===== POS - Daily Summary =====
+  posGetDailySummary(date?: string) {
+    return this.get<any>('/pos/daily-summary', { params: date ? { date } : undefined });
   }
 }
 

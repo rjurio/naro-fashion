@@ -23,6 +23,12 @@ export class CategoriesController {
     return this.categoriesService.findAll();
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get('deleted')
+  findDeleted() {
+    return this.categoriesService.findDeleted();
+  }
+
   @Public()
   @Get(':slug')
   findBySlug(@Param('slug') slug: string) {
@@ -39,6 +45,12 @@ export class CategoriesController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateCategoryDto) {
     return this.categoriesService.update(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/restore')
+  restore(@Param('id') id: string) {
+    return this.categoriesService.restore(id);
   }
 
   @UseGuards(JwtAuthGuard)

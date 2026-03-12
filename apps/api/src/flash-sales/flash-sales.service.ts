@@ -29,6 +29,7 @@ export class FlashSalesService {
       where: {
         startDate: { lte: now },
         endDate: { gte: now },
+        deletedAt: null,
       },
       include: {
         items: {
@@ -124,9 +125,30 @@ export class FlashSalesService {
     const sale = await this.prisma.flashSale.findUnique({ where: { id } });
     if (!sale) throw new NotFoundException('Flash sale not found');
 
-    await this.prisma.flashSaleItem.deleteMany({ where: { flashSaleId: id } });
-    await this.prisma.flashSale.delete({ where: { id } });
+    await this.prisma.flashSale.update({
+      where: { id },
+      data: { deletedAt: new Date(), isActive: false },
+    });
 
-    return { message: 'Flash sale deleted' };
+    return { message: 'Flash sale moved to recycle bin' };
+  }
+
+  async restore(id: string) {
+    const sale = await this.prisma.flashSale.findUnique({ where: { id } });
+    if (!sale || !sale.deletedAt) throw new NotFoundException('Deleted flash sale not found');
+
+    return this.prisma.flashSale.update({
+      where: { id },
+      data: { deletedAt: null, isActive: true },
+      include: { items: true },
+    });
+  }
+
+  async findDeleted() {
+    return this.prisma.flashSale.findMany({
+      where: { deletedAt: { not: null } },
+      include: { items: true },
+      orderBy: { deletedAt: 'desc' },
+    });
   }
 }

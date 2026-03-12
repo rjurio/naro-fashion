@@ -14,6 +14,35 @@ export class RentalsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(userId: string, dto: CreateRentalDto) {
+    // Verify customer profile completeness before rental
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { addresses: { take: 1 } },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    if (!user.firstName || !user.lastName) {
+      throw new BadRequestException(
+        'Please complete your profile with your full name before renting',
+      );
+    }
+    if (!user.phone) {
+      throw new BadRequestException(
+        'Please add your phone number to your profile before renting',
+      );
+    }
+    if (!user.email) {
+      throw new BadRequestException(
+        'Please add your email address to your profile before renting',
+      );
+    }
+    if (user.addresses.length === 0) {
+      throw new BadRequestException(
+        'Please add an address to your profile before renting',
+      );
+    }
+
     const product = await this.prisma.product.findUnique({
       where: { id: dto.productId },
     });

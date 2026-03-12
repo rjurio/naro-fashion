@@ -38,6 +38,10 @@ model User {
   referralCode  ReferralCode?
   referredBy    Referral?       @relation("referredUser")
   referrals     Referral[]      @relation("referrer")
+  events        CustomerEvent[]
+  layaways      Layaway[]
+
+  alternativePhone String?
 
   @@index([email])
   @@index([phone])
@@ -70,15 +74,31 @@ model AdminUser {
   passwordHash String
   firstName    String
   lastName     String
-  role         String   @default("STAFF") // SUPER_ADMIN, MANAGER, STAFF
+  role         String   @default("STAFF") // SUPER_ADMIN, MANAGER, STAFF (cached for JWT)
   is2FAEnabled Boolean  @default(false)
   twoFASecret  String?
   isActive     Boolean  @default(true)
+  avatarUrl    String?
+  createdBy    String?
+  deletedAt    DateTime?
+
+  // Account lockout
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+
+  // Password reset
+  passwordResetToken   String?
+  passwordResetExpires DateTime?
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   activityLogs AdminActivityLog[]
   checkedItems RentalChecklistEntry[]
+  roles        AdminUserRole[]
+
+  @@index([email])
+  @@index([deletedAt])
 }
 
 model AdminActivityLog {
@@ -111,6 +131,7 @@ model Category {
   parentId    String?
   sortOrder   Int        @default(0)
   isActive    Boolean    @default(true)
+  deletedAt   DateTime?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
@@ -149,19 +170,30 @@ model Product {
 
   avgRating    Float   @default(0)
   reviewCount  Int     @default(0)
+
+  // Inventory fields
+  purchasePrice     Decimal?  @db.Decimal(12, 2)
+  minimumStock      Int       @default(5)
+  supplierName      String?
+  supplierContact   String?
+  lastRestockedAt   DateTime?
+
+  deletedAt    DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  category      Category        @relation(fields: [categoryId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  variants      ProductVariant[]
-  images        ProductImage[]
-  videos        ProductVideo[]
-  reviews       Review[]
-  wishlistItems WishlistItem[]
-  cartItems     CartItem[]
-  orderItems    OrderItem[]
-  flashSaleItems FlashSaleItem[]
-  rentalOrders  RentalOrder[]
+  category               Category               @relation(fields: [categoryId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  variants               ProductVariant[]
+  images                 ProductImage[]
+  videos                 ProductVideo[]
+  reviews                Review[]
+  wishlistItems          WishlistItem[]
+  cartItems              CartItem[]
+  orderItems             OrderItem[]
+  flashSaleItems         FlashSaleItem[]
+  rentalOrders           RentalOrder[]
+  inventoryTransactions  InventoryTransaction[]
+  events                 CustomerEvent[]
 
   @@index([categoryId])
   @@index([slug])
@@ -174,6 +206,7 @@ model ProductVariant {
   productId String
   name      String  // e.g., "Red / Large"
   sku       String  @unique
+  barcode   String? @unique
   size      String?
   color     String?
   colorHex  String?
@@ -190,6 +223,7 @@ model ProductVariant {
 
   @@index([productId])
   @@index([sku])
+  @@index([barcode])
 }
 
 model ProductImage {
@@ -261,8 +295,8 @@ model WishlistItem {
 model Order {
   id            String   @id @default(cuid())
   orderNumber   String   @unique
-  userId        String
-  addressId     String
+  userId        String?
+  addressId     String?
   status        String   @default("PENDING")
   subtotal      Decimal  @db.Decimal(12, 2)
   shippingCost  Decimal  @db.Decimal(12, 2) @default(0)
@@ -271,20 +305,31 @@ model Order {
   paymentMethod String
   paymentStatus String   @default("PENDING")
   notes         String?
+
+  // POS fields
+  channel       String   @default("ONLINE") // ONLINE, POS
+  cashierId     String?
+  posSessionId  String?
+  customerName  String?  // Walk-in customer name (when no userId)
+  customerPhone String?  // Walk-in customer phone
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  user     User        @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  address  Address     @relation(fields: [addressId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  items    OrderItem[]
-  payments Payment[]
-  shipment Shipment?
-  invoice  Invoice?
+  user       User?       @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  address    Address?    @relation(fields: [addressId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  posSession PosSession? @relation(fields: [posSessionId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  items      OrderItem[]
+  payments   Payment[]
+  shipment   Shipment?
+  invoice    Invoice?
 
   @@index([userId])
   @@index([orderNumber])
   @@index([status])
   @@index([createdAt])
+  @@index([channel])
+  @@index([posSessionId])
 }
 
 model OrderItem {
@@ -307,6 +352,7 @@ model Payment {
   id              String   @id @default(cuid())
   orderId         String?
   rentalOrderId   String?
+  layawayId       String?
   amount          Decimal  @db.Decimal(12, 2)
   method          String
   status          String   @default("PENDING")
@@ -317,9 +363,11 @@ model Payment {
 
   order       Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   rentalOrder RentalOrder? @relation(fields: [rentalOrderId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  layaway     Layaway?     @relation(fields: [layawayId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([orderId])
   @@index([rentalOrderId])
+  @@index([layawayId])
   @@index([transactionRef])
 }
 
@@ -484,6 +532,8 @@ model RentalChecklistTemplate {
   name        String
   description String?
   isDefault   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  deletedAt   DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -542,6 +592,7 @@ model FlashSale {
   startDate   DateTime
   endDate     DateTime
   isActive    Boolean  @default(true)
+  deletedAt   DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -609,6 +660,7 @@ model Banner {
   linkUrl     String?
   sortOrder   Int      @default(0)
   isActive    Boolean  @default(true)
+  deletedAt   DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
@@ -621,6 +673,7 @@ model Page {
   content        String
   contentSwahili String?
   isPublished    Boolean  @default(false)
+  deletedAt      DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -652,4 +705,316 @@ model PickupPoint {
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// ============================================================
+// INVENTORY
+// ============================================================
+
+model InventoryTransaction {
+  id             String   @id @default(cuid())
+  productId      String
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variantId      String?
+  type           String   // RESTOCK|SALE|RENTAL_OUT|RENTAL_RETURN|ADJUSTMENT|DAMAGE
+  quantityBefore Int
+  quantityChange Int      // positive=in, negative=out
+  quantityAfter  Int
+  unitCost       Decimal? @db.Decimal(12, 2)
+  totalValue     Decimal? @db.Decimal(12, 2)
+  reference      String?
+  note           String?
+  performedBy    String?
+  createdAt      DateTime @default(now())
+
+  @@index([productId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ============================================================
+// FINANCIALS
+// ============================================================
+
+model ExpenseCategory {
+  id           String            @id @default(cuid())
+  name         String            @unique
+  description  String?
+  categoryType String            @default("OPERATING") // COGS|OPERATING|TAX|OTHER
+  sortOrder    Int               @default(0)
+  isActive     Boolean           @default(true)
+  deletedAt    DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  expenses     BusinessExpense[]
+
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+model BusinessExpense {
+  id          String          @id @default(cuid())
+  categoryId  String
+  category    ExpenseCategory @relation(fields: [categoryId], references: [id])
+  amount      Decimal         @db.Decimal(12, 2)
+  description String?
+  vendor      String?
+  expenseDate DateTime
+  period      String          // "YYYY-MM" auto-computed
+  receiptUrl  String?
+  createdBy   String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([categoryId])
+  @@index([period])
+  @@index([expenseDate])
+}
+
+model FinancialPeriod {
+  id         String    @id @default(cuid())
+  periodKey  String    @unique   // "YYYY-MM"
+  periodName String
+  startDate  DateTime
+  endDate    DateTime
+  periodType String    @default("MONTH")
+  status     String    @default("OPEN")  // OPEN|CLOSED|LOCKED
+  closedBy   String?
+  closedAt   DateTime?
+  notes      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([periodKey])
+  @@index([status])
+}
+
+// ============================================================
+// RBAC (Permissions, Roles, AdminUserRole)
+// ============================================================
+
+model Permission {
+  id          String   @id @default(cuid())
+  code        String   @unique  // e.g. "products:create"
+  name        String
+  description String?
+  module      String
+  action      String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  rolePermissions RolePermission[]
+
+  @@unique([module, action])
+  @@index([module])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  isSystem    Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  deletedAt   DateTime?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  adminUsers  AdminUserRole[]
+
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  assignedAt   DateTime   @default(now())
+
+  @@id([roleId, permissionId])
+}
+
+model AdminUserRole {
+  adminUserId String
+  roleId      String
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  role        Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assignedAt  DateTime  @default(now())
+  assignedBy  String?
+
+  @@id([adminUserId, roleId])
+}
+
+model LoginAttempt {
+  id          String   @id @default(cuid())
+  email       String
+  isAdmin     Boolean
+  success     Boolean
+  ipAddress   String?
+  userAgent   String?
+  attemptedAt DateTime @default(now())
+
+  @@index([email])
+  @@index([attemptedAt])
+}
+
+// ============================================================
+// CUSTOMER EVENTS / GALLERY
+// ============================================================
+
+model CustomerEvent {
+  id                 String    @id @default(cuid())
+  title              String
+  titleSwahili       String?
+  slug               String    @unique
+  description        String?
+  descriptionSwahili String?
+  eventDate          DateTime
+  location           String?
+  customerName       String?
+  socialLinks        Json?     // { instagram, facebook, tiktok }
+  coverImageUrl      String?
+
+  // Ownership
+  userId             String?
+  productId          String?
+  createdByAdminId   String?
+
+  // Approval workflow
+  status             String    @default("DRAFT") // DRAFT, PENDING_APPROVAL, APPROVED, REJECTED
+  rejectionReason    String?
+  approvedAt         DateTime?
+  approvedById       String?
+
+  isFeatured         Boolean   @default(false)
+  sortOrder          Int       @default(0)
+  deletedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  user    User?    @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  media   EventMedia[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([eventDate])
+  @@index([deletedAt])
+  @@index([slug])
+}
+
+model EventMedia {
+  id           String   @id @default(cuid())
+  eventId      String
+  url          String
+  thumbnailUrl String?
+  mediaType    String   @default("IMAGE") // IMAGE, VIDEO
+  altText      String?
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  event CustomerEvent @relation(fields: [eventId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([eventId])
+}
+
+// ============================================================
+// POINT OF SALE (POS)
+// ============================================================
+
+model PosSession {
+  id             String    @id @default(cuid())
+  adminUserId    String
+  openedAt       DateTime  @default(now())
+  closedAt       DateTime?
+  openingCash    Decimal   @db.Decimal(12, 2) @default(0)
+  closingCash    Decimal?  @db.Decimal(12, 2)
+  expectedCash   Decimal?  @db.Decimal(12, 2)
+  cashDifference Decimal?  @db.Decimal(12, 2)
+  totalSales     Decimal   @db.Decimal(12, 2) @default(0)
+  totalTransactions Int    @default(0)
+  notes          String?
+  status         String    @default("OPEN") // OPEN, CLOSED
+
+  orders   Order[]
+  layaways Layaway[]
+
+  @@index([adminUserId])
+  @@index([status])
+  @@index([openedAt])
+}
+
+model HeldSale {
+  id           String   @id @default(cuid())
+  adminUserId  String
+  customerId   String?
+  customerName String?
+  customerPhone String?
+  items        Json     // Array of {productId, variantId, productName, variantName, quantity, unitPrice, itemDiscount}
+  discount     Decimal  @db.Decimal(12, 2) @default(0)
+  discountType String?  // PERCENTAGE, FIXED
+  note         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([adminUserId])
+}
+
+model Layaway {
+  id             String    @id @default(cuid())
+  layawayNumber  String    @unique
+  customerId     String
+  cashierId      String
+  posSessionId   String?
+  items          Json      // Same shape as HeldSale items
+  subtotal       Decimal   @db.Decimal(12, 2)
+  discount       Decimal   @db.Decimal(12, 2) @default(0)
+  discountType   String?   // PERCENTAGE, FIXED
+  total          Decimal   @db.Decimal(12, 2)
+  depositAmount  Decimal   @db.Decimal(12, 2)
+  depositPaid    Decimal   @db.Decimal(12, 2) @default(0)
+  balanceDue     Decimal   @db.Decimal(12, 2)
+  dueDate        DateTime
+  status         String    @default("ACTIVE") // ACTIVE, COMPLETED, CANCELLED, EXPIRED
+  completedAt    DateTime?
+  cancelledAt    DateTime?
+  note           String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  customer   User        @relation(fields: [customerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  posSession PosSession? @relation(fields: [posSessionId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  payments   Payment[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([posSessionId])
+}
+
+model PosExchange {
+  id               String   @id @default(cuid())
+  exchangeNumber   String   @unique
+  originalOrderId  String
+  newOrderId       String?
+  cashierId        String
+  posSessionId     String?
+  customerId       String?
+  returnedItems    Json     // [{orderItemId, productId, variantId, productName, variantName, quantity, unitPrice}]
+  returnTotal      Decimal  @db.Decimal(12, 2)
+  newItems         Json?    // [{productId, variantId, productName, variantName, quantity, unitPrice}]
+  newTotal         Decimal  @db.Decimal(12, 2) @default(0)
+  priceDifference  Decimal  @db.Decimal(12, 2) @default(0) // positive = customer owes, negative = refund
+  settlementMethod String?  // CASH, MPESA, TIGO_PESA, AIRTEL_MONEY, MIX_BY_YAS, CARD
+  settlementAmount Decimal? @db.Decimal(12, 2)
+  reason           String?
+  note             String?
+  createdAt        DateTime @default(now())
+
+  @@index([originalOrderId])
+  @@index([cashierId])
+  @@index([createdAt])
 }

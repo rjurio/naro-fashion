@@ -154,6 +154,7 @@ export class OrdersService {
     if (search) {
       where.OR = [
         { orderNumber: { contains: search, mode: 'insensitive' } },
+        { customerName: { contains: search, mode: 'insensitive' } },
         {
           user: {
             OR: [

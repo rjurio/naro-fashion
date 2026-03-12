@@ -25,6 +25,11 @@ export enum PaymentMethod {
   CARD = 'CARD',
   BANK_TRANSFER = 'BANK_TRANSFER',
   COD = 'COD',
+  CASH = 'CASH',
+  MPESA = 'MPESA',
+  TIGO_PESA = 'TIGO_PESA',
+  AIRTEL_MONEY = 'AIRTEL_MONEY',
+  MIX_BY_YAS = 'MIX_BY_YAS',
 }
 
 export enum PaymentStatus {
@@ -78,6 +83,54 @@ export enum Theme {
   DARK = 'dark',
   STANDARD = 'standard',
 }
+
+export enum EventStatus {
+  DRAFT = 'DRAFT',
+  PENDING_APPROVAL = 'PENDING_APPROVAL',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+}
+
+export enum EventMediaType {
+  IMAGE = 'IMAGE',
+  VIDEO = 'VIDEO',
+}
+
+// POS Enums
+export enum OrderChannel {
+  ONLINE = 'ONLINE',
+  POS = 'POS',
+}
+
+export enum PosSessionStatus {
+  OPEN = 'OPEN',
+  CLOSED = 'CLOSED',
+}
+
+export enum DiscountType {
+  PERCENTAGE = 'PERCENTAGE',
+  FIXED = 'FIXED',
+}
+
+export enum LayawayStatus {
+  ACTIVE = 'ACTIVE',
+  COMPLETED = 'COMPLETED',
+  CANCELLED = 'CANCELLED',
+  EXPIRED = 'EXPIRED',
+}
+
+// POS payment method display labels (Tanzania)
+export const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  CASH: 'Cash',
+  MPESA: 'M-Pesa',
+  TIGO_PESA: 'Tigo Pesa',
+  AIRTEL_MONEY: 'Airtel Money',
+  MIX_BY_YAS: 'MIX by YAS',
+  CARD: 'Card',
+  MOBILE_MONEY: 'Mobile Money',
+  BANK_TRANSFER: 'Bank Transfer',
+  COD: 'Cash on Delivery',
+} as const;
 
 // ============================================================
 // CONSTANTS

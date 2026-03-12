@@ -9,11 +9,12 @@ export class CategoriesService {
 
   async findAll() {
     return this.prisma.category.findMany({
-      where: { parentId: null },
+      where: { parentId: null, deletedAt: null },
       include: {
         children: {
+          where: { deletedAt: null },
           include: {
-            children: true,
+            children: { where: { deletedAt: null } },
           },
         },
       },
@@ -25,12 +26,12 @@ export class CategoriesService {
     const category = await this.prisma.category.findUnique({
       where: { slug },
       include: {
-        children: true,
+        children: { where: { deletedAt: null } },
         parent: { select: { id: true, name: true, slug: true } },
       },
     });
 
-    if (!category) {
+    if (!category || category.deletedAt) {
       throw new NotFoundException('Category not found');
     }
 
@@ -53,7 +54,7 @@ export class CategoriesService {
 
   async update(id: string, dto: UpdateCategoryDto) {
     const category = await this.prisma.category.findUnique({ where: { id } });
-    if (!category) {
+    if (!category || category.deletedAt) {
       throw new NotFoundException('Category not found');
     }
 
@@ -77,7 +78,29 @@ export class CategoriesService {
       throw new NotFoundException('Category not found');
     }
 
-    await this.prisma.category.delete({ where: { id } });
-    return { message: 'Category deleted' };
+    await this.prisma.category.update({
+      where: { id },
+      data: { deletedAt: new Date(), isActive: false },
+    });
+    return { message: 'Category moved to recycle bin' };
+  }
+
+  async restore(id: string) {
+    const category = await this.prisma.category.findUnique({ where: { id } });
+    if (!category || !category.deletedAt) {
+      throw new NotFoundException('Deleted category not found');
+    }
+
+    return this.prisma.category.update({
+      where: { id },
+      data: { deletedAt: null, isActive: true },
+    });
+  }
+
+  async findDeleted() {
+    return this.prisma.category.findMany({
+      where: { deletedAt: { not: null } },
+      orderBy: { deletedAt: 'desc' },
+    });
   }
 }

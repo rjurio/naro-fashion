@@ -26,6 +26,16 @@ import {
   BarChart3,
   ChevronDown,
   X,
+  Trash2,
+  Warehouse,
+  TrendingUp,
+  FileBarChart2,
+  Shield,
+  UserCog,
+  Key,
+  Camera,
+  Monitor,
+  ReceiptText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -38,6 +48,14 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  {
+    label: 'Point of Sale',
+    icon: Monitor,
+    children: [
+      { label: 'Open POS', href: '/dashboard/pos', icon: Monitor },
+      { label: 'Sales History', href: '/dashboard/pos/sales', icon: ReceiptText },
+    ],
+  },
   {
     label: 'Products',
     icon: ShoppingBag,
@@ -60,6 +78,7 @@ const navItems: NavItem[] = [
     ],
   },
   { label: 'Flash Sales', href: '/dashboard/flash-sales', icon: Zap },
+  { label: 'Events Gallery', href: '/dashboard/events', icon: Camera },
   { label: 'Referrals', href: '/dashboard/referrals', icon: Gift },
   {
     label: 'CMS',
@@ -71,6 +90,24 @@ const navItems: NavItem[] = [
     ],
   },
   { label: 'Analytics', href: '/dashboard/analytics', icon: BarChart3 },
+  {
+    label: 'Reports',
+    icon: FileBarChart2,
+    children: [
+      { label: 'Rental Reports', href: '/dashboard/reports/rentals', icon: CalendarClock },
+    ],
+  },
+  { label: 'Inventory', href: '/dashboard/inventory', icon: Warehouse },
+  { label: 'Financials', href: '/dashboard/financials', icon: TrendingUp },
+  {
+    label: 'User Management',
+    icon: Shield,
+    children: [
+      { label: 'Admin Users', href: '/dashboard/users', icon: UserCog },
+      { label: 'Roles & Permissions', href: '/dashboard/users/roles', icon: Key },
+    ],
+  },
+  { label: 'Recycle Bin', href: '/dashboard/recycle-bin', icon: Trash2 },
   { label: 'Settings', href: '/dashboard/settings', icon: Settings },
 ];
 

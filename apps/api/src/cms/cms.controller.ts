@@ -32,6 +32,18 @@ export class CmsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Get('banners/admin')
+  findAllBannersAdmin() {
+    return this.cmsService.findAllBannersAdmin();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('banners/deleted')
+  findDeletedBanners() {
+    return this.cmsService.findDeletedBanners();
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post('banners')
   createBanner(@Body() dto: CreateBannerDto) {
     return this.cmsService.createBanner(dto);
@@ -41,6 +53,12 @@ export class CmsController {
   @Patch('banners/:id')
   updateBanner(@Param('id') id: string, @Body() dto: UpdateBannerDto) {
     return this.cmsService.updateBanner(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('banners/:id/restore')
+  restoreBanner(@Param('id') id: string) {
+    return this.cmsService.restoreBanner(id);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -55,6 +73,12 @@ export class CmsController {
   @Get('pages')
   findAllPages() {
     return this.cmsService.findAllPages();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('pages/deleted')
+  findDeletedPages() {
+    return this.cmsService.findDeletedPages();
   }
 
   @Public()
@@ -73,6 +97,18 @@ export class CmsController {
   @Patch('pages/:id')
   updatePage(@Param('id') id: string, @Body() dto: UpdatePageDto) {
     return this.cmsService.updatePage(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('pages/:id/restore')
+  restorePage(@Param('id') id: string) {
+    return this.cmsService.restorePage(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('pages/:id')
+  deletePage(@Param('id') id: string) {
+    return this.cmsService.deletePage(id);
   }
 
   // --- Settings ---

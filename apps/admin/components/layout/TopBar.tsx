@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useTheme } from 'next-themes';
@@ -37,6 +37,8 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
 
   const themes = [
     { value: 'light', label: 'Light', icon: Sun },
@@ -94,7 +96,9 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
             className="p-2 rounded-lg hover:bg-[hsl(var(--muted))] text-[hsl(var(--foreground))] transition-colors"
             title="Change theme"
           >
-            {theme === 'dark' ? (
+            {!mounted ? (
+              <Sun className="w-5 h-5" />
+            ) : theme === 'dark' ? (
               <Moon className="w-5 h-5" />
             ) : theme === 'luxury' ? (
               <Sparkles className="w-5 h-5 text-brand-gold" />
