@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   SlidersHorizontal,
   X,
@@ -9,6 +10,7 @@ import {
   Grid3X3,
   LayoutList,
   Loader2,
+  Search,
 } from "lucide-react";
 import ProductCard from "@/components/ui/ProductCard";
 import Button from "@/components/ui/Button";
@@ -67,6 +69,9 @@ interface Product {
 }
 
 export default function ProductsPage() {
+  const searchParams = useSearchParams();
+  const urlSearch = searchParams.get("search") || "";
+
   const [showFilters, setShowFilters] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [selectedSizes, setSelectedSizes] = useState<string[]>([]);
@@ -74,6 +79,7 @@ export default function ProductsPage() {
   const [selectedPriceRange, setSelectedPriceRange] = useState<number | null>(null);
   const [sortBy, setSortBy] = useState("newest");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [searchTerm, setSearchTerm] = useState(urlSearch);
 
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -82,6 +88,11 @@ export default function ProductsPage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
+
+  // Sync search term from URL
+  useEffect(() => {
+    setSearchTerm(urlSearch);
+  }, [urlSearch]);
 
   // Fetch categories on mount
   useEffect(() => {
@@ -103,6 +114,9 @@ export default function ProductsPage() {
         limit: 12,
         sort: sortBy,
       };
+      if (searchTerm) {
+        params.search = searchTerm;
+      }
       if (selectedCategory !== "All") {
         params.category = selectedCategory;
       }
@@ -119,7 +133,7 @@ export default function ProductsPage() {
       }
       return params;
     },
-    [selectedCategory, selectedSizes, selectedColors, selectedPriceRange, sortBy]
+    [selectedCategory, selectedSizes, selectedColors, selectedPriceRange, sortBy, searchTerm]
   );
 
   // Fetch products when filters change
@@ -227,7 +241,12 @@ export default function ProductsPage() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
           <div>
             <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">
-              All Products
+              {searchTerm ? (
+                <span className="flex items-center gap-2">
+                  <Search className="h-6 w-6 text-gold-500" />
+                  Results for &ldquo;{searchTerm}&rdquo;
+                </span>
+              ) : "All Products"}
             </h1>
             <p className="text-muted-foreground mt-1">
               {loading ? "Loading..." : `Showing ${products.length} of ${totalProducts} results`}

@@ -37,7 +37,7 @@ export default function CustomerLookup({
   const [newPhone, setNewPhone] = useState('');
   const [creating, setCreating] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const debounceTimer = useRef<NodeJS.Timeout>();
+  const debounceTimer = useRef<NodeJS.Timeout>(null);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {

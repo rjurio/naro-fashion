@@ -3,9 +3,9 @@
 Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 
 ## Stack
-- Next.js 14+ (App Router), TypeScript, Tailwind CSS
+- Next.js 15+ (App Router), React 19, TypeScript, Tailwind CSS v4
 - next-themes (Light/Dark/Standard themes via CSS variables)
-- next-intl (English + Swahili)
+- custom I18nProvider (English + Swahili)
 
 ## Pages
 - `/` - Homepage (featured categories, new arrivals, flash sales, rental gowns)
@@ -29,10 +29,21 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - `/account/settings` - Profile settings
 - `/account/id-verification` - National ID upload for rentals
 - `/pages/[slug]` - CMS pages (about, contact, faq, terms, privacy, size-guide, shipping-info, returns-exchanges)
+- `/unsubscribe` - Token-based newsletter unsubscribe page
+
+## Instagram Feed
+- `components/social/InstagramFeed.tsx` fetches from API, shows real IG posts with likes/captions on hover
+- Visibility controlled by `instagram_feed_visible` site setting (fetched in homepage)
+- Posts ordered: API-fetched (newest) → Pinned → Manual
+
+## Newsletter
+- Homepage + Footer subscribe forms wired to `POST /newsletter/subscribe`
+- `newsletterApi` in `lib/api.ts` handles subscription
+- Unsubscribe page at `/unsubscribe?token=xxx`
 
 ## Data Flow
 - All pages fetch from NestJS API at `http://localhost:4000/api/v1`
-- API client in `lib/api.ts` with domain functions: productsApi, categoriesApi, cartApi, wishlistApi, ordersApi, rentalsApi, reviewsApi, flashSalesApi, cmsApi, authApi, idVerificationApi, shippingApi
+- API client in `lib/api.ts` with domain functions: productsApi, categoriesApi, cartApi, wishlistApi, ordersApi, rentalsApi, reviewsApi, flashSalesApi, cmsApi, authApi, idVerificationApi, shippingApi, newsletterApi
 - Auth token from `localStorage('token')` auto-injected as Bearer header
 - `.env.local` contains `NEXT_PUBLIC_API_URL=http://localhost:4000/api/v1`
 
@@ -46,4 +57,5 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - All user-facing strings must support i18n (English + Swahili) via `useTranslation()`
 - Translation files: `messages/en.json` and `messages/sw.json`
 - Brand colors: Black (#1A1A1A), Gold (#D4AF37)
+- Tailwind v4: No tailwind.config.ts — theme defined via @theme in globals.css, utilities via @utility
 - Mobile-first responsive design

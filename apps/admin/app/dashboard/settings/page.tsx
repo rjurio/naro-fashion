@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useTheme } from 'next-themes';
-import { User, Shield, Bell, Palette, Save, Eye, EyeOff, Monitor, Moon, Sun } from 'lucide-react';
+import { User, Shield, Bell, Palette, Save, Eye, EyeOff, Monitor, Moon, Sun, Loader2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { useAuth } from '@/contexts/AuthContext';
 import adminApi from '@/lib/api';
@@ -135,8 +135,7 @@ export default function AdminSettingsPage() {
   const handleSaveNotifications = async () => {
     setSaving(true);
     try {
-      await adminApi.post('/cms/settings', {
-        key: 'admin_notifications',
+      await adminApi.patch('/cms/settings/admin_notifications', {
         value: JSON.stringify(notifications),
       });
       showMsg('Notification preferences saved.', 'success');
@@ -158,6 +157,8 @@ export default function AdminSettingsPage() {
       <div className="w-11 h-6 bg-[hsl(var(--muted))] peer-focus:ring-2 peer-focus:ring-brand-gold/50 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-gold"></div>
     </label>
   );
+
+  if (!user) return <div className="flex items-center justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-brand-gold" /></div>;
 
   return (
     <div className="space-y-6">

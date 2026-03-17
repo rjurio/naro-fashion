@@ -37,27 +37,29 @@ const MpesaIcon = ({ className }: { className?: string }) => (
 
 const SelcomIcon = ({ className }: { className?: string }) => (
   <svg viewBox="0 0 40 28" className={className} fill="none">
-    <rect width="40" height="28" rx="4" fill="#003B7B" />
-    <circle cx="13" cy="14" r="8" fill="none" stroke="#00AEEF" strokeWidth="2.5" />
-    <path d="M10 14 Q13 10 16 14 Q13 18 10 14" fill="#00AEEF" />
-    <text x="29" y="17" textAnchor="middle" fill="white" fontSize="7" fontWeight="bold" fontFamily="Arial">PAY</text>
+    <rect width="40" height="28" rx="4" fill="#1A1A1A" />
+    <rect x="10" y="4" width="20" height="20" rx="5" stroke="white" strokeWidth="1.8" fill="none" />
+    <path d="M22 7.5 Q25.5 7.5 25.5 11 L25.5 12 Q25.5 14 23 14 L17 14 Q14.5 14 14.5 16 L14.5 17 Q14.5 20.5 18 20.5" stroke="white" strokeWidth="1.8" fill="none" strokeLinecap="round" />
   </svg>
 );
 
 const AirtelIcon = ({ className }: { className?: string }) => (
   <svg viewBox="0 0 40 28" className={className} fill="none">
-    <rect width="40" height="28" rx="4" fill="#ED1C24" />
-    <path d="M8 22 Q12 4 20 10 Q28 16 32 6" stroke="white" strokeWidth="3" fill="none" strokeLinecap="round" />
-    <text x="20" y="25" textAnchor="middle" fill="white" fontSize="5" fontWeight="bold" fontFamily="Arial">MONEY</text>
+    <rect width="40" height="28" rx="4" fill="#111111" />
+    <path d="M6 18 Q7 8 12 6 Q16 4 14 12 Q12 18 8 19 Z" fill="#ED1C24" />
+    <path d="M8 20 Q14 18 16 10 Q18 4 14 4" stroke="#ED1C24" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+    <text x="28" y="13" textAnchor="middle" fill="#ED1C24" fontSize="6" fontWeight="bold" fontFamily="Arial">airtel</text>
+    <text x="28" y="21" textAnchor="middle" fill="#ED1C24" fontSize="5.5" fontFamily="Arial">money</text>
   </svg>
 );
 
 const MixYasIcon = ({ className }: { className?: string }) => (
   <svg viewBox="0 0 40 28" className={className} fill="none">
-    <rect width="40" height="28" rx="4" fill="#6B21A8" />
-    <text x="20" y="13" textAnchor="middle" fill="white" fontSize="8" fontWeight="900" fontFamily="Arial">MIX</text>
-    <line x1="8" y1="16" x2="32" y2="16" stroke="#D4AF37" strokeWidth="1" />
-    <text x="20" y="24" textAnchor="middle" fill="#D4AF37" fontSize="7" fontWeight="bold" fontFamily="Arial">by YAS</text>
+    <rect width="40" height="28" rx="4" fill="#FFD700" />
+    <text x="20" y="16" textAnchor="middle" fill="#1B2A6B" fontSize="12" fontWeight="900" fontFamily="Arial" fontStyle="italic">mixx</text>
+    <text x="25" y="24" textAnchor="middle" fill="#1B2A6B" fontSize="5" fontWeight="bold" fontFamily="Arial">By</text>
+    <path d="M31 20 Q34 18 35 21 Q36 24 33 25 Q30 26 31 23 Z" fill="#1B2A6B" />
+    <text x="33" y="23.5" textAnchor="middle" fill="#FFD700" fontSize="3.5" fontWeight="bold" fontFamily="Arial">yas</text>
   </svg>
 );
 

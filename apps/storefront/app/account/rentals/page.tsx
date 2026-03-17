@@ -48,7 +48,7 @@ function normalizeRental(r: any): Rental {
   return {
     id: r.rentalNumber || r.id,
     itemName: r.itemName || r.product?.name || r.productName || "Rental Item",
-    image: r.image || r.product?.image || r.product?.images?.[0] || "/images/products/placeholder.jpg",
+    image: r.image || r.product?.image || r.product?.images?.[0] || "/uploads/products/placeholder.jpg",
     rentalStart: r.rentalStart || r.startDate || r.rentalStartDate || "",
     rentalEnd: r.rentalEnd || r.endDate || r.rentalEndDate || "",
     returnDate: r.returnDate || r.expectedReturnDate || r.rentalEnd || r.endDate || "",
@@ -129,12 +129,12 @@ export default function RentalsPage() {
         ]);
 
         if (rentalsRes.status === "fulfilled") {
-          const raw = Array.isArray(rentalsRes.value) ? rentalsRes.value : (rentalsRes.value?.data || []);
-          const all = raw.map(normalizeRental);
+          const raw: any[] = Array.isArray(rentalsRes.value) ? rentalsRes.value : ((rentalsRes.value as any)?.data || []);
+          const all: Rental[] = raw.map(normalizeRental);
 
           const activeStatuses = ["Active", "Upcoming", "ACTIVE", "UPCOMING"];
-          setActiveRentals(all.filter((r) => activeStatuses.includes(r.status)));
-          setPastRentals(all.filter((r) => !activeStatuses.includes(r.status)));
+          setActiveRentals(all.filter((r: Rental) => activeStatuses.includes(r.status)));
+          setPastRentals(all.filter((r: Rental) => !activeStatuses.includes(r.status)));
         }
 
         if (idRes.status === "fulfilled") {

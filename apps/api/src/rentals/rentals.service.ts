@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateRentalDto } from './dto/create-rental.dto';
+import { UpdateRentalDto } from './dto/update-rental.dto';
 import { QueryRentalsDto } from './dto/query-rentals.dto';
 import { Decimal } from '@prisma/client/runtime/library';
 
@@ -140,6 +141,14 @@ export class RentalsService {
         damageDeposit: depositAmount,
         status: initialStatus,
         notes: dto.notes,
+        pickupTime: dto.pickupTime,
+        weddingDate: dto.weddingDate ? new Date(dto.weddingDate) : undefined,
+        weddingLocation: dto.weddingLocation,
+        weddingRegion: dto.weddingRegion,
+        deliveryModality: dto.deliveryModality,
+        shippingDate: dto.shippingDate ? new Date(dto.shippingDate) : undefined,
+        shippingAddress: dto.shippingAddress,
+        transportMode: dto.transportMode,
       },
       include: {
         product: { select: { id: true, name: true, slug: true } },
@@ -333,6 +342,69 @@ export class RentalsService {
         user: {
           select: { id: true, firstName: true, lastName: true, phone: true },
         },
+        product: { select: { id: true, name: true } },
+        variant: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  async update(id: string, dto: UpdateRentalDto) {
+    const rental = await this.prisma.rentalOrder.findUnique({ where: { id } });
+    if (!rental) throw new NotFoundException('Rental order not found');
+
+    const data: any = {};
+    if (dto.pickupDate) data.pickupDate = new Date(dto.pickupDate);
+    if (dto.pickupTime !== undefined) data.pickupTime = dto.pickupTime;
+    if (dto.returnDate) data.returnDate = new Date(dto.returnDate);
+    if (dto.weddingDate) data.weddingDate = new Date(dto.weddingDate);
+    if (dto.weddingLocation !== undefined) data.weddingLocation = dto.weddingLocation;
+    if (dto.weddingRegion !== undefined) data.weddingRegion = dto.weddingRegion;
+    if (dto.deliveryModality !== undefined) data.deliveryModality = dto.deliveryModality;
+    if (dto.shippingDate) data.shippingDate = new Date(dto.shippingDate);
+    if (dto.shippingAddress !== undefined) data.shippingAddress = dto.shippingAddress;
+    if (dto.transportMode !== undefined) data.transportMode = dto.transportMode;
+    if (dto.transportReceiptUrl !== undefined) data.transportReceiptUrl = dto.transportReceiptUrl;
+    if (dto.notes !== undefined) data.notes = dto.notes;
+
+    return this.prisma.rentalOrder.update({
+      where: { id },
+      data,
+      include: {
+        product: { select: { id: true, name: true, slug: true } },
+        variant: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  async getPendingReturns() {
+    const now = new Date();
+    const threeDaysFromNow = new Date();
+    threeDaysFromNow.setDate(now.getDate() + 3);
+
+    return this.prisma.rentalOrder.findMany({
+      where: {
+        returnDate: { lte: threeDaysFromNow },
+        status: { in: ['ACTIVE', 'ITEM_DISPATCHED'] },
+      },
+      orderBy: { returnDate: 'asc' },
+      include: {
+        user: { select: { id: true, firstName: true, lastName: true, phone: true, email: true } },
+        product: { select: { id: true, name: true } },
+        variant: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  async getOverdueRentals() {
+    const now = new Date();
+    return this.prisma.rentalOrder.findMany({
+      where: {
+        returnDate: { lt: now },
+        status: 'ACTIVE',
+      },
+      orderBy: { returnDate: 'asc' },
+      include: {
+        user: { select: { id: true, firstName: true, lastName: true, phone: true, email: true } },
         product: { select: { id: true, name: true } },
         variant: { select: { id: true, name: true } },
       },

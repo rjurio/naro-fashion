@@ -15,11 +15,11 @@ GitHub: https://github.com/rjurio/naro-fashion
 
 ## Tech Stack
 - **Monorepo**: Turborepo + pnpm workspaces
-- **Frontend**: Next.js 14+ (App Router), TypeScript, Tailwind CSS, next-themes, next-intl
-- **Backend**: NestJS, Prisma ORM, PostgreSQL 17
+- **Frontend**: Next.js 15+ (App Router), TypeScript, Tailwind CSS v4, next-themes
+- **Backend**: NestJS 11, Prisma ORM, PostgreSQL 17
 - **Auth**: JWT (access + refresh tokens), Passport.js, dual-table auth (User + AdminUser)
 - **Charts**: Recharts (dynamically imported with `ssr: false` to avoid SSR issues)
-- **Languages**: English + Swahili (i18n via next-intl)
+- **Languages**: English + Swahili (i18n via custom I18nProvider)
 - **Brand Colors**: Black (#1A1A1A), Gold (#D4AF37)
 - **Logo**: `public/logo.jpg` (full logo), `public/icon.jpg` (circular icon), `public/favicon.jpg` (browser tab)
 
@@ -46,18 +46,20 @@ GitHub: https://github.com/rjurio/naro-fashion
 - Admin also supports cookies (httpOnly access_token + refresh_token)
 
 ## Key Domain Concepts
-- **Rental System**: Gowns/formal wear rentals with National ID verification, 25% down payment, 7-day buffer between rentals, admin checklists (DISPATCH + RETURN)
+- **Rental System**: Gowns/formal wear rentals with National ID verification, 25% down payment, 7-day buffer between rentals, admin checklists (DISPATCH + RETURN). Enhanced with: pickup date/time, wedding date, location, region (Tanzania), delivery modality (hand-picked/shipped), shipping details (date, address, transport mode: air/bus/train/courier/other), transport receipt upload, automated reminders for upcoming pickups and pending returns.
 - **Product Availability**: PURCHASE_ONLY, RENTAL_ONLY, or BOTH
 - **Themes**: Light, Dark, Luxury (CSS variables via next-themes)
 - **Payments**: Mobile Money (M-Pesa, Selcom Pesa, Airtel Money), cards, bank transfer, COD
 - **POS**: Point of Sale module with shift management (open/close), product search (barcode scan + text), split payments, realistic payment method icons (horizontal layout with brand SVG logos)
 - **Customer Events/Gallery**: Real wedding showcases. Admin creates events (auto-approved) or customers submit (max 1, needs approval). Each event has title, date, location, social links, linked product, and media gallery (photos/videos). Storefront shows approved events with masonry gallery and lightbox.
 - **Rental Registration**: Customers must complete profile (name, phone, email, address) before renting. Validated server-side in rentals.service.ts.
-- **Soft Delete**: All major entities (Product, Category, FlashSale, Banner, Page, ChecklistTemplate, CustomerEvent) use `deletedAt` field for soft delete. Deleted items go to Recycle Bin in admin, can be restored.
+- **Soft Delete**: All major entities (Product, Category, FlashSale, Banner, Page, ChecklistTemplate, CustomerEvent, InstagramPost) use `deletedAt` field for soft delete. Deleted items go to Recycle Bin in admin, can be restored.
 - **Activate/Deactivate**: Products and checklist templates have `isActive` toggle. Only active items are shown to customers. Admin can toggle via Power button.
+- **Instagram Feed**: Auto-syncs posts from @narofashion2019 via Facebook Graph API (v25.0). Posts ordered: API-fetched (newest first) → Pinned → Manual. Admin can pin/unpin posts, toggle storefront visibility via CMS Settings. Cron syncs every 6 hours, token refreshes 1st & 15th monthly.
+- **Newsletter System**: Full email campaign platform. Subscribers from storefront forms (homepage + footer). Admin composes newsletters with 4 template types (NEW_ARRIVALS auto-populates unsent products, NEW_DEALS, TIPS, CUSTOM). Per-recipient delivery tracking (SENT/FAILED), failed resend, token-based unsubscribe.
 
 ## API Modules (all fully implemented with Prisma CRUD)
-analytics, auth, cart, categories, cms, events, flash-sales, id-verification, notifications, orders, payments, products, referrals, rental-checklists, rental-policies, rentals, reviews, scheduler, shipping, upload, users, wishlist, permissions, roles, admin-users, expense-categories, expenses, inventory, reports, pos
+analytics, auth, cart, categories, cms, events, flash-sales, id-verification, newsletter, notifications, orders, payments, products, referrals, rental-checklists, rental-policies, rentals, reviews, scheduler, shipping, upload, users, wishlist, permissions, roles, admin-users, expense-categories, expenses, inventory, reports, pos
 
 ## Frontend Data Flow
 - Both storefront and admin fetch data from the NestJS API at `http://localhost:4000/api/v1`

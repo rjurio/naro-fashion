@@ -1,99 +1,191 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
-@layer base {
-  /* ===== LIGHT THEME (default) ===== */
-  :root,
-  [data-theme="light"] {
-    --color-background: #FFFFFF;
-    --color-foreground: #1A1A1A;
-    --color-primary: #D4AF37;
-    --color-primary-foreground: #FFFFFF;
-    --color-accent: #D4AF37;
-    --color-accent-foreground: #1A1A1A;
-    --color-muted: #F3F4F6;
-    --color-muted-foreground: #6B7280;
-    --color-card: #FFFFFF;
-    --color-card-foreground: #1A1A1A;
-    --color-border: #E5E7EB;
-    --color-input: #E5E7EB;
-    --color-ring: #D4AF37;
-  }
+/* ===== Custom Theme ===== */
+@theme {
+  /* Gold palette */
+  --color-gold-50: #FBF7E8;
+  --color-gold-100: #F7EECF;
+  --color-gold-200: #EFDD9F;
+  --color-gold-300: #E7CC6F;
+  --color-gold-400: #DFBB3F;
+  --color-gold-500: #D4AF37;
+  --color-gold-600: #B8952A;
+  --color-gold-700: #8C7220;
+  --color-gold-800: #604F16;
+  --color-gold-900: #342B0C;
+  --color-gold-950: #1A1506;
 
-  /* ===== DARK THEME ===== */
-  [data-theme="dark"] {
-    --color-background: #1A1A1A;
-    --color-foreground: #FFFFFF;
-    --color-primary: #D4AF37;
-    --color-primary-foreground: #FFFFFF;
-    --color-accent: #D4AF37;
-    --color-accent-foreground: #FFFFFF;
-    --color-muted: #2A2A2A;
-    --color-muted-foreground: #A1A1AA;
-    --color-card: #242424;
-    --color-card-foreground: #FFFFFF;
-    --color-border: #3A3A3A;
-    --color-input: #3A3A3A;
-    --color-ring: #D4AF37;
-  }
+  /* Dark palette */
+  --color-dark-50: #E8E8E8;
+  --color-dark-100: #D1D1D1;
+  --color-dark-200: #A3A3A3;
+  --color-dark-300: #757575;
+  --color-dark-400: #474747;
+  --color-dark-500: #1A1A1A;
+  --color-dark-600: #151515;
+  --color-dark-700: #101010;
+  --color-dark-800: #0A0A0A;
+  --color-dark-900: #050505;
+  --color-dark-950: #030303;
 
-  /* ===== STANDARD THEME ===== */
-  [data-theme="standard"] {
-    --color-background: #F9FAFB;
-    --color-foreground: #374151;
-    --color-primary: #D4AF37;
-    --color-primary-foreground: #FFFFFF;
-    --color-accent: #B8952A;
-    --color-accent-foreground: #1F2937;
-    --color-muted: #F3F4F6;
-    --color-muted-foreground: #6B7280;
-    --color-card: #FFFFFF;
-    --color-card-foreground: #374151;
-    --color-border: #D1D5DB;
-    --color-input: #D1D5DB;
-    --color-ring: #D4AF37;
-  }
+  /* Font families */
+  --font-sans: var(--font-inter), "Inter", system-ui, sans-serif;
+  --font-heading: var(--font-playfair), "Playfair Display", "Georgia", serif;
 
-  * {
-    border-color: var(--color-border);
-  }
-
-  body {
-    background-color: var(--color-background);
-    color: var(--color-foreground);
-    font-feature-settings: "rlig" 1, "calt" 1;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
+  /* Animations */
+  --animate-flash-pulse: flash-pulse 1s ease-in-out infinite;
+  --animate-countdown-tick: countdown-tick 1s ease-in-out infinite;
+  --animate-slide-in-right: slide-in-right 0.3s ease-out;
+  --animate-slide-in-left: slide-in-left 0.3s ease-out;
+  --animate-fade-in: fade-in 0.5s ease-out;
+  --animate-fade-in-up: fade-in-up 0.5s ease-out;
+  --animate-bounce-subtle: bounce-subtle 2s ease-in-out infinite;
+  --animate-shimmer: shimmer 2s linear infinite;
 }
 
-@layer components {
-  .btn-primary {
-    @apply bg-gold-500 text-white hover:bg-gold-600 active:bg-gold-700
-           px-6 py-2.5 rounded-lg font-medium transition-colors duration-200;
-  }
-
-  .btn-accent {
-    @apply bg-gold-500 text-dark-500 hover:bg-gold-600 active:bg-gold-700
-           px-6 py-2.5 rounded-lg font-medium transition-colors duration-200;
-  }
-
-  .gradient-brand {
-    @apply bg-gradient-to-r from-dark-500 to-gold-500;
-  }
-
-  .text-gradient-brand {
-    @apply bg-gradient-to-r from-dark-500 to-gold-500 bg-clip-text text-transparent;
-  }
+@keyframes flash-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
 }
 
-@layer utilities {
-  .scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
-  .scrollbar-hide::-webkit-scrollbar {
+@keyframes countdown-tick {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+
+@keyframes slide-in-right {
+  0% { transform: translateX(100%); opacity: 0; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slide-in-left {
+  0% { transform: translateX(-100%); opacity: 0; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fade-in {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes fade-in-up {
+  0% { opacity: 0; transform: translateY(20px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes bounce-subtle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ===== Theme CSS Variables ===== */
+
+/* LIGHT THEME (default) */
+:root,
+[data-theme="light"] {
+  --color-background: #FFFFFF;
+  --color-foreground: #1A1A1A;
+  --color-primary: #D4AF37;
+  --color-primary-foreground: #FFFFFF;
+  --color-accent: #D4AF37;
+  --color-accent-foreground: #1A1A1A;
+  --color-muted: #F3F4F6;
+  --color-muted-foreground: #6B7280;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #1A1A1A;
+  --color-border: #E5E7EB;
+  --color-input: #E5E7EB;
+  --color-ring: #D4AF37;
+}
+
+/* DARK THEME */
+[data-theme="dark"] {
+  --color-background: #1A1A1A;
+  --color-foreground: #FFFFFF;
+  --color-primary: #D4AF37;
+  --color-primary-foreground: #FFFFFF;
+  --color-accent: #D4AF37;
+  --color-accent-foreground: #FFFFFF;
+  --color-muted: #2A2A2A;
+  --color-muted-foreground: #A1A1AA;
+  --color-card: #242424;
+  --color-card-foreground: #FFFFFF;
+  --color-border: #3A3A3A;
+  --color-input: #3A3A3A;
+  --color-ring: #D4AF37;
+}
+
+/* STANDARD THEME */
+[data-theme="standard"] {
+  --color-background: #F9FAFB;
+  --color-foreground: #374151;
+  --color-primary: #D4AF37;
+  --color-primary-foreground: #FFFFFF;
+  --color-accent: #B8952A;
+  --color-accent-foreground: #1F2937;
+  --color-muted: #F3F4F6;
+  --color-muted-foreground: #6B7280;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #374151;
+  --color-border: #D1D5DB;
+  --color-input: #D1D5DB;
+  --color-ring: #D4AF37;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-feature-settings: "rlig" 1, "calt" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ===== Utility classes ===== */
+@utility scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
     display: none;
+  }
+}
+
+/* ===== Component classes ===== */
+@utility btn-primary {
+  background-color: var(--color-gold-500);
+  color: white;
+  padding: 0.625rem 1.5rem;
+  border-radius: 0.5rem;
+  font-weight: 500;
+  transition: background-color 0.2s;
+  &:hover {
+    background-color: var(--color-gold-600);
+  }
+  &:active {
+    background-color: var(--color-gold-700);
+  }
+}
+
+@utility btn-accent {
+  background-color: var(--color-gold-500);
+  color: var(--color-dark-500);
+  padding: 0.625rem 1.5rem;
+  border-radius: 0.5rem;
+  font-weight: 500;
+  transition: background-color 0.2s;
+  &:hover {
+    background-color: var(--color-gold-600);
+  }
+  &:active {
+    background-color: var(--color-gold-700);
   }
 }

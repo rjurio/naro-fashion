@@ -10,7 +10,15 @@ Prisma schema and client for Naro Fashion.
 ## Models
 Users, Address, Product, ProductImage, ProductVideo, ProductVariant, Category, Cart, CartItem, Wishlist, Order, OrderItem, Payment, Invoice, ShippingZone, ShippingRate, PickupPoint, Shipment, Review, RentalOrder, RentalPayment, RentalChecklistTemplate, RentalChecklistItem, RentalChecklistEntry, RentalPolicy, FlashSale, FlashSaleItem, ReferralCode, ReferralUsage, CustomerIDDocument, Banner, Page, SiteSetting, AdminUser,
 InventoryTransaction, ExpenseCategory, BusinessExpense, FinancialPeriod,
-Permission, Role, RolePermission, AdminUserRole, LoginAttempt
+Permission, Role, RolePermission, AdminUserRole, LoginAttempt,
+InstagramPost, NewsletterSubscriber, Newsletter, NewsletterDelivery, NewsletterProduct
+
+## Instagram & Newsletter Models (added 2026-03)
+- **InstagramPost** - Posts synced from Instagram Graph API or manually added. Fields: source (INSTAGRAM_API/MANUAL), isPinned, instagramMediaId (unique for dedup), mediaType, postedAt
+- **NewsletterSubscriber** - Email subscribers with unsubscribeToken, source (STOREFRONT/ADMIN/IMPORT)
+- **Newsletter** - Email campaigns with templateType (NEW_ARRIVALS/NEW_DEALS/TIPS/CUSTOM), status (DRAFT/SENDING/SENT/FAILED)
+- **NewsletterDelivery** - Per-recipient delivery tracking (PENDING/SENT/FAILED) with failureReason
+- **NewsletterProduct** - Join table tracking which products were included in newsletters (prevents duplicates in NEW_ARRIVALS)
 
 ## New Models (added 2026-03)
 - **InventoryTransaction** - Stock movement log (RESTOCK/SALE/RENTAL_OUT/RENTAL_RETURN/ADJUSTMENT/DAMAGE)
@@ -39,6 +47,11 @@ Permission, Role, RolePermission, AdminUserRole, LoginAttempt
 - `pnpm prisma migrate dev` - Create and run migrations
 - `pnpm prisma studio` - Open Prisma Studio GUI
 - `pnpm prisma db seed` - Run seed script
+
+## RentalOrder additions (2026-03)
+- `pickupTime`, `weddingDate`, `weddingLocation`, `weddingRegion` - Event details
+- `deliveryModality` (HAND_PICKED/SHIPPED), `shippingDate`, `shippingAddress` - Delivery logistics
+- `transportMode` (AIR/BUS/TRAIN/COURIER/OTHER), `transportReceiptUrl` - Transport tracking
 
 ## Conventions
 - All schema changes go in `schema.prisma`

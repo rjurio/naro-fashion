@@ -1,28 +1,83 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Sun, Moon, Monitor, Globe, AlertTriangle } from "lucide-react";
+import { useTheme } from "next-themes";
+import { ArrowLeft, Sun, Moon, Monitor, Globe, AlertTriangle, Loader2 } from "lucide-react";
 import Button from "@/components/ui/Button";
+import { authApi } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 
 export default function SettingsPage() {
-  const [profile, setProfile] = useState({
-    name: "Amina Hassan",
-    email: "amina.hassan@email.com",
-    phone: "+255 712 345 678",
-  });
+  const [profile, setProfile] = useState({ name: "", email: "", phone: "" });
   const [passwords, setPasswords] = useState({ current: "", newPass: "", confirm: "" });
-  const [theme, setTheme] = useState<"light" | "dark" | "standard">("standard");
-  const [language, setLanguage] = useState<"en" | "sw">("en");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordMsg, setPasswordMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [error, setError] = useState("");
+  const { theme, setTheme } = useTheme();
+  const { locale, setLocale } = useTranslation();
+
+  // Fetch profile on mount
+  useEffect(() => {
+    authApi.getProfile()
+      .then((user) => {
+        setProfile({
+          name: `${user.firstName || ""} ${user.lastName || ""}`.trim(),
+          email: user.email || "",
+          phone: user.phone || "",
+        });
+      })
+      .catch(() => setError("Failed to load profile. Please log in."))
+      .finally(() => setLoading(false));
+  }, []);
 
   const handleProfileChange = (field: string, value: string) => {
     setProfile((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleSave = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const handleSave = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const nameParts = profile.name.trim().split(/\s+/);
+      const firstName = nameParts[0] || "";
+      const lastName = nameParts.slice(1).join(" ") || "";
+      await authApi.updateProfile({ firstName, lastName, phone: profile.phone });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      setError("Failed to save profile changes.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    setPasswordMsg(null);
+    if (passwords.newPass !== passwords.confirm) {
+      setPasswordMsg({ type: "error", text: "New passwords do not match." });
+      return;
+    }
+    if (passwords.newPass.length < 6) {
+      setPasswordMsg({ type: "error", text: "Password must be at least 6 characters." });
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await authApi.changePassword({
+        currentPassword: passwords.current,
+        newPassword: passwords.newPass,
+      });
+      setPasswordMsg({ type: "success", text: "Password updated successfully!" });
+      setPasswords({ current: "", newPass: "", confirm: "" });
+    } catch {
+      setPasswordMsg({ type: "error", text: "Failed to change password. Check your current password." });
+    } finally {
+      setChangingPassword(false);
+    }
   };
 
   const themes = [
@@ -30,6 +85,14 @@ export default function SettingsPage() {
     { id: "dark" as const, label: "Dark", icon: Moon },
     { id: "standard" as const, label: "Standard", icon: Monitor },
   ];
+
+  if (loading) {
+    return (
+      <div className="bg-background min-h-screen flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-gold-500" />
+      </div>
+    );
+  }
 
   return (
     <div className="bg-background min-h-screen">
@@ -55,6 +118,10 @@ export default function SettingsPage() {
           </Link>
         </div>
 
+        {error && (
+          <div className="mb-6 p-4 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">{error}</div>
+        )}
+
         <div className="space-y-8">
           {/* Profile Info */}
           <section className="rounded-xl border border-border bg-card p-6">
@@ -74,9 +141,10 @@ export default function SettingsPage() {
                 <input
                   type="email"
                   value={profile.email}
-                  onChange={(e) => handleProfileChange("email", e.target.value)}
-                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500"
+                  disabled
+                  className="w-full rounded-lg border border-border bg-muted px-4 py-2.5 text-sm text-muted-foreground cursor-not-allowed"
                 />
+                <p className="text-xs text-muted-foreground mt-1">Email cannot be changed.</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Phone Number</label>
@@ -87,8 +155,8 @@ export default function SettingsPage() {
                   className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500"
                 />
               </div>
-              <Button onClick={handleSave}>
-                {saved ? "Saved!" : "Save Changes"}
+              <Button onClick={handleSave} disabled={saving}>
+                {saving ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving...</> : saved ? "Saved!" : "Save Changes"}
               </Button>
             </div>
           </section>
@@ -96,6 +164,11 @@ export default function SettingsPage() {
           {/* Change Password */}
           <section className="rounded-xl border border-border bg-card p-6">
             <h2 className="text-lg font-bold text-foreground mb-4">Change Password</h2>
+            {passwordMsg && (
+              <div className={`mb-4 p-3 rounded-lg text-sm ${passwordMsg.type === "success" ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-red-50 border border-red-200 text-red-700"}`}>
+                {passwordMsg.text}
+              </div>
+            )}
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Current Password</label>
@@ -124,7 +197,13 @@ export default function SettingsPage() {
                   className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500"
                 />
               </div>
-              <Button variant="outline">Update Password</Button>
+              <Button
+                variant="outline"
+                onClick={handleChangePassword}
+                disabled={changingPassword || !passwords.current || !passwords.newPass || !passwords.confirm}
+              >
+                {changingPassword ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Updating...</> : "Update Password"}
+              </Button>
             </div>
           </section>
 
@@ -154,21 +233,21 @@ export default function SettingsPage() {
             <h2 className="text-lg font-bold text-foreground mb-4">Language</h2>
             <div className="grid grid-cols-2 gap-3">
               <button
-                onClick={() => setLanguage("en")}
+                onClick={() => setLocale("en")}
                 className={`flex items-center justify-center gap-2 p-4 rounded-xl border-2 transition-colors ${
-                  language === "en" ? "border-gold-500 bg-gold-500/5" : "border-border hover:border-gold-500/50"
+                  locale === "en" ? "border-gold-500 bg-gold-500/5" : "border-border hover:border-gold-500/50"
                 }`}
               >
-                <Globe className={`h-5 w-5 ${language === "en" ? "text-gold-500" : "text-muted-foreground"}`} />
+                <Globe className={`h-5 w-5 ${locale === "en" ? "text-gold-500" : "text-muted-foreground"}`} />
                 <span className="text-sm font-medium text-foreground">English</span>
               </button>
               <button
-                onClick={() => setLanguage("sw")}
+                onClick={() => setLocale("sw")}
                 className={`flex items-center justify-center gap-2 p-4 rounded-xl border-2 transition-colors ${
-                  language === "sw" ? "border-gold-500 bg-gold-500/5" : "border-border hover:border-gold-500/50"
+                  locale === "sw" ? "border-gold-500 bg-gold-500/5" : "border-border hover:border-gold-500/50"
                 }`}
               >
-                <Globe className={`h-5 w-5 ${language === "sw" ? "text-gold-500" : "text-muted-foreground"}`} />
+                <Globe className={`h-5 w-5 ${locale === "sw" ? "text-gold-500" : "text-muted-foreground"}`} />
                 <span className="text-sm font-medium text-foreground">Kiswahili</span>
               </button>
             </div>

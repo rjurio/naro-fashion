@@ -90,7 +90,7 @@ export default function CategoriesPage() {
           {categories.map((cat) => {
             const slug = cat.slug || "";
             const color = colorMap[slug] || "from-[#D4AF37]/15 to-[#D4AF37]/5";
-            const image = cat.image || `/images/categories/${slug}.jpg`;
+            const image = cat.image || cat.imageUrl || `/uploads/categories/${slug}.jpg`;
             const count = cat.productCount ?? cat._count?.products ?? 0;
             const name = cat.name || t(slug) || slug;
 

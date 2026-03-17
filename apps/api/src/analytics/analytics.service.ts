@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export type RevenuePeriod = 'daily' | 'weekly' | 'monthly';
@@ -672,20 +673,24 @@ export class AnalyticsService {
   async getRevenue(period: RevenuePeriod) {
     const now = new Date();
     let startDate: Date;
-    let groupByFormat: string;
+    let truncFn: Prisma.Sql;
+    let labelFormat: Prisma.Sql;
 
     switch (period) {
       case 'daily':
         startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
-        groupByFormat = 'day';
+        truncFn = Prisma.raw(`DATE_TRUNC('day', "createdAt")`);
+        labelFormat = Prisma.raw(`TO_CHAR(DATE_TRUNC('day', "createdAt"), 'Mon DD')`);
         break;
       case 'weekly':
         startDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
-        groupByFormat = 'week';
+        truncFn = Prisma.raw(`DATE_TRUNC('week', "createdAt")`);
+        labelFormat = Prisma.raw(`TO_CHAR(DATE_TRUNC('week', "createdAt"), 'Mon DD')`);
         break;
       case 'monthly':
         startDate = new Date(now.getFullYear() - 1, now.getMonth(), 1);
-        groupByFormat = 'month';
+        truncFn = Prisma.raw(`DATE_TRUNC('month', "createdAt")`);
+        labelFormat = Prisma.raw(`TO_CHAR(DATE_TRUNC('month', "createdAt"), 'Mon YY')`);
         break;
     }
 
@@ -693,28 +698,28 @@ export class AnalyticsService {
       Array<{ period: string; revenue: number; count: number }>
     >`
       SELECT
-        TO_CHAR(DATE_TRUNC(${groupByFormat}, "createdAt"), 'Mon') AS "period",
+        ${labelFormat} AS "period",
         COALESCE(SUM("total"), 0)::float AS "revenue",
         COUNT(*)::int AS "count"
       FROM "Order"
       WHERE "createdAt" >= ${startDate}
         AND "status" != 'CANCELLED'
-      GROUP BY DATE_TRUNC(${groupByFormat}, "createdAt"), TO_CHAR(DATE_TRUNC(${groupByFormat}, "createdAt"), 'Mon')
-      ORDER BY DATE_TRUNC(${groupByFormat}, "createdAt") ASC
+      GROUP BY ${truncFn}, ${labelFormat}
+      ORDER BY ${truncFn} ASC
     `;
 
     const rentalResults = await this.prisma.$queryRaw<
       Array<{ period: string; revenue: number; count: number }>
     >`
       SELECT
-        TO_CHAR(DATE_TRUNC(${groupByFormat}, "createdAt"), 'Mon') AS "period",
+        ${labelFormat} AS "period",
         COALESCE(SUM("totalRentalPrice"), 0)::float AS "revenue",
         COUNT(*)::int AS "count"
       FROM "RentalOrder"
       WHERE "createdAt" >= ${startDate}
         AND "status" != 'CANCELLED'
-      GROUP BY DATE_TRUNC(${groupByFormat}, "createdAt"), TO_CHAR(DATE_TRUNC(${groupByFormat}, "createdAt"), 'Mon')
-      ORDER BY DATE_TRUNC(${groupByFormat}, "createdAt") ASC
+      GROUP BY ${truncFn}, ${labelFormat}
+      ORDER BY ${truncFn} ASC
     `;
 
     const rentalMap = new Map(rentalResults.map((r) => [r.period, r]));

@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, IsArray, Max, Min } from 'class-validator';
 
 export class CreateReviewDto {
   @IsInt()
@@ -13,4 +13,9 @@ export class CreateReviewDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  imageUrls?: string[];
 }

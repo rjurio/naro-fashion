@@ -1,12 +1,16 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Mail, Phone, MapPin, Clock, ChevronRight } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useTranslation } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
+import { cmsApi } from "@/lib/api";
 
-const cmsPages: Record<string, { titleKey: string; sections: { headingKey: string; contentKey: string }[] }> = {
+// Fallback config for pages that haven't been created via CMS yet
+const fallbackPages: Record<string, { titleKey: string; sections: { headingKey: string; contentKey: string }[] }> = {
   about: {
     titleKey: "aboutTitle",
     sections: [
@@ -73,15 +77,54 @@ const cmsPages: Record<string, { titleKey: string; sections: { headingKey: strin
   },
 };
 
+interface CmsPage {
+  id: string;
+  title: string;
+  titleSwahili?: string;
+  slug: string;
+  content: string;
+  contentSwahili?: string;
+  isPublished: boolean;
+}
+
 export default function CMSPage() {
   const params = useParams();
   const slug = params.slug as string;
   const { t } = useTranslation("pages");
   const { t: tc } = useTranslation("common");
+  const { locale } = useI18n();
 
-  const pageConfig = cmsPages[slug];
+  const [cmsPage, setCmsPage] = useState<CmsPage | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  if (!pageConfig) {
+  // Try to fetch CMS page from API
+  useEffect(() => {
+    cmsApi
+      .getPage(slug)
+      .then((page) => {
+        if (page && page.isPublished !== false) {
+          setCmsPage(page);
+        }
+      })
+      .catch(() => {
+        // Page not found in CMS — will use i18n fallback
+      })
+      .finally(() => setLoading(false));
+  }, [slug]);
+
+  const fallback = fallbackPages[slug];
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="bg-background min-h-screen flex items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-gold-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  // 404 — not in CMS and no fallback
+  if (!cmsPage && !fallback) {
     return (
       <div className="bg-background min-h-screen flex items-center justify-center">
         <div className="text-center">
@@ -95,8 +138,11 @@ export default function CMSPage() {
     );
   }
 
-  // Contact page has a special layout
-  if (slug === "contact") {
+  // If CMS page exists, render CMS content (admin-managed)
+  if (cmsPage) {
+    const title = locale === "sw" && cmsPage.titleSwahili ? cmsPage.titleSwahili : cmsPage.title;
+    const content = locale === "sw" && cmsPage.contentSwahili ? cmsPage.contentSwahili : cmsPage.content;
+
     return (
       <div className="bg-background min-h-screen">
         <div className="border-b border-border">
@@ -104,13 +150,49 @@ export default function CMSPage() {
             <nav className="flex items-center gap-2 text-sm text-muted-foreground">
               <Link href="/" className="hover:text-gold-500 transition-colors">{tc("home")}</Link>
               <ChevronRight className="h-3 w-3" />
-              <span className="text-foreground font-medium">{t(pageConfig.titleKey)}</span>
+              <span className="text-foreground font-medium">{title}</span>
+            </nav>
+          </div>
+        </div>
+
+        <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
+          <h1 className="text-3xl font-heading font-bold text-foreground mb-8">{title}</h1>
+          <div className="rounded-xl border border-border bg-card p-6 sm:p-8">
+            <div
+              className="prose prose-sm max-w-none text-muted-foreground
+                prose-headings:text-foreground prose-headings:font-bold
+                prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3
+                prose-h3:text-base prose-h3:mt-4 prose-h3:mb-2
+                prose-p:leading-relaxed prose-p:mb-4
+                prose-ul:list-disc prose-ul:pl-5 prose-ul:mb-4
+                prose-ol:list-decimal prose-ol:pl-5 prose-ol:mb-4
+                prose-li:mb-1
+                prose-strong:text-foreground
+                prose-a:text-gold-500 prose-a:no-underline hover:prose-a:underline"
+              dangerouslySetInnerHTML={{ __html: content }}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Contact page has a special layout (i18n fallback)
+  if (slug === "contact" && fallback) {
+    return (
+      <div className="bg-background min-h-screen">
+        <div className="border-b border-border">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
+            <nav className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Link href="/" className="hover:text-gold-500 transition-colors">{tc("home")}</Link>
+              <ChevronRight className="h-3 w-3" />
+              <span className="text-foreground font-medium">{t(fallback.titleKey)}</span>
             </nav>
           </div>
         </div>
 
         <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
-          <h1 className="text-3xl font-heading font-bold text-foreground mb-8">{t(pageConfig.titleKey)}</h1>
+          <h1 className="text-3xl font-heading font-bold text-foreground mb-8">{t(fallback.titleKey)}</h1>
 
           <div className="grid md:grid-cols-2 gap-8">
             {/* Contact Info */}
@@ -197,7 +279,7 @@ export default function CMSPage() {
     );
   }
 
-  // Standard content pages (About, FAQ, Terms, Privacy, Size Guide, Shipping, Returns)
+  // Standard i18n fallback pages (About, FAQ, Terms, Privacy, Size Guide, Shipping, Returns)
   return (
     <div className="bg-background min-h-screen">
       <div className="border-b border-border">
@@ -205,16 +287,16 @@ export default function CMSPage() {
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
             <Link href="/" className="hover:text-gold-500 transition-colors">{tc("home")}</Link>
             <ChevronRight className="h-3 w-3" />
-            <span className="text-foreground font-medium">{t(pageConfig.titleKey)}</span>
+            <span className="text-foreground font-medium">{t(fallback!.titleKey)}</span>
           </nav>
         </div>
       </div>
 
       <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
-        <h1 className="text-3xl font-heading font-bold text-foreground mb-8">{t(pageConfig.titleKey)}</h1>
+        <h1 className="text-3xl font-heading font-bold text-foreground mb-8">{t(fallback!.titleKey)}</h1>
 
         <div className="space-y-8">
-          {pageConfig.sections.map((section) => (
+          {fallback!.sections.map((section) => (
             <section key={section.headingKey} className="rounded-xl border border-border bg-card p-6">
               <h2 className="text-lg font-bold text-foreground mb-3">{t(section.headingKey)}</h2>
               <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-line">

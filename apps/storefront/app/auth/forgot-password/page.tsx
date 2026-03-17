@@ -3,25 +3,48 @@
 import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Mail, ArrowLeft, CheckCircle } from "lucide-react";
+import { Mail, ArrowLeft, CheckCircle, AlertCircle } from "lucide-react";
 import Button from "@/components/ui/Button";
+import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { useTranslation } from "@/lib/i18n";
+import { authApi } from "@/lib/api";
 
 export default function ForgotPasswordPage() {
   const { t } = useTranslation("auth");
-  const { t: tc } = useTranslation("common");
+  const { settings } = useSiteSettings();
   const [email, setEmail] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [sent, setSent] = useState(false);
+  const [error, setError] = useState("");
+  const [cooldown, setCooldown] = useState(0);
+
+  const startCooldown = () => {
+    setCooldown(60);
+    const interval = setInterval(() => {
+      setCooldown((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
     setIsLoading(true);
-    // Simulate API call
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      await authApi.forgotPassword({ email });
       setSent(true);
-    }, 2000);
+      startCooldown();
+    } catch (err: any) {
+      const message = err?.data?.message || err?.message || "Something went wrong. Please try again.";
+      setError(message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -34,7 +57,7 @@ export default function ForgotPasswordPage() {
 
         <div className="relative z-10 max-w-md">
           <Link href="/" className="inline-block mb-8">
-            <Image src="/logo.jpg" alt="Naro Fashion" width={280} height={140} className="rounded-lg" />
+            <Image src={settings.logoUrl} alt={settings.businessName} width={280} height={140} className="rounded-lg" unoptimized />
           </Link>
           <h2 className="text-3xl font-heading font-bold text-white leading-tight">
             {t("resetTitle")}
@@ -51,15 +74,15 @@ export default function ForgotPasswordPage() {
           {/* Mobile Logo */}
           <div className="lg:hidden text-center mb-8">
             <Link href="/">
-              <Image src="/icon.jpg" alt="Naro Fashion" width={64} height={64} className="mx-auto rounded-full" />
-              <span className="block mt-2 text-2xl font-heading font-bold text-gold-500">NARO FASHION</span>
+              <Image src={settings.iconUrl} alt={settings.businessName} width={64} height={64} className="mx-auto rounded-full" unoptimized />
+              <span className="block mt-2 text-2xl font-heading font-bold text-gold-500">{settings.businessName.toUpperCase()}</span>
             </Link>
           </div>
 
           {sent ? (
             <div className="text-center space-y-4">
-              <div className="mx-auto w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center">
-                <CheckCircle className="h-8 w-8 text-emerald-600" />
+              <div className="mx-auto w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-950/50 flex items-center justify-center">
+                <CheckCircle className="h-8 w-8 text-emerald-600 dark:text-emerald-400" />
               </div>
               <h1 className="text-2xl font-heading font-bold text-foreground">
                 {t("checkEmail")}
@@ -71,8 +94,16 @@ export default function ForgotPasswordPage() {
                 {t("noEmailReceived")}
               </p>
               <div className="pt-4 space-y-3">
-                <Button onClick={() => setSent(false)} variant="outline" className="w-full">
-                  {t("tryAgain")}
+                <Button
+                  onClick={() => {
+                    setSent(false);
+                    setError("");
+                  }}
+                  variant="outline"
+                  className="w-full"
+                  disabled={cooldown > 0}
+                >
+                  {cooldown > 0 ? `${t("tryAgain")} (${cooldown}s)` : t("tryAgain")}
                 </Button>
                 <Link href="/auth/login">
                   <Button variant="ghost" className="w-full gap-1.5">
@@ -93,6 +124,14 @@ export default function ForgotPasswordPage() {
                 </p>
               </div>
 
+              {/* Error Alert */}
+              {error && (
+                <div className="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/50 dark:text-red-400">
+                  <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+                  <p>{error}</p>
+                </div>
+              )}
+
               <form onSubmit={handleSubmit} className="space-y-5">
                 <div>
                   <label htmlFor="email" className="block text-sm font-medium text-foreground mb-1.5">
@@ -107,7 +146,8 @@ export default function ForgotPasswordPage() {
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder={t("emailPlaceholder")}
                       required
-                      className="w-full rounded-lg border border-border bg-background pl-10 pr-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500 transition-colors"
+                      disabled={isLoading}
+                      className="w-full rounded-lg border border-border bg-background pl-10 pr-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500 transition-colors disabled:opacity-50"
                     />
                   </div>
                 </div>

@@ -29,6 +29,10 @@ export class QueryProductsDto {
   maxPrice?: number;
 
   @IsOptional()
+  @IsString()
+  availability_mode?: string;
+
+  @IsOptional()
   @IsEnum(SortOrder)
   sort?: SortOrder;
 

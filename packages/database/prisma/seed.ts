@@ -10,7 +10,11 @@ async function main() {
   const adminPassword = await bcrypt.hash('admin123', 10);
   const superAdmin = await prisma.adminUser.upsert({
     where: { email: 'admin@narofashion.co.tz' },
-    update: {},
+    update: {
+      passwordHash: adminPassword,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    },
     create: {
       email: 'admin@narofashion.co.tz',
       passwordHash: adminPassword,
@@ -30,6 +34,7 @@ async function main() {
       nameSwahili: 'Wanawake',
       slug: 'women',
       description: 'Women\'s fashion and clothing',
+      imageUrl: '/uploads/categories/women.jpg',
       sortOrder: 1,
     },
   });
@@ -42,6 +47,7 @@ async function main() {
       nameSwahili: 'Wanaume',
       slug: 'men',
       description: 'Men\'s fashion and clothing',
+      imageUrl: '/uploads/categories/men.jpg',
       sortOrder: 2,
     },
   });
@@ -54,6 +60,7 @@ async function main() {
       nameSwahili: 'Mavazi',
       slug: 'dresses',
       description: 'Beautiful dresses for all occasions',
+      imageUrl: '/uploads/categories/dresses.jpg',
       parentId: womenCategory.id,
       sortOrder: 1,
     },
@@ -67,6 +74,7 @@ async function main() {
       nameSwahili: 'Gauni',
       slug: 'gowns',
       description: 'Elegant gowns for rent and purchase',
+      imageUrl: '/uploads/categories/gowns.jpg',
       parentId: womenCategory.id,
       sortOrder: 2,
     },
@@ -80,6 +88,7 @@ async function main() {
       nameSwahili: 'Mashati',
       slug: 'shirts',
       description: 'Men\'s shirts and tops',
+      imageUrl: '/uploads/categories/shirts.jpg',
       parentId: menCategory.id,
       sortOrder: 1,
     },
@@ -93,6 +102,7 @@ async function main() {
       nameSwahili: 'Vifaa',
       slug: 'accessories',
       description: 'Fashion accessories',
+      imageUrl: '/uploads/categories/accessories.jpg',
       sortOrder: 3,
     },
   });
@@ -124,8 +134,8 @@ async function main() {
       },
       images: {
         create: [
-          { url: '/images/products/gown-gold-1.jpg', altText: 'Gold Evening Gown Front', isPrimary: true, sortOrder: 0 },
-          { url: '/images/products/gown-gold-2.jpg', altText: 'Gold Evening Gown Back', sortOrder: 1 },
+          { url: '/uploads/products/gown-gold-1.jpg', altText: 'Gold Evening Gown Front', isPrimary: true, sortOrder: 0 },
+          { url: '/uploads/products/gown-gold-2.jpg', altText: 'Gold Evening Gown Back', sortOrder: 1 },
         ],
       },
     },
@@ -151,7 +161,7 @@ async function main() {
       },
       images: {
         create: [
-          { url: '/images/products/dress-pink-1.jpg', altText: 'Pink Cocktail Dress', isPrimary: true, sortOrder: 0 },
+          { url: '/uploads/products/dress-pink-1.jpg', altText: 'Pink Cocktail Dress', isPrimary: true, sortOrder: 0 },
         ],
       },
     },
@@ -181,7 +191,7 @@ async function main() {
       },
       images: {
         create: [
-          { url: '/images/products/suit-black-1.jpg', altText: 'Classic Black Suit', isPrimary: true, sortOrder: 0 },
+          { url: '/uploads/products/suit-black-1.jpg', altText: 'Classic Black Suit', isPrimary: true, sortOrder: 0 },
         ],
       },
     },
@@ -206,7 +216,7 @@ async function main() {
       },
       images: {
         create: [
-          { url: '/images/products/shirt-white-1.jpg', altText: 'White Dress Shirt', isPrimary: true, sortOrder: 0 },
+          { url: '/uploads/products/shirt-white-1.jpg', altText: 'White Dress Shirt', isPrimary: true, sortOrder: 0 },
         ],
       },
     },
@@ -236,7 +246,7 @@ async function main() {
       },
       images: {
         create: [
-          { url: '/images/products/wedding-gown-1.jpg', altText: 'Royal Wedding Gown', isPrimary: true, sortOrder: 0 },
+          { url: '/uploads/products/wedding-gown-1.jpg', altText: 'Royal Wedding Gown', isPrimary: true, sortOrder: 0 },
         ],
       },
     },
@@ -435,7 +445,7 @@ async function main() {
         titleSwahili: 'Mkusanyiko Mpya 2026',
         subtitle: 'Discover the latest trends in fashion',
         subtitleSwahili: 'Gundua mitindo ya hivi karibuni',
-        imageUrl: '/images/banners/hero-1.jpg',
+        imageUrl: '/uploads/banners/hero-1.jpg',
         linkUrl: '/products',
         sortOrder: 1,
       },
@@ -444,7 +454,7 @@ async function main() {
         titleSwahili: 'Kodi Gauni',
         subtitle: 'Premium gowns available for rent at affordable prices',
         subtitleSwahili: 'Gauni za kifahari zinapatikana kwa bei nafuu',
-        imageUrl: '/images/banners/hero-2.jpg',
+        imageUrl: '/uploads/banners/hero-2.jpg',
         linkUrl: '/rentals',
         sortOrder: 2,
       },
@@ -455,15 +465,56 @@ async function main() {
   await prisma.siteSetting.createMany({
     data: [
       { key: 'site_name', value: 'Naro Fashion', type: 'string' },
+      { key: 'site_name_sw', value: '', type: 'string' },
       { key: 'site_description', value: 'Premium Fashion & Clothing in Tanzania', type: 'string' },
-      { key: 'contact_email', value: 'info@narofashion.co.tz', type: 'string' },
-      { key: 'contact_phone', value: '+255712000000', type: 'string' },
+      { key: 'site_description_sw', value: '', type: 'string' },
+      { key: 'business_type', value: 'Fashion', type: 'string' },
+      { key: 'contact_email', value: 'hello@narofashion.co.tz', type: 'string' },
+      { key: 'contact_phone', value: '+255 700 000 000', type: 'string' },
+      { key: 'contact_address', value: 'Dar es Salaam, Tanzania', type: 'string' },
+      { key: 'contact_address_sw', value: '', type: 'string' },
+      { key: 'whatsapp_number', value: '255759047287', type: 'string' },
+      { key: 'instagram_url', value: 'https://www.instagram.com/narofashion2019/', type: 'string' },
+      { key: 'facebook_url', value: '', type: 'string' },
+      { key: 'twitter_url', value: '', type: 'string' },
+      { key: 'tiktok_url', value: '', type: 'string' },
+      { key: 'company_logo_url', value: '/logo.jpg', type: 'string' },
+      { key: 'company_icon_url', value: '/icon.jpg', type: 'string' },
+      { key: 'company_favicon_url', value: '/favicon.jpg', type: 'string' },
+      { key: 'business_domain', value: 'narofashion.co.tz', type: 'string' },
       { key: 'currency', value: 'TZS', type: 'string' },
       { key: 'default_theme', value: 'standard', type: 'string' },
     ],
   });
 
   console.log('Created CMS content and site settings');
+
+  // Create Hero Slides
+  await prisma.heroSlide.createMany({
+    data: [
+      {
+        title: 'Elegant Fashion Collection',
+        imageUrl: '/uploads/hero-slides/hero-fashion-1.jpg',
+        sortOrder: 0,
+        isActive: true,
+      },
+      {
+        title: 'Designer Dresses',
+        imageUrl: '/uploads/hero-slides/hero-fashion-2.jpg',
+        sortOrder: 1,
+        isActive: true,
+      },
+      {
+        title: 'Premium Gowns & Accessories',
+        imageUrl: '/uploads/hero-slides/hero-fashion-3.jpg',
+        sortOrder: 2,
+        isActive: true,
+      },
+    ],
+    skipDuplicates: true,
+  });
+  console.log('Created hero slides');
+
   console.log('Seeding completed successfully!');
 }
 

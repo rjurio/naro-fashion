@@ -3,7 +3,7 @@
 REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 
 ## Stack
-- NestJS, TypeScript, Prisma ORM, PostgreSQL 17
+- NestJS 11, TypeScript, Prisma ORM, PostgreSQL 17
 - Passport.js + JWT for authentication
 - class-validator + class-transformer for DTOs
 - Local file storage for image uploads (ServeStaticModule serves `/uploads`), Multer for multipart
@@ -30,7 +30,7 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - **payments** - Create, update status, webhooks, payment summary
 - **shipping** - Zones CRUD, rate calculation, shipment tracking
 - **reviews** - Create, approve/reject, rating stats, product aggregation
-- **rentals** - Booking, availability check, status workflow, upcoming pickups
+- **rentals** - Booking, availability check, status workflow, upcoming pickups, pending returns, overdue tracking, admin update (wedding/shipping/transport details), transport receipt upload
 - **rental-checklists** - Templates CRUD with activate/deactivate toggle, assign to rental (active-only), check/uncheck items per rental, soft delete/restore
 - **rental-policies** - Global policy settings (buffer days, late fees, etc.)
 - **flash-sales** - Time-limited sales CRUD with product pricing, soft delete/restore
@@ -41,7 +41,7 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - **notifications** - Email + SMS sending
 - **upload** - Local file upload (saves to `uploads/products/`, validates type jpeg/png/webp and 5MB max, Multer FileInterceptor)
 - **pos** - POS shift management and sales
-- **scheduler** - Cron jobs for reminders and overdue alerts
+- **scheduler** - Cron jobs for rental prep reminders (8am daily), overdue rental alerts (9am daily), pending return reminders (8:30am daily, 3-day window)
 - **permissions** - 40+ granular permissions, seeded on startup via OnModuleInit
 - **roles** - RBAC roles (SUPER_ADMIN, MANAGER, STAFF seeded as isSystem=true), custom roles CRUD, permission matrix
 - **admin-users** - Admin user CRUD, toggle active, unlock locked accounts, assign/remove roles, self-role protection
@@ -49,6 +49,16 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - **expenses** - Business expense CRUD, period auto-computed from expenseDate as "YYYY-MM", summary by period
 - **inventory** - Products with stock levels, low-stock alerts, valuation, transaction history, stock adjustments (atomic via $transaction)
 - **reports** - Rental reports by product, income statement (P&L), monthly financial summary, expense breakdown, financial periods (OPEN/CLOSED/LOCKED)
+- **newsletter** - Subscriber management (subscribe/unsubscribe with token), newsletter CRUD (DRAFT/SENDING/SENT/FAILED), 4 template types (NEW_ARRIVALS auto-populates unsent products, NEW_DEALS, TIPS, CUSTOM), async delivery with 200ms rate limiting, per-recipient tracking (SENT/FAILED with failureReason), failed resend, dashboard stats. 15 endpoints (2 public: subscribe + unsubscribe, 13 admin).
+
+## Instagram Graph API Integration
+- `InstagramService` in `src/cms/instagram.service.ts` syncs posts from Facebook Graph API v25.0
+- Uses `INSTAGRAM_ACCESS_TOKEN` + `INSTAGRAM_BUSINESS_ACCOUNT_ID` from env
+- Endpoint: `POST /cms/instagram-posts/sync` (manual trigger) + cron every 6 hours
+- Token auto-refresh on 1st & 15th of month via `FACEBOOK_APP_ID` + `FACEBOOK_APP_SECRET`
+- Refreshed token stored in `SiteSetting` table for persistence
+- Post ordering: API (newest by postedAt) → Pinned (by sortOrder) → Manual (by sortOrder)
+- `PATCH /cms/instagram-posts/:id/pin` toggles pin status
 
 ## Analytics API
 - `GET /analytics/dashboard` - Returns: totalRevenue, totalOrders, customerCount, activeRentals, rentalRevenue, avgOrderValue, percentage changes, topProducts (enriched with names), categoryBreakdown, orderStatusDistribution, paymentMethodDistribution, customerGrowth, rentalStatusDistribution, dailyOrders

@@ -3,13 +3,16 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import Link from 'next/link';
 import { Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSiteSettings } from '@/contexts/SiteSettingsContext';
 
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
+  const { settings } = useSiteSettings();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -24,8 +27,9 @@ export default function LoginPage() {
     try {
       await login(email, password);
       router.push('/dashboard');
-    } catch {
-      setError('Invalid email or password');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Invalid email or password';
+      setError(message);
     } finally {
       setIsLoading(false);
     }
@@ -43,7 +47,7 @@ export default function LoginPage() {
         <div className="relative z-10 text-center px-12">
           {/* Logo */}
           <div className="mb-8">
-            <Image src="/logo.jpg" alt="Naro Fashion" width={320} height={160} className="mx-auto rounded-lg" priority />
+            <Image src={settings.logoUrl} alt={settings.businessName} width={320} height={160} className="mx-auto rounded-lg" style={{ width: 320, height: 'auto' }} priority unoptimized />
           </div>
           <p className="text-white/70 text-lg max-w-md">
             Admin Dashboard — Manage your products, orders, rentals, and customers all in one place.
@@ -56,8 +60,8 @@ export default function LoginPage() {
         <div className="w-full max-w-md">
           {/* Mobile logo */}
           <div className="lg:hidden text-center mb-10">
-            <Image src="/icon.jpg" alt="Naro Fashion" width={80} height={80} className="mx-auto rounded-full" />
-            <h1 className="text-2xl font-bold text-brand-gold mt-3">NARO FASHION</h1>
+            <Image src={settings.iconUrl} alt={settings.businessName} width={80} height={80} className="mx-auto rounded-full" unoptimized />
+            <h1 className="text-2xl font-bold text-brand-gold mt-3">{settings.businessName.toUpperCase()}</h1>
           </div>
 
           <div className="mb-8">
@@ -92,7 +96,7 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  placeholder="admin@narofashion.co.tz"
+                  placeholder="admin@example.com"
                   className="w-full pl-11 pr-4 py-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none focus:ring-2 focus:ring-brand-gold/50 focus:border-brand-gold transition-colors"
                 />
               </div>
@@ -136,12 +140,12 @@ export default function LoginPage() {
                 />
                 <span className="text-sm text-[hsl(var(--muted-foreground))]">Remember me</span>
               </label>
-              <a
-                href="#"
+              <Link
+                href="/forgot-password"
                 className="text-sm text-brand-gold hover:text-brand-gold-dark transition-colors"
               >
                 Forgot password?
-              </a>
+              </Link>
             </div>
 
             {/* Submit */}
@@ -164,7 +168,7 @@ export default function LoginPage() {
           </form>
 
           <p className="mt-8 text-center text-xs text-[hsl(var(--muted-foreground))]">
-            Naro Fashion Admin Panel v1.0
+            {settings.businessName} Admin Panel v1.0
           </p>
         </div>
       </div>

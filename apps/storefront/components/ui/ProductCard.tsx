@@ -1,47 +1,109 @@
 "use client";
 
 import { useState } from "react";
-import { Heart, ShoppingCart, Star } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Heart, ShoppingCart, Star, Loader2 } from "lucide-react";
 import { cn, formatPrice } from "@/lib/utils";
+import { cartApi, wishlistApi } from "@/lib/api";
 import Badge from "./Badge";
 import Button from "./Button";
 
 interface ProductCardProps {
   id: string;
   name: string;
+  slug?: string;
   price: number;
   originalPrice?: number;
-  image: string;
-  rating: number;
-  reviewCount: number;
+  image?: string;
+  rating?: number;
+  reviewCount?: number;
   isNew?: boolean;
   isOnSale?: boolean;
   isRentable?: boolean;
   rentPrice?: number;
+  defaultVariantId?: string;
   className?: string;
 }
 
 export default function ProductCard({
   id,
   name,
+  slug,
   price,
   originalPrice,
-  image,
-  rating,
-  reviewCount,
+  image = "/uploads/products/placeholder.jpg",
+  rating = 0,
+  reviewCount = 0,
   isNew = false,
   isOnSale = false,
   isRentable = false,
   rentPrice,
+  defaultVariantId,
   className,
 }: ProductCardProps) {
+  const router = useRouter();
   const [isWishlisted, setIsWishlisted] = useState(false);
+  const [wishlistLoading, setWishlistLoading] = useState(false);
+  const [cartLoading, setCartLoading] = useState(false);
+  const [cartMsg, setCartMsg] = useState("");
+
   const discount = originalPrice
-    ? Math.round(((originalPrice - price) / originalPrice) * 100)
+    ? Math.round(((Number(originalPrice) - Number(price)) / Number(originalPrice)) * 100)
     : 0;
 
+  const productHref = slug ? `/products/${slug}` : `/products/${id}`;
+
+  const handleWishlistToggle = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    if (!token) {
+      router.push("/auth/login");
+      return;
+    }
+    setWishlistLoading(true);
+    try {
+      const res = await wishlistApi.toggle(id);
+      setIsWishlisted(res?.added ?? !isWishlisted);
+    } catch {
+      // If 401, redirect to login
+      router.push("/auth/login");
+    } finally {
+      setWishlistLoading(false);
+    }
+  };
+
+  const handleAddToCart = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    if (!token) {
+      router.push("/auth/login");
+      return;
+    }
+    if (!defaultVariantId) {
+      // No variant available — go to product detail to select one
+      router.push(productHref);
+      return;
+    }
+    setCartLoading(true);
+    setCartMsg("");
+    try {
+      await cartApi.addItem({ productId: id, variantId: defaultVariantId, quantity: 1 });
+      setCartMsg("Added!");
+      setTimeout(() => setCartMsg(""), 2000);
+    } catch {
+      setCartMsg("Failed");
+      setTimeout(() => setCartMsg(""), 2000);
+    } finally {
+      setCartLoading(false);
+    }
+  };
+
   return (
-    <div
+    <Link
+      href={productHref}
       className={cn(
         "group relative flex flex-col overflow-hidden rounded-xl bg-card shadow-sm border border-border transition-all duration-300 hover:shadow-lg hover:-translate-y-1",
         className,
@@ -72,24 +134,42 @@ export default function ProductCard({
 
         {/* Wishlist Button */}
         <button
-          onClick={() => setIsWishlisted(!isWishlisted)}
+          onClick={handleWishlistToggle}
+          disabled={wishlistLoading}
           className={cn(
             "absolute top-2 right-2 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 backdrop-blur-sm shadow-sm transition-all duration-200 hover:scale-110",
             isWishlisted ? "text-gold-500" : "text-dark-300",
           )}
           aria-label={isWishlisted ? "Remove from wishlist" : "Add to wishlist"}
         >
-          <Heart
-            className="h-4 w-4"
-            fill={isWishlisted ? "currentColor" : "none"}
-          />
+          {wishlistLoading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Heart
+              className="h-4 w-4"
+              fill={isWishlisted ? "currentColor" : "none"}
+            />
+          )}
         </button>
 
         {/* Quick Add to Cart - shows on hover */}
         <div className="absolute bottom-3 left-3 right-3 z-20 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300">
-          <Button size="sm" className="w-full gap-2">
-            <ShoppingCart className="h-4 w-4" />
-            Add to Cart
+          <Button
+            size="sm"
+            className="w-full gap-2"
+            onClick={handleAddToCart}
+            disabled={cartLoading}
+          >
+            {cartLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : cartMsg ? (
+              cartMsg
+            ) : (
+              <>
+                <ShoppingCart className="h-4 w-4" />
+                Add to Cart
+              </>
+            )}
           </Button>
         </div>
       </div>
@@ -123,7 +203,7 @@ export default function ProductCard({
           <span className="text-base font-bold text-card-foreground">
             {formatPrice(price)}
           </span>
-          {originalPrice && originalPrice > price && (
+          {originalPrice && Number(originalPrice) > Number(price) && (
             <span className="text-xs text-muted-foreground line-through">
               {formatPrice(originalPrice)}
             </span>
@@ -137,6 +217,6 @@ export default function ProductCard({
           </p>
         )}
       </div>
-    </div>
+    </Link>
   );
 }

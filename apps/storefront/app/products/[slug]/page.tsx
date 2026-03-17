@@ -67,6 +67,38 @@ export default function ProductDetailPage() {
       .finally(() => setLoading(false));
   }, [slug]);
 
+  // Dynamic page title
+  useEffect(() => {
+    if (product) {
+      document.title = `${product.name} | Naro Fashion`;
+    }
+  }, [product]);
+
+  // JSON-LD structured data for SEO
+  const jsonLd = product ? {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    name: product.name,
+    description: product.description || "",
+    image: product.images?.[0] || product.image || "",
+    sku: product.sku || product.id,
+    brand: { "@type": "Brand", name: "Naro Fashion" },
+    offers: {
+      "@type": "Offer",
+      url: typeof window !== "undefined" ? window.location.href : "",
+      priceCurrency: "TZS",
+      price: product.price,
+      availability: (product.stock ?? 0) > 0 ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
+    },
+    ...(product.rating ? {
+      aggregateRating: {
+        "@type": "AggregateRating",
+        ratingValue: product.rating,
+        reviewCount: product.reviewCount || 0,
+      },
+    } : {}),
+  } : null;
+
   const handleAddToCart = async () => {
     if (!product || !selectedSize) return;
     setAddingToCart(true);
@@ -146,6 +178,13 @@ export default function ProductDetailPage() {
 
   return (
     <div className="bg-background min-h-screen">
+      {/* JSON-LD Structured Data */}
+      {jsonLd && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
+      )}
       {/* Breadcrumb */}
       <div className="border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">

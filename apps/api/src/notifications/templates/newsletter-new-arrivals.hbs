@@ -1,0 +1,43 @@
+<h2 style="color: #1A1A1A; font-size: 22px; margin: 0 0 8px 0;">New Arrivals</h2>
+<p style="color: #666; font-size: 14px; margin: 0 0 24px 0;">
+  Check out the latest additions to our collection!
+</p>
+
+<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse: collapse;">
+  <tr>
+    {{#each products}}
+    <td style="width: 50%; padding: 8px; vertical-align: top;">
+      <div style="border: 1px solid #eee; border-radius: 8px; overflow: hidden; background: #fff;">
+        {{#if imageUrl}}
+        <a href="{{../storeUrl}}/products/{{slug}}" style="text-decoration: none;">
+          <img src="{{imageUrl}}" alt="{{name}}" style="width: 100%; height: 200px; object-fit: cover; display: block;" />
+        </a>
+        {{/if}}
+        <div style="padding: 12px;">
+          <p style="margin: 0 0 4px 0; font-size: 14px; font-weight: 600; color: #1A1A1A;">{{name}}</p>
+          <p style="margin: 0 0 8px 0; font-size: 13px; color: #D4AF37; font-weight: 600;">TZS {{price}}</p>
+          <a href="{{../storeUrl}}/products/{{slug}}" style="display: inline-block; padding: 8px 16px; background-color: #D4AF37; color: #1A1A1A; text-decoration: none; font-size: 12px; font-weight: 600; border-radius: 4px;">
+            Shop Now
+          </a>
+        </div>
+      </div>
+    </td>
+    {{#if (math @index "%" 2)}}
+  </tr>
+  <tr>
+    {{/if}}
+    {{/each}}
+  </tr>
+</table>
+
+<div style="text-align: center; margin: 24px 0;">
+  <a href="{{storeUrl}}/products?sort=newest" class="btn-primary" style="display: inline-block; padding: 12px 32px; background-color: #D4AF37; color: #1A1A1A; text-decoration: none; font-weight: 600; font-size: 14px; border-radius: 4px;">
+    View All New Arrivals
+  </a>
+</div>
+
+<hr style="margin: 24px 0; border: none; border-top: 1px solid #eee;" />
+<p style="text-align: center; font-size: 12px; color: #999;">
+  You are receiving this email because you subscribed to the {{businessName}} newsletter.<br />
+  <a href="{{storeUrl}}/unsubscribe?token={{unsubscribeToken}}" style="color: #D4AF37; text-decoration: none;">Unsubscribe</a>
+</p>

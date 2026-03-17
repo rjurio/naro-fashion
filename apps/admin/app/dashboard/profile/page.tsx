@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { User, Mail, Phone, Shield, Save } from 'lucide-react';
+import { User, Mail, Phone, Shield, Save, Loader2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import adminApi from '@/lib/api';
 
@@ -35,7 +35,7 @@ export default function ProfilePage() {
     }
   };
 
-  if (!user) return null;
+  if (!user) return <div className="flex items-center justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-brand-gold" /></div>;
 
   const initials = `${user.firstName[0]}${user.lastName[0]}`.toUpperCase();
 

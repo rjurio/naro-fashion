@@ -13,6 +13,7 @@ interface Toast {
 }
 
 interface ToastContextValue {
+  toast: (message: string, variant?: ToastVariant) => void;
   success: (message: string) => void;
   error: (message: string) => void;
   warning: (message: string) => void;
@@ -40,6 +41,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value: ToastContextValue = {
+    toast: (msg, variant = 'info') => addToast(variant, msg),
     success: (msg) => addToast('success', msg),
     error: (msg) => addToast('error', msg),
     warning: (msg) => addToast('warning', msg),

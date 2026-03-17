@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback } from 'react';
 import { Download, Printer } from 'lucide-react';
-import Modal from '../ui/Modal';
+import { Modal } from '../ui/Modal';
 import BarcodeLabel from './BarcodeLabel';
 import JsBarcode from 'jsbarcode';
 import { jsPDF } from 'jspdf';
@@ -143,7 +143,7 @@ export default function BarcodeModal({ productName, productSku, variants, onClos
   };
 
   return (
-    <Modal title="Barcode Labels" size="lg" onClose={onClose}>
+    <Modal isOpen={true} title="Barcode Labels" size="lg" onClose={onClose}>
       <div className="space-y-4">
         {/* Variant list with quantity selector */}
         <div className="space-y-2 max-h-[40vh] overflow-y-auto">

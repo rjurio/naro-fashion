@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSiteSettings } from '@/contexts/SiteSettingsContext';
 import {
   LayoutDashboard,
   ShoppingBag,
@@ -36,6 +37,11 @@ import {
   Camera,
   Monitor,
   ReceiptText,
+  Layers,
+  Instagram,
+  Mail,
+  Send,
+  Building2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -84,9 +90,21 @@ const navItems: NavItem[] = [
     label: 'CMS',
     icon: PanelLeft,
     children: [
+      { label: 'Hero Slides', href: '/dashboard/cms/hero-slides', icon: Layers },
       { label: 'Banners', href: '/dashboard/cms/banners', icon: ImageIcon },
+      { label: 'Instagram Posts', href: '/dashboard/cms/instagram-posts', icon: Instagram },
       { label: 'Pages', href: '/dashboard/cms/pages', icon: FileEdit },
       { label: 'Settings', href: '/dashboard/cms/settings', icon: Settings },
+    ],
+  },
+  {
+    label: 'Newsletter',
+    icon: Mail,
+    children: [
+      { label: 'Dashboard', href: '/dashboard/newsletter', icon: BarChart3 },
+      { label: 'Compose', href: '/dashboard/newsletter/compose', icon: FileEdit },
+      { label: 'Sent', href: '/dashboard/newsletter/sent', icon: Send },
+      { label: 'Subscribers', href: '/dashboard/newsletter/subscribers', icon: Users },
     ],
   },
   { label: 'Analytics', href: '/dashboard/analytics', icon: BarChart3 },
@@ -108,7 +126,14 @@ const navItems: NavItem[] = [
     ],
   },
   { label: 'Recycle Bin', href: '/dashboard/recycle-bin', icon: Trash2 },
-  { label: 'Settings', href: '/dashboard/settings', icon: Settings },
+  {
+    label: 'Settings',
+    icon: Settings,
+    children: [
+      { label: 'Admin Settings', href: '/dashboard/settings', icon: Settings },
+      { label: 'Business Profile', href: '/dashboard/settings/business-profile', icon: Building2 },
+    ],
+  },
 ];
 
 interface SidebarProps {
@@ -119,6 +144,7 @@ interface SidebarProps {
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
   const { user } = useAuth();
+  const { settings } = useSiteSettings();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const toggleExpanded = (label: string) => {
@@ -151,8 +177,8 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         {/* Logo */}
         <div className="flex items-center justify-between h-16 px-6 border-b border-[hsl(var(--sidebar-border))]">
           <Link href="/dashboard" className="flex items-center gap-2">
-            <Image src="/icon.jpg" alt="Naro Fashion" width={36} height={36} className="rounded-full" />
-            <span className="text-xl font-bold text-brand-gold">NARO FASHION</span>
+            <Image src={settings.iconUrl} alt={settings.businessName} width={36} height={36} className="rounded-full" unoptimized />
+            <span className="text-xl font-bold text-brand-gold">{settings.businessName.toUpperCase()}</span>
           </Link>
           <button
             onClick={onClose}

@@ -26,10 +26,10 @@ function normalizeItem(raw: any): WishlistItem {
     name: product.name || product.title || "Product",
     price: product.price ?? product.salePrice ?? 0,
     originalPrice: product.originalPrice ?? product.compareAtPrice ?? undefined,
-    image: product.image || product.images?.[0]?.url || product.images?.[0] || "/images/products/placeholder.jpg",
+    image: product.image || product.images?.[0]?.url || product.images?.[0] || "/uploads/products/placeholder.jpg",
     rating: product.rating ?? product.averageRating ?? 0,
     reviewCount: product.reviewCount ?? product.totalReviews ?? 0,
-    inStock: product.inStock ?? product.stockQuantity > 0 ?? true,
+    inStock: product.inStock != null ? product.inStock : (product.stockQuantity > 0),
     slug: product.slug,
   };
 }

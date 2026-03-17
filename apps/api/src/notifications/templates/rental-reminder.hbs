@@ -1,0 +1,36 @@
+<h2 style="color: #1A1A1A; margin-top: 0;">Rental Pickup Reminder</h2>
+
+<p>Dear {{customerName}},</p>
+
+<p>This is a friendly reminder that your rental pickup is coming up soon!</p>
+
+<div class="info-box">
+  <p><span class="label">Rental ID:</span> {{rentalId}}</p>
+  {{#if rentalNumber}}
+  <p><span class="label">Rental Number:</span> {{rentalNumber}}</p>
+  {{/if}}
+  <p><span class="label">Pickup Date:</span> {{pickupDate}}</p>
+  {{#if pickupTime}}
+  <p><span class="label">Pickup Time:</span> {{pickupTime}}</p>
+  {{/if}}
+  {{#if productName}}
+  <p><span class="label">Item:</span> {{productName}}</p>
+  {{/if}}
+</div>
+
+<p><strong>Please remember to bring:</strong></p>
+<ul style="color: #555555;">
+  <li>Your National ID (original)</li>
+  <li>Any remaining balance payment (if applicable)</li>
+</ul>
+
+<p style="text-align: center;">
+  <a href="{{storeUrl}}/account/rentals" class="btn-primary">View Rental Details</a>
+</p>
+
+<p>If you need to reschedule or have any questions, please contact us as soon as possible.</p>
+
+<p>
+  Best regards,<br />
+  <strong style="color: #D4AF37;">{{businessName}} Team</strong>
+</p>

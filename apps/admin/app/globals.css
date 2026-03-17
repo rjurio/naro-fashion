@@ -1,6 +1,23 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* ===== Custom Theme ===== */
+@theme {
+  /* Brand colors */
+  --color-brand-black: #1A1A1A;
+  --color-brand-gold: #D4AF37;
+  --color-brand-gold-light: #E5C76B;
+  --color-brand-gold-dark: #B8960C;
+
+  /* Sidebar colors */
+  --color-sidebar: hsl(var(--sidebar-bg));
+  --color-sidebar-foreground: hsl(var(--sidebar-fg));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-fg));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+
+  /* Font families */
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+}
 
 /* ============================================
    NARO FASHION ADMIN — Theme Variables
@@ -99,14 +116,14 @@
    Base Styles
    ============================================ */
 
-@layer base {
-  * {
-    @apply border-[hsl(var(--border))];
-  }
-  body {
-    @apply bg-[hsl(var(--background))] text-[hsl(var(--foreground))];
-    font-feature-settings: 'rlig' 1, 'calt' 1;
-  }
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-feature-settings: 'rlig' 1, 'calt' 1;
 }
 
 /* Custom scrollbar */

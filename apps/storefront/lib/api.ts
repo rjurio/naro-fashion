@@ -145,8 +145,16 @@ export const flashSalesApi = {
 
 export const cmsApi = {
   getBanners: () => api.get<any[]>('/cms/banners'),
+  getHeroSlides: () => api.get<any[]>('/cms/hero-slides'),
   getPage: (slug: string) => api.get<any>(`/cms/pages/${slug}`),
   getSettings: () => api.get<any[]>('/cms/settings'),
+  getInstagramPosts: () => api.get<any[]>('/cms/instagram-posts'),
+  getBusinessProfile: () => api.get<any>('/cms/settings/business-profile'),
+};
+
+export const newsletterApi = {
+  subscribe: (data: { email: string; name?: string }) =>
+    api.post<{ message: string }>('/newsletter/subscribe', data),
 };
 
 export const authApi = {
@@ -154,13 +162,75 @@ export const authApi = {
     api.post<any>('/auth/login', data),
   register: (data: { email: string; password: string; firstName: string; lastName: string; phone?: string }) =>
     api.post<any>('/auth/register', data),
-  getProfile: () => api.get<any>('/auth/profile'),
+  getProfile: () => api.get<any>('/auth/me'),
+  updateProfile: (data: { firstName?: string; lastName?: string; phone?: string }) =>
+    api.patch<any>('/auth/me', data),
+  changePassword: (data: { currentPassword: string; newPassword: string }) =>
+    api.post<any>('/auth/change-password', data),
+  forgotPassword: (data: { email: string }) =>
+    api.post<any>('/auth/forgot-password', data),
+  resetPassword: (data: { token: string; newPassword: string }) =>
+    api.post<any>('/auth/reset-password', data),
   logout: () => api.post<any>('/auth/logout', {}),
 };
 
 export const idVerificationApi = {
   getStatus: () => api.get<any>('/id-verification/status'),
   submit: (data: any) => api.post<any>('/id-verification/submit', data),
+};
+
+export const uploadApi = {
+  uploadFile: async (file: File, folder: string = 'products'): Promise<{ url: string }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('folder', folder);
+
+    const authHeaders: Record<string, string> = {};
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('token');
+      if (token) authHeaders['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${BASE_URL}/upload`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: formData,
+    });
+
+    if (!response.ok) throw new ApiError(response.status, 'Upload failed');
+    return response.json();
+  },
+};
+
+export const paymentsApi = {
+  initiate: (data: {
+    orderId?: string;
+    rentalOrderId?: string;
+    amount: number;
+    method: 'MOBILE_MONEY' | 'CARD';
+    phoneNumber?: string;
+    buyerEmail?: string;
+    buyerName?: string;
+  }) => api.post<{
+    paymentId: string;
+    transactionRef: string;
+    status: string;
+    gatewaySuccess: boolean;
+    gatewayUrl?: string;
+    message?: string;
+    method: string;
+  }>('/payments/initiate', data),
+
+  checkStatus: (transactionRef: string) =>
+    api.get<{
+      paymentId: string;
+      transactionRef: string;
+      status: string;
+      amount: number;
+      method: string;
+      orderId?: string;
+      rentalOrderId?: string;
+    }>(`/payments/status/${transactionRef}`),
 };
 
 export const shippingApi = {
@@ -187,6 +257,19 @@ export const eventsApi = {
   submit: (data: any) => api.post<any>('/events/customer', data),
   addMedia: (eventId: string, data: { url: string; type?: string; caption?: string }) =>
     api.post<any>(`/events/${eventId}/media`, data),
+};
+
+export const promoCodesApi = {
+  validate: (code: string, orderAmount: number) =>
+    api.post<{
+      valid: boolean;
+      promoCodeId: string;
+      code: string;
+      discountType: string;
+      discountValue: number;
+      discountAmount: number;
+      description?: string;
+    }>('/promo-codes/validate', { code, orderAmount }),
 };
 
 export { ApiError };

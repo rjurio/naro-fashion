@@ -1,0 +1,42 @@
+<h2 style="color: #1A1A1A; margin-top: 0;">Rental Preparation Reminder</h2>
+
+<p>Dear Admin,</p>
+
+<p>The following rental requires preparation for an upcoming pickup:</p>
+
+<div class="info-box">
+  <p><span class="label">Rental ID:</span> {{rentalId}}</p>
+  {{#if rentalNumber}}
+  <p><span class="label">Rental Number:</span> {{rentalNumber}}</p>
+  {{/if}}
+  <p><span class="label">Customer:</span> {{customerName}}</p>
+  <p><span class="label">Pickup Date:</span> {{pickupDate}}</p>
+  {{#if productName}}
+  <p><span class="label">Item:</span> {{productName}}</p>
+  {{/if}}
+  {{#if daysUntilPickup}}
+  <p><span class="label">Days Until Pickup:</span>
+    {{#if isUrgent}}
+    <span style="color: #cc0000; font-weight: 700;">{{daysUntilPickup}} day(s) - URGENT</span>
+    {{else}}
+    {{daysUntilPickup}} day(s)
+    {{/if}}
+  </p>
+  {{/if}}
+</div>
+
+<p><strong>Please ensure:</strong></p>
+<ul style="color: #555555;">
+  <li>The item is cleaned, pressed, and in excellent condition</li>
+  <li>All accessories and components are included</li>
+  <li>The dispatch checklist is prepared</li>
+  <li>Mark the item as "Ready for Pickup" in the admin dashboard</li>
+</ul>
+
+<p style="text-align: center;">
+  <a href="{{adminUrl}}/dashboard/rentals" class="btn-primary">View Rental Details</a>
+</p>
+
+<p>
+  <strong style="color: #D4AF37;">{{businessName}} System</strong>
+</p>

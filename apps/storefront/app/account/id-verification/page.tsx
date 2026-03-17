@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Upload, Shield, CheckCircle, Clock, AlertCircle, Camera, X } from "lucide-react";
+import { ArrowLeft, Upload, Shield, CheckCircle, Clock, AlertCircle, Camera, X, Loader2 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useTranslation } from "@/lib/i18n";
+import { idVerificationApi, uploadApi } from "@/lib/api";
 
 type VerificationStatus = "unverified" | "pending" | "verified" | "rejected";
 
@@ -12,25 +13,68 @@ export default function IDVerificationPage() {
   const { t } = useTranslation("idVerification");
   const { t: tc } = useTranslation("common");
   const [status, setStatus] = useState<VerificationStatus>("unverified");
+  const [rejectionReason, setRejectionReason] = useState("");
   const [frontImage, setFrontImage] = useState<string | null>(null);
   const [backImage, setBackImage] = useState<string | null>(null);
+  const [frontFile, setFrontFile] = useState<File | null>(null);
+  const [backFile, setBackFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  // Fetch current verification status on mount
+  useEffect(() => {
+    idVerificationApi.getStatus()
+      .then((data) => {
+        const apiStatus = (data?.status || "").toUpperCase();
+        if (apiStatus === "APPROVED") setStatus("verified");
+        else if (apiStatus === "PENDING") setStatus("pending");
+        else if (apiStatus === "REJECTED") {
+          setStatus("rejected");
+          setRejectionReason(data?.rejectionReason || "");
+        } else setStatus("unverified");
+      })
+      .catch(() => setStatus("unverified"))
+      .finally(() => setLoading(false));
+  }, []);
 
   const handleFileSelect = (side: "front" | "back") => (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
-    if (side === "front") setFrontImage(url);
-    else setBackImage(url);
+    if (side === "front") {
+      setFrontImage(url);
+      setFrontFile(file);
+    } else {
+      setBackImage(url);
+      setBackFile(file);
+    }
   };
 
-  const handleSubmit = () => {
-    if (!frontImage || !backImage) return;
+  const handleSubmit = async () => {
+    if (!frontFile || !backFile) return;
     setIsUploading(true);
-    setTimeout(() => {
-      setIsUploading(false);
+    setError("");
+
+    try {
+      // Upload both images
+      const [frontResult, backResult] = await Promise.all([
+        uploadApi.uploadFile(frontFile, 'id-documents'),
+        uploadApi.uploadFile(backFile, 'id-documents'),
+      ]);
+
+      // Submit verification with uploaded URLs
+      await idVerificationApi.submit({
+        frontImageUrl: frontResult.url,
+        backImageUrl: backResult.url,
+      });
+
       setStatus("pending");
-    }, 2000);
+    } catch {
+      setError("Failed to submit verification. Please try again.");
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const statusConfig = {
@@ -42,6 +86,14 @@ export default function IDVerificationPage() {
 
   const currentStatus = statusConfig[status];
   const StatusIcon = currentStatus.icon;
+
+  if (loading) {
+    return (
+      <div className="bg-background min-h-screen flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-gold-500" />
+      </div>
+    );
+  }
 
   return (
     <div className="bg-background min-h-screen">
@@ -77,10 +129,14 @@ export default function IDVerificationPage() {
               {status === "unverified" && t("uploadPrompt")}
               {status === "pending" && t("pendingDesc")}
               {status === "verified" && t("verifiedDesc")}
-              {status === "rejected" && t("rejectedDesc")}
+              {status === "rejected" && (rejectionReason || t("rejectedDesc"))}
             </p>
           </div>
         </div>
+
+        {error && (
+          <div className="mb-6 p-4 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">{error}</div>
+        )}
 
         {/* Info Card */}
         <section className="rounded-xl border border-border bg-card p-6 mb-6">
@@ -108,7 +164,7 @@ export default function IDVerificationPage() {
                 <div className="relative rounded-lg overflow-hidden border border-border">
                   <img src={frontImage} alt="ID Front" className="w-full h-48 object-cover" />
                   <button
-                    onClick={() => setFrontImage(null)}
+                    onClick={() => { setFrontImage(null); setFrontFile(null); }}
                     className="absolute top-2 right-2 p-1 rounded-full bg-black/50 text-white hover:bg-black/70"
                   >
                     <X className="h-4 w-4" />
@@ -131,7 +187,7 @@ export default function IDVerificationPage() {
                 <div className="relative rounded-lg overflow-hidden border border-border">
                   <img src={backImage} alt="ID Back" className="w-full h-48 object-cover" />
                   <button
-                    onClick={() => setBackImage(null)}
+                    onClick={() => { setBackImage(null); setBackFile(null); }}
                     className="absolute top-2 right-2 p-1 rounded-full bg-black/50 text-white hover:bg-black/70"
                   >
                     <X className="h-4 w-4" />
@@ -150,7 +206,7 @@ export default function IDVerificationPage() {
             <Button
               onClick={handleSubmit}
               loading={isUploading}
-              disabled={!frontImage || !backImage}
+              disabled={!frontFile || !backFile}
               className="w-full gap-2"
               size="lg"
             >

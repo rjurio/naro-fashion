@@ -1,0 +1,36 @@
+<h2 style="color: #1A1A1A; margin-top: 0;">ID Verification Update</h2>
+
+<p>Dear Customer,</p>
+
+{{#if isApproved}}
+<div class="info-box" style="border-left-color: #28a745;">
+  <p style="color: #28a745; font-weight: 700; font-size: 16px;">Your ID has been verified successfully!</p>
+  <p>You can now proceed with your rental bookings.</p>
+</div>
+
+<p>Your National ID verification is complete. You are now eligible to rent items from {{businessName}}.</p>
+
+<p style="text-align: center;">
+  <a href="{{storeUrl}}/categories?availability=RENTAL_ONLY" class="btn-primary">Browse Rentals</a>
+</p>
+{{else}}
+<div class="info-box" style="border-left-color: #cc0000;">
+  <p style="color: #cc0000; font-weight: 700; font-size: 16px;">ID Verification was not approved</p>
+  {{#if reason}}
+  <p><span class="label">Reason:</span> {{reason}}</p>
+  {{/if}}
+</div>
+
+<p>Unfortunately, we were unable to verify your ID. Please review the reason above and submit a new verification request with the correct information.</p>
+
+<p style="text-align: center;">
+  <a href="{{storeUrl}}/account/verification" class="btn-primary">Submit New Verification</a>
+</p>
+{{/if}}
+
+<p>If you have any questions, please contact our support team.</p>
+
+<p>
+  Best regards,<br />
+  <strong style="color: #D4AF37;">{{businessName}} Team</strong>
+</p>

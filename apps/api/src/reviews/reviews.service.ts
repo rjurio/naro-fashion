@@ -46,11 +46,15 @@ export class ReviewsService {
         title: dto.title,
         comment: dto.comment,
         isVerified: !!hasPurchased,
+        ...(dto.imageUrls?.length
+          ? { images: { create: dto.imageUrls.map((url, i) => ({ url, sortOrder: i })) } }
+          : {}),
       },
       include: {
         user: {
           select: { firstName: true, lastName: true, avatarUrl: true },
         },
+        images: { orderBy: { sortOrder: 'asc' } },
       },
     });
 
@@ -87,6 +91,7 @@ export class ReviewsService {
           user: {
             select: { firstName: true, lastName: true, avatarUrl: true },
           },
+          images: { orderBy: { sortOrder: 'asc' } },
         },
       }),
       this.prisma.review.count({ where }),

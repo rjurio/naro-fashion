@@ -15,7 +15,7 @@ export class ProductsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(query: QueryProductsDto) {
-    const { search, categoryId, minPrice, maxPrice, sort, page = 1, limit = 20 } = query;
+    const { search, categoryId, availability_mode, minPrice, maxPrice, sort, page = 1, limit = 20 } = query;
 
     const where: any = { isActive: true, deletedAt: null };
 
@@ -27,6 +27,11 @@ export class ProductsService {
     }
 
     if (categoryId) where.categoryId = categoryId;
+
+    if (availability_mode) {
+      const modes = availability_mode.split(',').map((m) => m.trim());
+      where.availabilityMode = { in: modes };
+    }
 
     if (minPrice !== undefined || maxPrice !== undefined) {
       where.basePrice = {};
@@ -45,6 +50,8 @@ export class ProductsService {
         take: limit,
         include: {
           category: { select: { id: true, name: true, slug: true } },
+          images: { orderBy: { sortOrder: 'asc' }, take: 1 },
+          variants: { where: { isActive: true }, orderBy: { createdAt: 'asc' }, take: 1, select: { id: true } },
         },
       }),
       this.prisma.product.count({ where }),

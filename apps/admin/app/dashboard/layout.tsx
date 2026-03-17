@@ -1,17 +1,40 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { RefreshCw } from 'lucide-react';
 import Sidebar from '@/components/layout/Sidebar';
 import TopBar from '@/components/layout/TopBar';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { ConfirmDialogProvider } from '@/components/ui/ConfirmDialog';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const router = useRouter();
+  const { user, isLoading } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isLoading && !user) {
+      router.replace('/login');
+    }
+  }, [isLoading, user, router]);
+
+  if (isLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-[hsl(var(--background))]">
+        <RefreshCw className="w-8 h-8 animate-spin text-[hsl(var(--primary))]" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
 
   return (
     <ToastProvider>

@@ -8,6 +8,7 @@ interface ConfirmOptions {
   title: string;
   message: string;
   confirmLabel?: string;
+  confirmText?: string;
   variant?: ConfirmVariant;
 }
 
@@ -64,7 +65,7 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
                 Cancel
               </button>
               <button onClick={handleConfirm} className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${confirmBtnClass}`}>
-                {options.confirmLabel ?? 'Confirm'}
+                {options.confirmText ?? options.confirmLabel ?? 'Confirm'}
               </button>
             </div>
           </div>

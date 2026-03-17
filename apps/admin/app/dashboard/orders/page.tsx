@@ -1,10 +1,21 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Search, Download, Loader2 } from 'lucide-react';
+import { Search, Download, Loader2, ChevronDown, ChevronRight, Package } from 'lucide-react';
+import Image from 'next/image';
 import DataTable, { type Column } from '@/components/ui/DataTable';
 import Button from '@/components/ui/Button';
 import { adminApi } from '@/lib/api';
+
+interface OrderItem {
+  id: string;
+  productId: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+  product?: { id: string; name: string; images?: string[] };
+  variant?: { id: string; name: string; size?: string; color?: string } | null;
+}
 
 interface Order {
   id: string;
@@ -16,6 +27,9 @@ interface Order {
   status: string;
   type: string;
   date: string;
+  rawItems: OrderItem[];
+  shippingAddress?: string;
+  notes?: string;
   [key: string]: unknown;
 }
 
@@ -24,6 +38,7 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -33,7 +48,31 @@ export default function OrdersPage() {
       try {
         setLoading(true);
         const data = await adminApi.getOrders();
-        setOrders(Array.isArray(data) ? data : data?.data || data?.orders || []);
+        const raw: any[] = Array.isArray(data) ? data : data?.data || data?.orders || [];
+        setOrders(
+          raw.map((o: any) => ({
+            id: o.id || '',
+            customer: o.user
+              ? `${o.user.firstName || ''} ${o.user.lastName || ''}`.trim()
+              : o.customer || 'Guest',
+            email: o.user?.email || o.email || '',
+            items: Array.isArray(o.items) ? o.items.length : o.items ?? 0,
+            total: typeof o.total === 'number'
+              ? `TZS ${o.total.toLocaleString()}`
+              : o.total || 'TZS 0',
+            payment: o.paymentMethod || o.payment || 'N/A',
+            status: o.status || 'Processing',
+            type: o.type || 'Purchase',
+            date: o.createdAt
+              ? new Date(o.createdAt).toLocaleDateString()
+              : o.date || '',
+            rawItems: Array.isArray(o.items) ? o.items : [],
+            shippingAddress: o.address
+              ? `${o.address.street || ''}, ${o.address.city || ''}`
+              : '',
+            notes: o.notes || '',
+          }))
+        );
       } catch (err) {
         console.error('Failed to fetch orders:', err);
         setOrders([]);
@@ -68,7 +107,21 @@ export default function OrdersPage() {
         </div>
       ),
     },
-    { key: 'items', header: 'Items', sortable: true },
+    {
+      key: 'items',
+      header: 'Items',
+      sortable: true,
+      render: (order) => (
+        <span className="inline-flex items-center gap-1.5">
+          {expandedOrderId === order.id ? (
+            <ChevronDown className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
+          ) : (
+            <ChevronRight className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
+          )}
+          {order.items} item{order.items !== 1 ? 's' : ''}
+        </span>
+      ),
+    },
     { key: 'total', header: 'Total', sortable: true },
     { key: 'payment', header: 'Payment' },
     {
@@ -100,6 +153,7 @@ export default function OrdersPage() {
         return (
           <select
             value={order.status}
+            onClick={(e) => e.stopPropagation()}
             onChange={(e) => handleStatusUpdate(order.id, e.target.value)}
             className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border-none outline-none cursor-pointer ${colors[order.status] || ''}`}
           >
@@ -171,7 +225,95 @@ export default function OrdersPage() {
           <Loader2 className="w-8 h-8 animate-spin text-brand-gold" />
         </div>
       ) : (
-        <DataTable columns={columns} data={filteredOrders} pageSize={10} />
+        <DataTable
+          columns={columns}
+          data={filteredOrders}
+          pageSize={10}
+          onRowClick={(order) =>
+            setExpandedOrderId(expandedOrderId === order.id ? null : order.id)
+          }
+          expandedRowId={expandedOrderId}
+          renderExpandedRow={(order) => {
+            const items = order.rawItems as OrderItem[];
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
+            const baseUrl = apiUrl.replace('/api/v1', '');
+            return (
+              <div className="py-4 space-y-3">
+                <h4 className="text-sm font-semibold text-[hsl(var(--foreground))]">
+                  Order Items
+                </h4>
+                {items.length === 0 ? (
+                  <p className="text-sm text-[hsl(var(--muted-foreground))]">No item details available</p>
+                ) : (
+                  <div className="rounded-lg border border-[hsl(var(--border))] overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
+                          <th className="px-4 py-2 text-left text-xs font-medium text-[hsl(var(--muted-foreground))]">Product</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-[hsl(var(--muted-foreground))]">Variant</th>
+                          <th className="px-4 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))]">Qty</th>
+                          <th className="px-4 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))]">Unit Price</th>
+                          <th className="px-4 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))]">Subtotal</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {items.map((item) => {
+                          const img = item.product?.images?.[0];
+                          const imgSrc = img
+                            ? img.startsWith('http') ? img : `${baseUrl}/${img}`
+                            : null;
+                          return (
+                            <tr key={item.id} className="border-b border-[hsl(var(--border))] last:border-b-0">
+                              <td className="px-4 py-2.5">
+                                <div className="flex items-center gap-3">
+                                  {imgSrc ? (
+                                    <Image
+                                      src={imgSrc}
+                                      alt={item.product?.name || 'Product'}
+                                      width={36}
+                                      height={36}
+                                      className="rounded object-cover"
+                                    />
+                                  ) : (
+                                    <div className="w-9 h-9 rounded bg-[hsl(var(--border))] flex items-center justify-center">
+                                      <Package className="w-4 h-4 text-[hsl(var(--muted-foreground))]" />
+                                    </div>
+                                  )}
+                                  <span className="font-medium text-[hsl(var(--foreground))]">
+                                    {item.product?.name || 'Unknown Product'}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-2.5 text-[hsl(var(--muted-foreground))]">
+                                {item.variant
+                                  ? [item.variant.size, item.variant.color, item.variant.name]
+                                      .filter(Boolean)
+                                      .join(' / ') || '-'
+                                  : '-'}
+                              </td>
+                              <td className="px-4 py-2.5 text-right">{item.quantity}</td>
+                              <td className="px-4 py-2.5 text-right">
+                                TZS {(item.unitPrice ?? 0).toLocaleString()}
+                              </td>
+                              <td className="px-4 py-2.5 text-right font-medium">
+                                TZS {(item.total ?? 0).toLocaleString()}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {order.shippingAddress && (
+                  <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                    <span className="font-medium">Shipping:</span> {order.shippingAddress as string}
+                  </p>
+                )}
+              </div>
+            );
+          }}
+        />
       )}
     </div>
   );

@@ -33,6 +33,40 @@ export class UploadController {
     return this.uploadService.uploadImage(file);
   }
 
+  @Post('hero-slide')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+          cb(null, true);
+        } else {
+          cb(new BadRequestException('Only JPEG, PNG, and WebP images are allowed'), false);
+        }
+      },
+    }),
+  )
+  uploadHeroSlide(@UploadedFile() file: any) {
+    return this.uploadService.uploadToFolder(file, 'hero-slides');
+  }
+
+  @Post('branding')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+          cb(null, true);
+        } else {
+          cb(new BadRequestException('Only JPEG, PNG, and WebP images are allowed'), false);
+        }
+      },
+    }),
+  )
+  uploadBranding(@UploadedFile() file: any) {
+    return this.uploadService.uploadToFolder(file, 'branding');
+  }
+
   @Post('id-document')
   @UseInterceptors(FileInterceptor('file'))
   uploadIdDocument(

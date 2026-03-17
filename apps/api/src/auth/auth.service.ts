@@ -2,20 +2,25 @@ import {
   Injectable,
   ConflictException,
   UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { RegisterDto } from './dto/register.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -35,6 +40,7 @@ export class AuthService {
         passwordHash: hashedPassword,
         firstName: dto.firstName,
         lastName: dto.lastName,
+        phone: dto.phone,
       },
       select: {
         id: true,
@@ -153,6 +159,7 @@ export class AuthService {
           email: true,
           firstName: true,
           lastName: true,
+          phone: true,
           role: true,
           is2FAEnabled: true,
           createdAt: true,
@@ -203,8 +210,8 @@ export class AuthService {
       if (admin) {
         return this.prisma.adminUser.update({
           where: { id: userId },
-          data: { firstName: data.firstName, lastName: data.lastName },
-          select: { id: true, email: true, firstName: true, lastName: true, role: true },
+          data: { firstName: data.firstName, lastName: data.lastName, phone: data.phone },
+          select: { id: true, email: true, firstName: true, lastName: true, phone: true, role: true },
         });
       }
     }
@@ -265,6 +272,8 @@ export class AuthService {
 
   async forgotPassword(email: string) {
     // Always return success to prevent email enumeration
+
+    // Check AdminUser table
     const admin = await this.prisma.adminUser.findUnique({ where: { email } });
     if (admin) {
       const rawToken = crypto.randomBytes(32).toString('hex');
@@ -276,26 +285,83 @@ export class AuthService {
           passwordResetExpires: new Date(Date.now() + 30 * 60 * 1000),
         },
       });
-      // In production: send email with rawToken link
-      // NotificationsService.sendEmail(email, 'Password Reset', rawToken)
+
+      const adminUrl = this.configService.get('ADMIN_URL', 'http://localhost:3001');
+      const resetUrl = `${adminUrl}/reset-password?token=${rawToken}`;
+
+      this.notifications
+        .sendPasswordResetEmail(email, resetUrl)
+        .catch((err) =>
+          this.logger.error(`Failed to send password reset email: ${err?.message}`),
+        );
+
+      this.logger.log(`[PASSWORD RESET] Reset link generated for admin ${email}`);
+      return { message: 'If this email exists, a password reset link has been sent.' };
     }
+
+    // Check User (customer) table
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (user) {
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+      await this.prisma.user.update({
+        where: { email },
+        data: {
+          passwordResetToken: hashedToken,
+          passwordResetExpires: new Date(Date.now() + 30 * 60 * 1000),
+        },
+      });
+
+      const storefrontUrl = this.configService.get('STOREFRONT_URL', 'http://localhost:3000');
+      const resetUrl = `${storefrontUrl}/auth/reset-password?token=${rawToken}`;
+
+      this.notifications
+        .sendPasswordResetEmail(email, resetUrl)
+        .catch((err) =>
+          this.logger.error(`Failed to send password reset email: ${err?.message}`),
+        );
+
+      this.logger.log(`[PASSWORD RESET] Reset link generated for customer ${email}`);
+    }
+
     return { message: 'If this email exists, a password reset link has been sent.' };
   }
 
   async resetPassword(token: string, newPassword: string) {
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    // Check AdminUser table first
     const admin = await this.prisma.adminUser.findFirst({
       where: {
         passwordResetToken: hashedToken,
         passwordResetExpires: { gt: new Date() },
       },
     });
-    if (!admin) throw new UnauthorizedException('Invalid or expired reset token');
-    const passwordHash = await bcrypt.hash(newPassword, 12);
-    await this.prisma.adminUser.update({
-      where: { id: admin.id },
-      data: { passwordHash, passwordResetToken: null, passwordResetExpires: null, failedLoginAttempts: 0, lockedUntil: null },
+    if (admin) {
+      const passwordHash = await bcrypt.hash(newPassword, 12);
+      await this.prisma.adminUser.update({
+        where: { id: admin.id },
+        data: { passwordHash, passwordResetToken: null, passwordResetExpires: null, failedLoginAttempts: 0, lockedUntil: null },
+      });
+      return { message: 'Password reset successfully' };
+    }
+
+    // Check User (customer) table
+    const user = await this.prisma.user.findFirst({
+      where: {
+        passwordResetToken: hashedToken,
+        passwordResetExpires: { gt: new Date() },
+      },
     });
-    return { message: 'Password reset successfully' };
+    if (user) {
+      const passwordHash = await bcrypt.hash(newPassword, 12);
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash, passwordResetToken: null, passwordResetExpires: null },
+      });
+      return { message: 'Password reset successfully' };
+    }
+
+    throw new UnauthorizedException('Invalid or expired reset token');
   }
 }

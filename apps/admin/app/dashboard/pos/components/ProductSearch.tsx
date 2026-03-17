@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Plus, Barcode, Package } from 'lucide-react';
+import { Search, Plus, Barcode, Package, CheckCircle, XCircle, Volume2 } from 'lucide-react';
 import adminApi from '../../../../lib/api';
+import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 
 interface Variant {
   id: string;
@@ -45,15 +46,36 @@ interface Props {
   categories: { id: string; name: string }[];
 }
 
+// Play a short beep for scan feedback
+function playBeep(success: boolean) {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = success ? 1200 : 400;
+    gain.gain.value = 0.15;
+    osc.start();
+    osc.stop(ctx.currentTime + (success ? 0.1 : 0.25));
+  } catch {
+    // AudioContext not available — skip
+  }
+}
+
+type ScanFeedback = { type: 'success'; productName: string } | { type: 'error'; code: string } | null;
+
 export default function ProductSearch({ onAddToCart, categories }: Props) {
   const [query, setQuery] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [barcodeMode, setBarcodeMode] = useState(false);
+  const [scanFeedback, setScanFeedback] = useState<ScanFeedback>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const barcodeRef = useRef<HTMLInputElement>(null);
-  const debounceTimer = useRef<NodeJS.Timeout>();
+  const debounceTimer = useRef<NodeJS.Timeout>(null);
+  const feedbackTimer = useRef<NodeJS.Timeout>(null);
 
   const searchProducts = useCallback(async (q: string) => {
     if (!q || q.length < 1) {
@@ -77,7 +99,13 @@ export default function ProductSearch({ onAddToCart, categories }: Props) {
     return () => { if (debounceTimer.current) clearTimeout(debounceTimer.current); };
   }, [query, searchProducts]);
 
-  const handleBarcodeSubmit = async (code: string) => {
+  const showFeedback = useCallback((fb: ScanFeedback) => {
+    setScanFeedback(fb);
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    feedbackTimer.current = setTimeout(() => setScanFeedback(null), 2500);
+  }, []);
+
+  const handleBarcodeSubmit = useCallback(async (code: string) => {
     if (!code) return;
     try {
       const variant = await adminApi.posLookupBarcode(code);
@@ -94,15 +122,27 @@ export default function ProductSearch({ onAddToCart, categories }: Props) {
           stock: variant.stock,
           imageUrl: variant.product.images?.[0]?.url,
         });
+        playBeep(true);
+        showFeedback({ type: 'success', productName: variant.product.name });
       }
     } catch {
-      // Not found - silently ignore
+      playBeep(false);
+      showFeedback({ type: 'error', code });
     }
+    // Clear manual barcode input if in barcode mode
     if (barcodeRef.current) {
       barcodeRef.current.value = '';
       barcodeRef.current.focus();
     }
-  };
+  }, [onAddToCart, showFeedback]);
+
+  // Global barcode scanner detection (works without barcode mode toggled)
+  useBarcodeScanner({
+    onScan: handleBarcodeSubmit,
+    maxKeystrokeInterval: 50,
+    minLength: 4,
+    enabled: true,
+  });
 
   const handleAddVariant = (product: Product, variant: Variant) => {
     if (variant.stock <= 0) return;
@@ -126,6 +166,21 @@ export default function ProductSearch({ onAddToCart, categories }: Props) {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Scan Feedback Banner */}
+      {scanFeedback && (
+        <div className={`px-4 py-2.5 flex items-center gap-2 text-sm font-medium animate-pulse ${
+          scanFeedback.type === 'success'
+            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
+            : 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300'
+        }`}>
+          {scanFeedback.type === 'success' ? (
+            <><CheckCircle className="w-4 h-4" /> Added: {scanFeedback.productName}</>
+          ) : (
+            <><XCircle className="w-4 h-4" /> Barcode not found: {scanFeedback.code}</>
+          )}
+        </div>
+      )}
+
       {/* Search Bar */}
       <div className="p-3 border-b border-[hsl(var(--border))]">
         <div className="flex gap-2">
@@ -141,16 +196,26 @@ export default function ProductSearch({ onAddToCart, categories }: Props) {
             />
           </div>
           <button
-            onClick={() => setBarcodeMode(!barcodeMode)}
+            onClick={() => {
+              setBarcodeMode(!barcodeMode);
+              if (!barcodeMode) setTimeout(() => barcodeRef.current?.focus(), 50);
+            }}
             className={`px-3 py-2 rounded-lg border text-sm flex items-center gap-1.5 transition-colors ${
               barcodeMode
                 ? 'bg-brand-gold text-black border-brand-gold'
                 : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]'
             }`}
+            title="Toggle manual barcode input (scanner works automatically)"
           >
             <Barcode className="w-4 h-4" />
             Scan
           </button>
+        </div>
+
+        {/* Scanner status indicator */}
+        <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-[hsl(var(--muted-foreground))]">
+          <Volume2 className="w-3 h-3" />
+          <span>Barcode scanner auto-detected — just scan, no need to click</span>
         </div>
 
         {barcodeMode && (
@@ -158,14 +223,15 @@ export default function ProductSearch({ onAddToCart, categories }: Props) {
             <input
               ref={barcodeRef}
               type="text"
-              placeholder="Scan barcode or type code..."
+              placeholder="Scan barcode or type code and press Enter..."
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
+                  e.preventDefault();
                   handleBarcodeSubmit((e.target as HTMLInputElement).value);
                 }
               }}
-              className="w-full px-3 py-2 rounded-lg border-2 border-brand-gold bg-[hsl(var(--background))] text-[hsl(var(--foreground))] text-sm focus:outline-none"
+              className="w-full px-3 py-2 rounded-lg border-2 border-brand-gold bg-[hsl(var(--background))] text-[hsl(var(--foreground))] text-sm focus:outline-none font-mono"
             />
           </div>
         )}
@@ -217,7 +283,10 @@ export default function ProductSearch({ onAddToCart, categories }: Props) {
           <div className="text-center py-8">
             <Search className="w-10 h-10 mx-auto mb-2 text-[hsl(var(--muted-foreground))]" />
             <p className="text-sm text-[hsl(var(--muted-foreground))]">
-              Search for products to add to the sale
+              Search for products or scan a barcode
+            </p>
+            <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">
+              USB/Bluetooth scanners work automatically
             </p>
           </div>
         )}

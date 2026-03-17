@@ -5,13 +5,15 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatPrice(amount: number, currency: string = "TZS"): string {
+export function formatPrice(amount: number | string, currency: string = "TZS"): string {
+  const num = Number(amount);
+  if (isNaN(num)) return `TSh 0`;
   return new Intl.NumberFormat("en-TZ", {
     style: "currency",
     currency,
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(amount);
+  }).format(num);
 }
 
 export function formatCountdown(seconds: number): {

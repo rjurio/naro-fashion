@@ -35,6 +35,8 @@ import { InventoryModule } from './inventory/inventory.module';
 import { ReportsModule } from './reports/reports.module';
 import { EventsModule } from './events/events.module';
 import { PosModule } from './pos/pos.module';
+import { PromoCodesModule } from './promo-codes/promo-codes.module';
+import { NewsletterModule } from './newsletter/newsletter.module';
 
 @Module({
   imports: [
@@ -77,6 +79,8 @@ import { PosModule } from './pos/pos.module';
     ReportsModule,
     EventsModule,
     PosModule,
+    PromoCodesModule,
+    NewsletterModule,
   ],
 })
 export class AppModule {}

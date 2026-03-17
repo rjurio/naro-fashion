@@ -3,7 +3,7 @@
 Internal admin dashboard for Naro Fashion. Runs on port 3001.
 
 ## Stack
-- Next.js 14+ (App Router), TypeScript, Tailwind CSS
+- Next.js 15+ (App Router), React 19, TypeScript, Tailwind CSS v4
 - Recharts for analytics/financial charts (dynamically imported, SSR disabled)
 - next-themes for Light/Dark/Luxury theme switching
 
@@ -23,14 +23,14 @@ Internal admin dashboard for Naro Fashion. Runs on port 3001.
 - `/dashboard/pos` - Point of Sale (shift management, product search with barcode scan, split payments)
 - `/dashboard/orders` - Order management with status updates
 - `/dashboard/customers` - Customer list with search, status badges, suspend/reactivate actions
-- `/dashboard/rentals` - Active rentals with expandable checklist tracking (assign templates, check/uncheck dispatch & return items)
+- `/dashboard/rentals` - Active rentals with expandable details (wedding date/location/region, delivery modality, shipping/transport info, receipt upload) and checklist tracking (assign templates, check/uncheck dispatch & return items)
 - `/dashboard/rentals/checklists` - Checklist template CRUD with activate/deactivate toggle, proper form modal with multi-item support
 - `/dashboard/rentals/requests` - Pending rental requests
 - `/dashboard/flash-sales` - Flash sale CRUD
 - `/dashboard/analytics` - Recharts-based analytics (revenue bars, category/status/payment pies, growth line, daily orders area)
 - `/dashboard/referrals` - Referral program stats
 - `/dashboard/categories` - Category management
-- `/dashboard/cms` - Banners, pages, settings
+- `/dashboard/cms` - Banners, pages, settings, Instagram posts (with IG API sync, pin/unpin, source badges)
 - `/dashboard/shipping` - Shipping zones and rates
 - `/dashboard/reviews` - Review moderation
 - `/dashboard/recycle-bin` - Recycle bin with tabs: Products, Categories, Flash Sales, Checklists, Banners, Pages — restore soft-deleted items
@@ -41,6 +41,11 @@ Internal admin dashboard for Naro Fashion. Runs on port 3001.
 - `/dashboard/financials` - Financial management (Income Statement P&L, Expenses CRUD, Revenue vs Expenses chart, Expense Categories CRUD)
 - `/dashboard/users` - Admin users management (create, edit, toggle, unlock locked accounts, delete)
 - `/dashboard/users/roles` - Roles & Permissions management (RBAC — create custom roles, assign/remove permissions via matrix UI)
+- `/dashboard/newsletter` - Newsletter dashboard (stats cards, recent newsletters)
+- `/dashboard/newsletter/compose` - Compose newsletter (template type selector, HTML editor with preview, NEW_ARRIVALS auto-product fetch, save draft / send)
+- `/dashboard/newsletter/sent` - Sent newsletters list with delivery stats
+- `/dashboard/newsletter/subscribers` - Subscriber list with search, pagination, stats bar
+- `/dashboard/newsletter/[id]` - Newsletter detail with delivery stats, failed deliveries table, resend button
 
 ## Key Components
 - `components/layout/Sidebar.tsx` - Navigation sidebar with logo icon
@@ -92,4 +97,5 @@ Internal admin dashboard for Naro Fashion. Runs on port 3001.
 - SKU auto-generated as `CATEGORY-NAME-NUMBER` (e.g. GOW-ELE-427), editable by admin
 - URL slug is read-only, always auto-generated from English product name
 - Image uploads: local storage via API at `/uploads/products/`, served via ServeStaticModule
+- Tailwind v4: No tailwind.config.ts — theme defined via @theme in globals.css
 - `cropperjs` must be pinned to v1.6.2 in admin (v2 breaks react-cropper CSS import)

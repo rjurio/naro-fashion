@@ -2,6 +2,7 @@
 
 import { ThemeProvider } from 'next-themes';
 import { AuthProvider } from '@/contexts/AuthContext';
+import { SiteSettingsProvider } from '@/contexts/SiteSettingsContext';
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   return (
@@ -11,7 +12,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       themes={['light', 'dark', 'luxury']}
       enableSystem={false}
     >
-      <AuthProvider>{children}</AuthProvider>
+      <SiteSettingsProvider>
+        <AuthProvider>{children}</AuthProvider>
+      </SiteSettingsProvider>
     </ThemeProvider>
   );
 }

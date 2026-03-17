@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { X, Printer } from 'lucide-react';
 import adminApi from '../../../../lib/api';
 import { PAYMENT_METHOD_LABELS } from '@naro/shared';
+import { useSiteSettings } from '@/contexts/SiteSettingsContext';
 
 interface Props {
   orderId: string;
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export default function ReceiptModal({ orderId, onClose }: Props) {
+  const { settings } = useSiteSettings();
   const [receipt, setReceipt] = useState<any>(null);
   const receiptRef = useRef<HTMLDivElement>(null);
 
@@ -76,10 +78,10 @@ export default function ReceiptModal({ orderId, onClose }: Props) {
         <div className="p-4 max-h-[70vh] overflow-y-auto">
           <div ref={receiptRef}>
             <div className="center bold" style={{ textAlign: 'center', fontWeight: 'bold', fontSize: '16px', marginBottom: '4px' }}>
-              NARO FASHION
+              {settings.businessName.toUpperCase()}
             </div>
             <div style={{ textAlign: 'center', fontSize: '11px', color: '#666', marginBottom: '8px' }}>
-              Dar es Salaam, Tanzania
+              {settings.contactAddress}
             </div>
             <div style={{ borderTop: '1px dashed #ccc', margin: '8px 0' }} />
 
@@ -161,7 +163,7 @@ export default function ReceiptModal({ orderId, onClose }: Props) {
             <div style={{ borderTop: '1px dashed #ccc', margin: '12px 0 8px' }} />
 
             <div style={{ textAlign: 'center', fontSize: '11px', color: '#666' }}>
-              Thank you for shopping at Naro Fashion!
+              Thank you for shopping at {settings.businessName}!
             </div>
           </div>
         </div>

@@ -1,0 +1,26 @@
+<h2 style="color: #1A1A1A; margin-top: 0;">Order Confirmed!</h2>
+
+<p>Dear {{customerName}},</p>
+
+<p>Thank you for your order! We are pleased to confirm that your order has been received and is being processed.</p>
+
+<div class="info-box">
+  <p><span class="label">Order Number:</span> {{orderNumber}}</p>
+  <p><span class="label">Order ID:</span> {{orderId}}</p>
+  {{#if orderDate}}
+  <p><span class="label">Date:</span> {{orderDate}}</p>
+  {{/if}}
+</div>
+
+<p>We will notify you once your order is ready for shipping or pickup.</p>
+
+<p style="text-align: center;">
+  <a href="{{storeUrl}}/account/orders" class="btn-primary">View Your Order</a>
+</p>
+
+<p>If you have any questions about your order, please don't hesitate to reach out to our support team.</p>
+
+<p>
+  Best regards,<br />
+  <strong style="color: #D4AF37;">{{businessName}} Team</strong>
+</p>

@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { formatPrice } from "@/lib/utils";
-import { cartApi } from "@/lib/api";
+import { cartApi, promoCodesApi } from "@/lib/api";
 
 interface CartItem {
   id: string;
@@ -33,6 +33,9 @@ export default function CartPage() {
   const [loading, setLoading] = useState(true);
   const [promoCode, setPromoCode] = useState("");
   const [promoApplied, setPromoApplied] = useState(false);
+  const [promoDiscount, setPromoDiscount] = useState(0);
+  const [promoError, setPromoError] = useState("");
+  const [applyingPromo, setApplyingPromo] = useState(false);
 
   useEffect(() => {
     const fetchCart = async () => {
@@ -86,12 +89,23 @@ export default function CartPage() {
     0
   );
   const deliveryFee = subtotal >= 100000 ? 0 : 5000;
-  const discount = promoApplied ? Math.round(subtotal * 0.1) : 0;
+  const discount = promoApplied ? promoDiscount : 0;
   const total = subtotal + deliveryFee - discount;
 
-  const applyPromo = () => {
-    if (promoCode.toUpperCase() === "NARO10") {
+  const applyPromo = async () => {
+    if (!promoCode.trim()) return;
+    setApplyingPromo(true);
+    setPromoError("");
+    try {
+      const result = await promoCodesApi.validate(promoCode, subtotal);
+      setPromoDiscount(result.discountAmount);
       setPromoApplied(true);
+    } catch (err: any) {
+      setPromoError(err?.data?.message || err?.message || "Invalid promo code");
+      setPromoApplied(false);
+      setPromoDiscount(0);
+    } finally {
+      setApplyingPromo(false);
     }
   };
 
@@ -251,15 +265,18 @@ export default function CartPage() {
                     variant="outline"
                     size="md"
                     onClick={applyPromo}
-                    disabled={promoApplied}
+                    disabled={promoApplied || applyingPromo}
                   >
-                    {promoApplied ? "Applied" : "Apply"}
+                    {applyingPromo ? "..." : promoApplied ? "Applied" : "Apply"}
                   </Button>
                 </div>
                 {promoApplied && (
                   <p className="text-xs text-green-600 mt-1.5">
-                    NARO10 applied! You save {formatPrice(discount)}
+                    {promoCode.toUpperCase()} applied! You save {formatPrice(discount)}
                   </p>
+                )}
+                {promoError && (
+                  <p className="text-xs text-red-500 mt-1.5">{promoError}</p>
                 )}
               </div>
 

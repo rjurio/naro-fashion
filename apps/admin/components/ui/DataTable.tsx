@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Fragment } from 'react';
 import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SkeletonTable } from './Skeleton';
@@ -30,6 +30,9 @@ interface DataTableProps<T> {
   selectable?: boolean;
   bulkActions?: BulkAction[];
   onBulkAction?: (selectedIds: string[], action: string) => void;
+  onRowClick?: (item: T) => void;
+  expandedRowId?: string | null;
+  renderExpandedRow?: (item: T) => React.ReactNode;
 }
 
 export default function DataTable<T extends Record<string, unknown>>({
@@ -43,6 +46,9 @@ export default function DataTable<T extends Record<string, unknown>>({
   selectable = false,
   bulkActions = [],
   onBulkAction,
+  onRowClick,
+  expandedRowId,
+  renderExpandedRow,
 }: DataTableProps<T>) {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -196,37 +202,48 @@ export default function DataTable<T extends Record<string, unknown>>({
                   const rowId = getRowId(item, (currentPage - 1) * pageSize + idx);
                   const isSelected = selectedIds.has(rowId);
                   return (
-                    <tr
-                      key={idx}
-                      className={cn(
-                        'border-b border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:bg-[hsl(var(--accent))] transition-colors',
-                        isSelected && 'bg-[hsl(var(--accent))]'
+                    <Fragment key={idx}>
+                      <tr
+                        className={cn(
+                          'border-b border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:bg-[hsl(var(--accent))] transition-colors',
+                          isSelected && 'bg-[hsl(var(--accent))]',
+                          onRowClick && 'cursor-pointer',
+                          expandedRowId === rowId && 'bg-[hsl(var(--accent))]'
+                        )}
+                        onClick={() => onRowClick?.(item)}
+                      >
+                        {selectable && (
+                          <td className="px-4 py-3 w-10">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelectRow(rowId)}
+                              className="rounded border-border"
+                            />
+                          </td>
+                        )}
+                        {columns.map((col) => (
+                          <td
+                            key={col.key}
+                            className={cn(
+                              'px-4 py-3 text-[hsl(var(--card-foreground))] whitespace-nowrap',
+                              col.className
+                            )}
+                          >
+                            {col.render
+                              ? col.render(item)
+                              : (item[col.key] as React.ReactNode)}
+                          </td>
+                        ))}
+                      </tr>
+                      {expandedRowId === rowId && renderExpandedRow && (
+                        <tr className="bg-[hsl(var(--muted))]">
+                          <td colSpan={effectiveCols} className="px-4 py-0">
+                            {renderExpandedRow(item)}
+                          </td>
+                        </tr>
                       )}
-                    >
-                      {selectable && (
-                        <td className="px-4 py-3 w-10">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleSelectRow(rowId)}
-                            className="rounded border-border"
-                          />
-                        </td>
-                      )}
-                      {columns.map((col) => (
-                        <td
-                          key={col.key}
-                          className={cn(
-                            'px-4 py-3 text-[hsl(var(--card-foreground))] whitespace-nowrap',
-                            col.className
-                          )}
-                        >
-                          {col.render
-                            ? col.render(item)
-                            : (item[col.key] as React.ReactNode)}
-                        </td>
-                      ))}
-                    </tr>
+                    </Fragment>
                   );
                 })
               )}

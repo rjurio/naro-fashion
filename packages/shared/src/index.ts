@@ -162,6 +162,54 @@ export const PAGINATION_DEFAULTS = {
 } as const;
 
 // ============================================================
+// BUSINESS PROFILE
+// ============================================================
+
+export interface BusinessProfile {
+  businessName: string;
+  businessNameSw: string;
+  tagline: string;
+  taglineSw: string;
+  businessType: string;
+  contactEmail: string;
+  contactPhone: string;
+  contactAddress: string;
+  contactAddressSw: string;
+  whatsappNumber: string;
+  instagramUrl: string;
+  facebookUrl: string;
+  twitterUrl: string;
+  tiktokUrl: string;
+  logoUrl: string;
+  iconUrl: string;
+  faviconUrl: string;
+  domain: string;
+  currency: string;
+}
+
+export const DEFAULT_BUSINESS_PROFILE: BusinessProfile = {
+  businessName: 'Naro Fashion',
+  businessNameSw: '',
+  tagline: 'Premium Fashion & Clothing in Tanzania',
+  taglineSw: '',
+  businessType: 'Fashion',
+  contactEmail: 'hello@narofashion.co.tz',
+  contactPhone: '+255 700 000 000',
+  contactAddress: 'Dar es Salaam, Tanzania',
+  contactAddressSw: '',
+  whatsappNumber: '255759047287',
+  instagramUrl: 'https://www.instagram.com/narofashion2019/',
+  facebookUrl: '',
+  twitterUrl: '',
+  tiktokUrl: '',
+  logoUrl: '/logo.jpg',
+  iconUrl: '/icon.jpg',
+  faviconUrl: '/favicon.jpg',
+  domain: 'narofashion.co.tz',
+  currency: 'TZS',
+};
+
+// ============================================================
 // UTILITY TYPES
 // ============================================================
 

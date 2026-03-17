@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import {
@@ -15,9 +16,16 @@ import {
 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useTranslation } from "@/lib/i18n";
+import { useSiteSettings } from "@/contexts/SiteSettingsContext";
+import { newsletterApi } from "@/lib/api";
 
 export default function Footer() {
   const { t } = useTranslation();
+  const { settings } = useSiteSettings();
+  const [footerEmail, setFooterEmail] = useState("");
+  const [footerSubscribing, setFooterSubscribing] = useState(false);
+  const [footerMsg, setFooterMsg] = useState("");
+  const [footerMsgSuccess, setFooterMsgSuccess] = useState(false);
 
   const shopLinks = [
     { name: t('footer.newArrivals'), href: '/shop?sort=newest' },
@@ -65,20 +73,46 @@ export default function Footer() {
                 {t('footer.subscribeDesc')}
               </p>
             </div>
-            <form
-              className="flex w-full max-w-md gap-2"
-              onSubmit={(e) => e.preventDefault()}
-            >
-              <input
-                type="email"
-                placeholder={t('common.email')}
-                className="flex-1 rounded-lg bg-dark-400 border border-dark-300 px-4 py-2.5 text-sm text-white placeholder:text-dark-200 outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500 transition-colors"
-              />
-              <Button variant="primary" size="md" className="shrink-0 gap-2">
-                <Send className="h-4 w-4" />
-                <span className="hidden sm:inline">{t('common.subscribe')}</span>
-              </Button>
-            </form>
+            <div className="w-full max-w-md">
+              <form
+                className="flex gap-2"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!footerEmail.trim()) return;
+                  setFooterSubscribing(true);
+                  setFooterMsg("");
+                  try {
+                    const res = await newsletterApi.subscribe({ email: footerEmail.trim() });
+                    setFooterMsg(res.message || "Subscribed successfully!");
+                    setFooterMsgSuccess(true);
+                    setFooterEmail("");
+                  } catch {
+                    setFooterMsg("Failed to subscribe. Please try again.");
+                    setFooterMsgSuccess(false);
+                  } finally {
+                    setFooterSubscribing(false);
+                  }
+                }}
+              >
+                <input
+                  type="email"
+                  required
+                  placeholder={t('common.email')}
+                  value={footerEmail}
+                  onChange={(e) => setFooterEmail(e.target.value)}
+                  className="flex-1 rounded-lg bg-dark-400 border border-dark-300 px-4 py-2.5 text-sm text-white placeholder:text-dark-200 outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500 transition-colors"
+                />
+                <Button variant="primary" size="md" className="shrink-0 gap-2" disabled={footerSubscribing}>
+                  <Send className="h-4 w-4" />
+                  <span className="hidden sm:inline">{footerSubscribing ? "..." : t('common.subscribe')}</span>
+                </Button>
+              </form>
+              {footerMsg && (
+                <p className={`text-xs mt-2 ${footerMsgSuccess ? 'text-green-400' : 'text-red-400'}`}>
+                  {footerMsg}
+                </p>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -89,8 +123,8 @@ export default function Footer() {
           {/* Brand Column */}
           <div className="col-span-2 md:col-span-4 lg:col-span-1 mb-4 lg:mb-0">
             <Link href="/" className="inline-flex items-center gap-2">
-              <Image src="/icon.jpg" alt="Naro Fashion" width={32} height={32} className="rounded-full" />
-              <span className="text-xl font-heading font-bold text-gold-500">NARO FASHION</span>
+              <Image src={settings.iconUrl} alt={settings.businessName} width={32} height={32} className="rounded-full" unoptimized />
+              <span className="text-xl font-heading font-bold text-gold-500">{settings.businessName.toUpperCase()}</span>
             </Link>
             <p className="mt-3 text-sm text-dark-200 max-w-xs">
               {t('footer.footerDesc')}
@@ -98,43 +132,53 @@ export default function Footer() {
             <div className="mt-4 space-y-2 text-sm text-dark-200">
               <div className="flex items-center gap-2">
                 <MapPin className="h-4 w-4 shrink-0 text-gold-500" />
-                <span>Dar es Salaam, Tanzania</span>
+                <span>{settings.contactAddress}</span>
               </div>
               <div className="flex items-center gap-2">
                 <Phone className="h-4 w-4 shrink-0 text-gold-500" />
-                <span>+255 700 000 000</span>
+                <span>{settings.contactPhone}</span>
               </div>
               <div className="flex items-center gap-2">
                 <Mail className="h-4 w-4 shrink-0 text-gold-500" />
-                <span>hello@narofashion.co.tz</span>
+                <span>{settings.contactEmail}</span>
               </div>
             </div>
 
             {/* Social Links */}
             <div className="mt-4 flex gap-3">
-              <a
-                href="#"
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 transition-colors"
-                aria-label="Facebook"
-              >
-                <Facebook className="h-4 w-4" />
-              </a>
-              <a
-                href="https://www.instagram.com/narofashion2019/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 transition-colors"
-                aria-label="Instagram"
-              >
-                <Instagram className="h-4 w-4" />
-              </a>
-              <a
-                href="#"
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 transition-colors"
-                aria-label="Twitter"
-              >
-                <Twitter className="h-4 w-4" />
-              </a>
+              {settings.facebookUrl && (
+                <a
+                  href={settings.facebookUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 transition-colors"
+                  aria-label="Facebook"
+                >
+                  <Facebook className="h-4 w-4" />
+                </a>
+              )}
+              {settings.instagramUrl && (
+                <a
+                  href={settings.instagramUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 transition-colors"
+                  aria-label="Instagram"
+                >
+                  <Instagram className="h-4 w-4" />
+                </a>
+              )}
+              {settings.twitterUrl && (
+                <a
+                  href={settings.twitterUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 transition-colors"
+                  aria-label="Twitter"
+                >
+                  <Twitter className="h-4 w-4" />
+                </a>
+              )}
             </div>
           </div>
 

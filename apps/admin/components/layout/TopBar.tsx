@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useTheme } from 'next-themes';
@@ -15,12 +15,27 @@ import {
   LogOut,
   User,
   Settings,
+  ShoppingCart,
+  AlertTriangle,
+  PackageX,
+  CalendarClock,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { adminApi } from '@/lib/api';
 
 interface TopBarProps {
   onMenuClick: () => void;
+}
+
+interface Notification {
+  id: string;
+  title: string;
+  message: string;
+  time: string;
+  unread: boolean;
+  href: string;
+  icon: 'order' | 'rental' | 'stock' | 'pickup';
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -28,6 +43,20 @@ const ROLE_LABELS: Record<string, string> = {
   MANAGER: 'Manager',
   STAFF: 'Staff',
   ADMIN: 'Admin',
+};
+
+const ICON_MAP = {
+  order: ShoppingCart,
+  rental: AlertTriangle,
+  stock: PackageX,
+  pickup: CalendarClock,
+};
+
+const ICON_COLOR_MAP = {
+  order: 'text-brand-gold',
+  rental: 'text-red-500',
+  stock: 'text-amber-500',
+  pickup: 'text-blue-500',
 };
 
 export default function TopBar({ onMenuClick }: TopBarProps) {
@@ -38,21 +67,110 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
+
   useEffect(() => { setMounted(true); }, []);
+
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (token) adminApi.setToken(token);
+
+      const [statsRes, overdueRes, pickupsRes] = await Promise.allSettled([
+        adminApi.getDashboardStats(),
+        adminApi.getOverdueRentals(),
+        adminApi.getUpcomingPickups(3),
+      ]);
+
+      const items: Notification[] = [];
+      let counter = 0;
+
+      // Recent orders notification
+      if (statsRes.status === 'fulfilled') {
+        const stats = statsRes.value as any;
+        if ((stats.ordersToday ?? 0) > 0) {
+          items.push({
+            id: `orders-today-${counter++}`,
+            title: `${stats.ordersToday} order${stats.ordersToday > 1 ? 's' : ''} today`,
+            message: `New orders worth ${formatCurrency(stats.totalRevenue ?? 0)} total revenue`,
+            time: 'Today',
+            unread: true,
+            href: '/dashboard/orders',
+            icon: 'order',
+          });
+        }
+        if ((stats.lowStockCount ?? 0) > 0 || (stats.outOfStockCount ?? 0) > 0) {
+          const lowCount = (stats.lowStockCount ?? 0) + (stats.outOfStockCount ?? 0);
+          items.push({
+            id: `low-stock-${counter++}`,
+            title: 'Low stock alert',
+            message: `${lowCount} product${lowCount > 1 ? 's' : ''} need restocking${stats.outOfStockCount ? ` (${stats.outOfStockCount} out of stock)` : ''}`,
+            time: 'Current',
+            unread: true,
+            href: '/dashboard/inventory',
+            icon: 'stock',
+          });
+        }
+      }
+
+      // Overdue rentals
+      if (overdueRes.status === 'fulfilled') {
+        const overdue = Array.isArray(overdueRes.value) ? overdueRes.value : (overdueRes.value as any)?.data || [];
+        if (overdue.length > 0) {
+          items.push({
+            id: `overdue-${counter++}`,
+            title: `${overdue.length} overdue rental${overdue.length > 1 ? 's' : ''}`,
+            message: overdue.length === 1
+              ? `${overdue[0].user?.firstName || 'Customer'} has not returned "${overdue[0].product?.name || 'item'}"`
+              : `${overdue.length} items past their return date`,
+            time: 'Action needed',
+            unread: true,
+            href: '/dashboard/rentals',
+            icon: 'rental',
+          });
+        }
+      }
+
+      // Upcoming pickups (next 3 days)
+      if (pickupsRes.status === 'fulfilled') {
+        const pickups = Array.isArray(pickupsRes.value) ? pickupsRes.value : (pickupsRes.value as any)?.data || [];
+        if (pickups.length > 0) {
+          items.push({
+            id: `pickups-${counter++}`,
+            title: `${pickups.length} upcoming pickup${pickups.length > 1 ? 's' : ''}`,
+            message: `${pickups.length} rental${pickups.length > 1 ? 's' : ''} scheduled for pickup in the next 3 days`,
+            time: 'Upcoming',
+            unread: true,
+            href: '/dashboard/rentals',
+            icon: 'pickup',
+          });
+        }
+      }
+
+      setNotifications(items);
+    } catch (err) {
+      console.error('Failed to fetch notifications:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user) fetchNotifications();
+  }, [user, fetchNotifications]);
+
+  const handleNotificationClick = (notification: Notification) => {
+    setReadIds((prev) => new Set(prev).add(notification.id));
+    setShowNotifications(false);
+    router.push(notification.href);
+  };
+
+  const unreadCount = notifications.filter((n) => !readIds.has(n.id) && n.unread).length;
 
   const themes = [
     { value: 'light', label: 'Light', icon: Sun },
     { value: 'dark', label: 'Dark', icon: Moon },
     { value: 'luxury', label: 'Luxury', icon: Sparkles },
   ];
-
-  const notifications = [
-    { id: 1, title: 'New order #NF-1042', message: 'A new order of TZS 185,000 has been placed', time: '5 min ago', unread: true },
-    { id: 2, title: 'Rental return overdue', message: 'Customer Amina has not returned "Gold Beaded Gown"', time: '1 hour ago', unread: true },
-    { id: 3, title: 'Low stock alert', message: 'Pink Silk Blouse has only 2 items left', time: '3 hours ago', unread: false },
-  ];
-
-  const unreadCount = notifications.filter((n) => n.unread).length;
 
   const fullName = user ? `${user.firstName} ${user.lastName}` : 'Loading...';
   const initials = user ? `${user.firstName[0]}${user.lastName[0]}`.toUpperCase() : '?';
@@ -156,42 +274,73 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
               <div className="absolute right-0 mt-2 w-80 z-50 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-lg">
-                <div className="px-4 py-3 border-b border-[hsl(var(--border))]">
+                <div className="px-4 py-3 border-b border-[hsl(var(--border))] flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">
                     Notifications
                   </h3>
+                  {unreadCount > 0 && (
+                    <button
+                      onClick={() => setReadIds(new Set(notifications.map((n) => n.id)))}
+                      className="text-xs text-brand-gold hover:text-brand-gold-dark font-medium"
+                    >
+                      Mark all read
+                    </button>
+                  )}
                 </div>
                 <div className="max-h-72 overflow-y-auto">
-                  {notifications.map((n) => (
-                    <div
-                      key={n.id}
-                      className={cn(
-                        'px-4 py-3 hover:bg-[hsl(var(--muted))] transition-colors cursor-pointer border-b border-[hsl(var(--border))] last:border-0',
-                        n.unread && 'bg-[hsl(var(--accent))]'
-                      )}
-                    >
-                      <div className="flex items-start gap-2">
-                        {n.unread && (
-                          <span className="mt-1.5 w-2 h-2 rounded-full bg-brand-gold flex-shrink-0" />
-                        )}
-                        <div className={cn(!n.unread && 'ml-4')}>
-                          <p className="text-sm font-medium text-[hsl(var(--foreground))]">
-                            {n.title}
-                          </p>
-                          <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">
-                            {n.message}
-                          </p>
-                          <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">
-                            {n.time}
-                          </p>
-                        </div>
-                      </div>
+                  {notifications.length === 0 ? (
+                    <div className="px-4 py-8 text-center">
+                      <Bell className="w-8 h-8 text-[hsl(var(--muted-foreground))] mx-auto mb-2 opacity-40" />
+                      <p className="text-sm text-[hsl(var(--muted-foreground))]">No notifications</p>
                     </div>
-                  ))}
+                  ) : (
+                    notifications.map((n) => {
+                      const isUnread = n.unread && !readIds.has(n.id);
+                      const IconComp = ICON_MAP[n.icon];
+                      return (
+                        <div
+                          key={n.id}
+                          onClick={() => handleNotificationClick(n)}
+                          className={cn(
+                            'px-4 py-3 hover:bg-[hsl(var(--muted))] transition-colors cursor-pointer border-b border-[hsl(var(--border))] last:border-0',
+                            isUnread && 'bg-[hsl(var(--accent))]'
+                          )}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className={cn('mt-0.5 flex-shrink-0', ICON_COLOR_MAP[n.icon])}>
+                              <IconComp className="w-4 h-4" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-start gap-2">
+                                <p className="text-sm font-medium text-[hsl(var(--foreground))] flex-1">
+                                  {n.title}
+                                </p>
+                                {isUnread && (
+                                  <span className="mt-1.5 w-2 h-2 rounded-full bg-brand-gold flex-shrink-0" />
+                                )}
+                              </div>
+                              <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">
+                                {n.message}
+                              </p>
+                              <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1 opacity-60">
+                                {n.time}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
                 <div className="px-4 py-2 border-t border-[hsl(var(--border))]">
-                  <button className="text-sm text-brand-gold hover:text-brand-gold-dark w-full text-center font-medium">
-                    View all notifications
+                  <button
+                    onClick={() => {
+                      setShowNotifications(false);
+                      router.push('/dashboard/settings');
+                    }}
+                    className="text-sm text-brand-gold hover:text-brand-gold-dark w-full text-center font-medium"
+                  >
+                    Notification settings
                   </button>
                 </div>
               </div>

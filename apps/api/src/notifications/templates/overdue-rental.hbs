@@ -1,0 +1,34 @@
+<h2 style="color: #cc0000; margin-top: 0;">Overdue Rental Notice</h2>
+
+<p>Dear Admin,</p>
+
+<p style="color: #cc0000; font-weight: 600;">The following rental is overdue and requires immediate attention:</p>
+
+<div class="info-box" style="border-left-color: #cc0000;">
+  <p><span class="label">Rental ID:</span> {{rentalId}}</p>
+  {{#if rentalNumber}}
+  <p><span class="label">Rental Number:</span> {{rentalNumber}}</p>
+  {{/if}}
+  <p><span class="label">Customer:</span> {{customerName}}</p>
+  {{#if customerPhone}}
+  <p><span class="label">Phone:</span> {{customerPhone}}</p>
+  {{/if}}
+  {{#if customerEmail}}
+  <p><span class="label">Email:</span> {{customerEmail}}</p>
+  {{/if}}
+  <p><span class="label">Return Date:</span> {{returnDate}}</p>
+  <p><span class="label">Days Overdue:</span> <span style="color: #cc0000; font-weight: 700;">{{daysOverdue}}</span></p>
+  {{#if productName}}
+  <p><span class="label">Item:</span> {{productName}}</p>
+  {{/if}}
+</div>
+
+<p>Please contact the customer immediately to arrange the return of the rented item.</p>
+
+<p style="text-align: center;">
+  <a href="{{adminUrl}}/dashboard/rentals" class="btn-primary" style="background-color: #cc0000; color: #ffffff;">View Overdue Rentals</a>
+</p>
+
+<p>
+  <strong style="color: #D4AF37;">{{businessName}} System</strong>
+</p>

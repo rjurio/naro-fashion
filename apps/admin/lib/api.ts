@@ -4,12 +4,34 @@ interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
 }
 
+class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 class AdminApiClient {
   private baseUrl: string;
   private token: string | null = null;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
+  }
+
+  private async handleError(response: Response): Promise<never> {
+    let message = `API Error: ${response.status} ${response.statusText}`;
+    try {
+      const body = await response.json();
+      if (body.message) {
+        message = Array.isArray(body.message) ? body.message.join(', ') : body.message;
+      }
+    } catch {
+      // Response body isn't JSON, use default message
+    }
+    throw new ApiError(response.status, message);
   }
 
   setToken(token: string) {
@@ -49,7 +71,7 @@ class AdminApiClient {
       ...fetchOptions,
     });
     if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      await this.handleError(response);
     }
     return response.json();
   }
@@ -63,7 +85,7 @@ class AdminApiClient {
       ...fetchOptions,
     });
     if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      await this.handleError(response);
     }
     return response.json();
   }
@@ -77,7 +99,7 @@ class AdminApiClient {
       ...fetchOptions,
     });
     if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      await this.handleError(response);
     }
     return response.json();
   }
@@ -90,7 +112,7 @@ class AdminApiClient {
       ...fetchOptions,
     });
     if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      await this.handleError(response);
     }
     return response.json();
   }
@@ -104,7 +126,7 @@ class AdminApiClient {
       ...fetchOptions,
     });
     if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      await this.handleError(response);
     }
     return response.json();
   }
@@ -116,6 +138,14 @@ class AdminApiClient {
 
   getProfile() {
     return this.get<any>('/auth/me');
+  }
+
+  forgotPassword(email: string) {
+    return this.post<{ message: string }>('/auth/forgot-password', { email });
+  }
+
+  resetPassword(token: string, newPassword: string) {
+    return this.post<{ message: string }>('/auth/reset-password', { token, newPassword });
   }
 
   // ===== Dashboard / Analytics =====
@@ -242,7 +272,25 @@ class AdminApiClient {
     return this.get<any[]>('/rentals/upcoming-pickups', { params: days ? { days: String(days) } : undefined });
   }
   getOverdueRentals() {
-    return this.get<any>('/rentals/admin', { params: { status: 'OVERDUE' } });
+    return this.get<any[]>('/rentals/overdue');
+  }
+  getPendingReturns() {
+    return this.get<any[]>('/rentals/pending-returns');
+  }
+  updateRental(id: string, data: any) {
+    return this.patch<any>(`/rentals/${id}`, data);
+  }
+  async uploadTransportReceipt(rentalId: string, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const res = await fetch(`${this.baseUrl}/rentals/${rentalId}/transport-receipt`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    if (!res.ok) throw new Error('Upload failed');
+    return res.json();
   }
 
   // ===== Rental Checklists =====
@@ -284,11 +332,24 @@ class AdminApiClient {
   }
 
   // ===== Rental Policies =====
-  getRentalPolicies() {
-    return this.get<any>('/rental-policies');
+  async getRentalPolicies() {
+    const raw = await this.get<any>('/rental-policies');
+    return {
+      bufferDays: raw.bufferDaysBetweenRentals,
+      downPaymentPercent: raw.defaultDownPaymentPct,
+      lateFeePerDay: raw.lateFeePerDay != null ? Number(raw.lateFeePerDay) : undefined,
+      maxRentalDuration: raw.maxRentalDurationDays,
+      preparationReminder: raw.advancePreparationReminderDays,
+    };
   }
   updateRentalPolicies(data: any) {
-    return this.patch<any>('/rental-policies', data);
+    return this.patch<any>('/rental-policies', {
+      bufferDaysBetweenRentals: data.bufferDays,
+      defaultDownPaymentPct: data.downPaymentPercent,
+      lateFeePerDay: data.lateFeePerDay,
+      maxRentalDurationDays: data.maxRentalDuration,
+      advancePreparationReminderDays: data.preparationReminder,
+    });
   }
 
   // ===== Reviews =====
@@ -357,7 +418,7 @@ class AdminApiClient {
 
   // ===== CMS =====
   getBanners() {
-    return this.get<any[]>('/cms/banners');
+    return this.get<any[]>('/cms/banners/admin');
   }
   createBanner(data: any) {
     return this.post<any>('/cms/banners', data);
@@ -398,8 +459,128 @@ class AdminApiClient {
   getSettings() {
     return this.get<any[]>('/cms/settings');
   }
-  updateSetting(key: string, value: string) {
-    return this.post<any>('/cms/settings', { key, value });
+  updateSetting(key: string, data: { value: string; type?: string }) {
+    return this.patch<any>(`/cms/settings/${key}`, data);
+  }
+  getBusinessProfile() {
+    return this.get<any>('/cms/settings/business-profile');
+  }
+  async uploadBranding(file: File): Promise<{ url: string; filename: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const res = await fetch(`${this.baseUrl}/upload/branding`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
+      throw new Error(err.message || 'Upload failed');
+    }
+    return res.json();
+  }
+
+  // ===== Hero Slides =====
+  getHeroSlides() {
+    return this.get<any[]>('/cms/hero-slides/admin');
+  }
+  createHeroSlide(data: any) {
+    return this.post<any>('/cms/hero-slides', data);
+  }
+  updateHeroSlide(id: string, data: any) {
+    return this.patch<any>(`/cms/hero-slides/${id}`, data);
+  }
+  deleteHeroSlide(id: string) {
+    return this.delete<any>(`/cms/hero-slides/${id}`);
+  }
+  restoreHeroSlide(id: string) {
+    return this.patch<any>(`/cms/hero-slides/${id}/restore`, {});
+  }
+  getDeletedHeroSlides() {
+    return this.get<any[]>('/cms/hero-slides/deleted');
+  }
+  async uploadHeroSlide(file: File): Promise<{ url: string; filename: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const res = await fetch(`${this.baseUrl}/upload/hero-slide`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
+      throw new Error(err.message || 'Upload failed');
+    }
+    return res.json();
+  }
+
+  // ===== Instagram Posts =====
+  getInstagramPosts() {
+    return this.get<any[]>('/cms/instagram-posts/admin');
+  }
+  createInstagramPost(data: any) {
+    return this.post<any>('/cms/instagram-posts', data);
+  }
+  updateInstagramPost(id: string, data: any) {
+    return this.patch<any>(`/cms/instagram-posts/${id}`, data);
+  }
+  deleteInstagramPost(id: string) {
+    return this.delete<any>(`/cms/instagram-posts/${id}`);
+  }
+  restoreInstagramPost(id: string) {
+    return this.patch<any>(`/cms/instagram-posts/${id}/restore`, {});
+  }
+  getDeletedInstagramPosts() {
+    return this.get<any[]>('/cms/instagram-posts/deleted');
+  }
+  syncInstagramPosts() {
+    return this.post<any>('/cms/instagram-posts/sync', {});
+  }
+  pinInstagramPost(id: string) {
+    return this.patch<any>(`/cms/instagram-posts/${id}/pin`, {});
+  }
+
+  // ===== Newsletter =====
+  getNewsletterDashboard() {
+    return this.get<any>('/newsletter/dashboard');
+  }
+  getNewsletters(params?: Record<string, string>) {
+    return this.get<any>('/newsletter', { params });
+  }
+  getNewsletter(id: string) {
+    return this.get<any>(`/newsletter/${id}`);
+  }
+  createNewsletter(data: any) {
+    return this.post<any>('/newsletter', data);
+  }
+  updateNewsletter(id: string, data: any) {
+    return this.patch<any>(`/newsletter/${id}`, data);
+  }
+  deleteNewsletter(id: string) {
+    return this.delete<any>(`/newsletter/${id}`);
+  }
+  sendNewsletter(id: string) {
+    return this.post<any>(`/newsletter/${id}/send`, {});
+  }
+  getNewsletterDeliveries(id: string) {
+    return this.get<any>(`/newsletter/${id}/deliveries`);
+  }
+  getNewsletterFailed(id: string) {
+    return this.get<any[]>(`/newsletter/${id}/failed`);
+  }
+  resendFailedNewsletter(id: string) {
+    return this.post<any>(`/newsletter/${id}/resend-failed`, {});
+  }
+  getSubscribers(params?: Record<string, string>) {
+    return this.get<any>('/newsletter/subscribers', { params });
+  }
+  getSubscriberStats() {
+    return this.get<any>('/newsletter/subscribers/stats');
+  }
+  getNewArrivalsPreview() {
+    return this.get<any[]>('/newsletter/new-arrivals-preview');
   }
 
   // ===== Referrals =====
