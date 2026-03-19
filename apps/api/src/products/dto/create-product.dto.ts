@@ -91,6 +91,10 @@ export class CreateProductDto {
   availabilityMode?: string;
 
   @IsOptional()
+  @IsString()
+  sizeGuideId?: string;
+
+  @IsOptional()
   @IsBoolean()
   isFeatured?: boolean;
 
@@ -148,4 +152,12 @@ export class CreateProductDto {
   @Min(0)
   @Type(() => Number)
   stock?: number;
+
+  @IsOptional()
+  @IsString()
+  model3dUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  model3dPosterUrl?: string;
 }

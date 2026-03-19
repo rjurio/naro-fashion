@@ -25,6 +25,7 @@ import Button from "@/components/ui/Button";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { formatPrice } from "@/lib/utils";
 import { cartApi, ordersApi, paymentsApi } from "@/lib/api";
+import { useToast } from "@/contexts/ToastContext";
 
 const steps = [
   { id: 1, label: "Shipping", icon: MapPin },
@@ -51,6 +52,7 @@ type PaymentFlowStatus = "idle" | "initiating" | "processing" | "completed" | "f
 export default function CheckoutPage() {
   const { settings } = useSiteSettings();
   const router = useRouter();
+  const toast = useToast();
   const [currentStep, setCurrentStep] = useState(1);
   const [orderItems, setOrderItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -250,7 +252,7 @@ export default function CheckoutPage() {
         router.push(`/orders/${createdOrderId}?success=true`);
       }
     } catch {
-      alert("Failed to place order. Please try again.");
+      toast.error("Failed to place order. Please try again.");
       setPaymentFlowStatus("idle");
     } finally {
       setPlacing(false);

@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 
 export class CreateFlashSaleDto {
   title: string;
@@ -21,12 +22,16 @@ export class UpdateFlashSaleDto {
 
 @Injectable()
 export class FlashSalesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async findAllActive() {
     const now = new Date();
     return this.prisma.flashSale.findMany({
       where: {
+        tenantId: this.tenantContext.requireId,
         startDate: { lte: now },
         endDate: { gte: now },
         deletedAt: null,
@@ -51,8 +56,8 @@ export class FlashSalesService {
   }
 
   async findOne(id: string) {
-    const sale = await this.prisma.flashSale.findUnique({
-      where: { id },
+    const sale = await this.prisma.flashSale.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
       include: {
         items: {
           include: {
@@ -79,6 +84,7 @@ export class FlashSalesService {
 
     return this.prisma.flashSale.create({
       data: {
+        tenantId: this.tenantContext.requireId,
         ...rest,
         startDate: new Date(startDate),
         endDate: new Date(endDate),
@@ -94,7 +100,7 @@ export class FlashSalesService {
   }
 
   async update(id: string, dto: UpdateFlashSaleDto) {
-    const sale = await this.prisma.flashSale.findUnique({ where: { id } });
+    const sale = await this.prisma.flashSale.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!sale) throw new NotFoundException('Flash sale not found');
 
     const { productIds, startDate, endDate, salePrice, ...rest } = dto;
@@ -122,7 +128,7 @@ export class FlashSalesService {
   }
 
   async delete(id: string) {
-    const sale = await this.prisma.flashSale.findUnique({ where: { id } });
+    const sale = await this.prisma.flashSale.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!sale) throw new NotFoundException('Flash sale not found');
 
     await this.prisma.flashSale.update({
@@ -134,7 +140,7 @@ export class FlashSalesService {
   }
 
   async restore(id: string) {
-    const sale = await this.prisma.flashSale.findUnique({ where: { id } });
+    const sale = await this.prisma.flashSale.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!sale || !sale.deletedAt) throw new NotFoundException('Deleted flash sale not found');
 
     return this.prisma.flashSale.update({
@@ -146,7 +152,7 @@ export class FlashSalesService {
 
   async findDeleted() {
     return this.prisma.flashSale.findMany({
-      where: { deletedAt: { not: null } },
+      where: { deletedAt: { not: null }, tenantId: this.tenantContext.requireId },
       include: { items: true },
       orderBy: { deletedAt: 'desc' },
     });

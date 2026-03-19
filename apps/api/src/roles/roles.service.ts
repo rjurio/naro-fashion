@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 
@@ -8,7 +9,10 @@ const MANAGER_EXCLUDED = ['admins:create', 'admins:delete', 'roles:manage', 'set
 
 @Injectable()
 export class RolesService implements OnModuleInit {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async onModuleInit() {
     await this.seedSystemRoles();
@@ -33,7 +37,7 @@ export class RolesService implements OnModuleInit {
     ];
 
     for (const role of systemRoles) {
-      const existing = await this.prisma.role.findUnique({ where: { name: role.name } });
+      const existing = await this.prisma.role.findFirst({ where: { name: role.name } });
       if (!existing) {
         const created = await this.prisma.role.create({
           data: { name: role.name, description: role.description, isSystem: true },
@@ -48,15 +52,15 @@ export class RolesService implements OnModuleInit {
 
   async findAll(includeDeleted = false) {
     return this.prisma.role.findMany({
-      where: { ...(includeDeleted ? {} : { deletedAt: null }) },
+      where: { tenantId: this.tenantContext.requireId, ...(includeDeleted ? {} : { deletedAt: null }) },
       include: { _count: { select: { permissions: true, adminUsers: true } } },
       orderBy: { createdAt: 'asc' },
     });
   }
 
   async findOne(id: string) {
-    const role = await this.prisma.role.findUnique({
-      where: { id },
+    const role = await this.prisma.role.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
       include: { permissions: { include: { permission: true } }, _count: { select: { adminUsers: true } } },
     });
     if (!role) throw new NotFoundException('Role not found');
@@ -73,7 +77,7 @@ export class RolesService implements OnModuleInit {
   }
 
   async update(id: string, dto: UpdateRoleDto) {
-    const role = await this.prisma.role.findUnique({ where: { id } });
+    const role = await this.prisma.role.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!role) throw new NotFoundException('Role not found');
     if (role.isSystem && dto.name) throw new ForbiddenException('Cannot rename system roles');
     try {
@@ -88,7 +92,7 @@ export class RolesService implements OnModuleInit {
   }
 
   async remove(id: string) {
-    const role = await this.prisma.role.findUnique({ where: { id } });
+    const role = await this.prisma.role.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!role) throw new NotFoundException('Role not found');
     if (role.isSystem) throw new ForbiddenException('Cannot delete system roles');
     return this.prisma.role.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
@@ -114,7 +118,7 @@ export class RolesService implements OnModuleInit {
   }
 
   async removePermission(roleId: string, permissionId: string) {
-    const role = await this.prisma.role.findUnique({ where: { id: roleId } });
+    const role = await this.prisma.role.findFirst({ where: { id: roleId, tenantId: this.tenantContext.requireId } });
     if (!role) throw new NotFoundException('Role not found');
     if (role.isSystem) throw new ForbiddenException('Cannot remove permissions from system roles');
     await this.prisma.rolePermission.delete({ where: { roleId_permissionId: { roleId, permissionId } } });

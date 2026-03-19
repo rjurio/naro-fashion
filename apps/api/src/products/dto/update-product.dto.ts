@@ -95,6 +95,10 @@ export class UpdateProductDto {
   availabilityMode?: string;
 
   @IsOptional()
+  @IsString()
+  sizeGuideId?: string;
+
+  @IsOptional()
   @IsBoolean()
   isFeatured?: boolean;
 
@@ -171,4 +175,12 @@ export class UpdateProductDto {
   @IsOptional()
   @IsString()
   supplierContact?: string;
+
+  @IsOptional()
+  @IsString()
+  model3dUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  model3dPosterUrl?: string;
 }

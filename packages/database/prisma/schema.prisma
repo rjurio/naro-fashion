@@ -8,13 +8,149 @@ datasource db {
 }
 
 // ============================================================
+// MULTI-TENANCY
+// ============================================================
+
+model Tenant {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  domain      String?   @unique   // Custom domain, e.g. "shop.narofashion.co.tz"
+  status      String    @default("ACTIVE") // ACTIVE, TRIAL, SUSPENDED, DEACTIVATED
+  trialEndsAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  branding      TenantBranding?
+  subscriptions TenantSubscription[]
+  payments      TenantPayment[]
+  modules       TenantModule[]
+  adminUsers    AdminUser[]
+  users         User[]
+
+  @@index([slug])
+  @@index([domain])
+  @@index([status])
+}
+
+model PlatformAdmin {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         String   @default("PLATFORM_ADMIN") // PLATFORM_ADMIN, PLATFORM_SUPPORT
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([email])
+}
+
+model TenantBranding {
+  id              String  @id @default(cuid())
+  tenantId        String  @unique
+  companyName     String
+  tagline         String?
+  logoUrl         String?
+  iconUrl         String?
+  faviconUrl      String?
+  colorPrimary    String  @default("#D4AF37")
+  colorSecondary  String  @default("#1A1A1A")
+  colorAccent     String  @default("#D4AF37")
+  fontHeading     String  @default("Playfair Display")
+  fontBody        String  @default("Inter")
+  customCss       String?
+  whatsappNumber  String?
+  socialLinks     Json?     // { instagram, facebook, tiktok, twitter }
+  metaTitle       String?
+  metaDescription String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+}
+
+model SubscriptionPlan {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  description    String?
+  priceMonthly   Decimal  @db.Decimal(12, 2)
+  priceYearly    Decimal? @db.Decimal(12, 2)
+  maxProducts    Int?                          // null = unlimited
+  maxAdminUsers  Int?
+  maxStorageGB   Int      @default(5)
+  enabledModules String[]                      // ["products","orders","rentals","pos",...]
+  isActive       Boolean  @default(true)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  subscriptions TenantSubscription[]
+}
+
+model TenantSubscription {
+  id           String    @id @default(cuid())
+  tenantId     String
+  planId       String
+  status       String    @default("ACTIVE") // ACTIVE, EXPIRED, CANCELLED, GRACE
+  billingCycle String    @default("MONTHLY") // MONTHLY, YEARLY
+  startDate    DateTime  @default(now())
+  endDate      DateTime
+  autoRenew    Boolean   @default(true)
+  graceEndDate DateTime?                    // End of grace period after expiry
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tenant Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  plan   SubscriptionPlan @relation(fields: [planId], references: [id])
+
+  @@index([tenantId])
+  @@index([endDate])
+  @@index([status])
+}
+
+model TenantPayment {
+  id             String    @id @default(cuid())
+  tenantId       String
+  amount         Decimal   @db.Decimal(12, 2)
+  currency       String    @default("TZS")
+  method         String                         // MOBILE_MONEY, BANK_TRANSFER, MANUAL
+  status         String    @default("PENDING")  // PENDING, COMPLETED, FAILED
+  transactionRef String?   @unique
+  invoiceNumber  String?   @unique
+  periodStart    DateTime
+  periodEnd      DateTime
+  paidAt         DateTime?
+  notes          String?
+  createdAt      DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+model TenantModule {
+  id         String   @id @default(cuid())
+  tenantId   String
+  moduleCode String                            // "products", "orders", "rentals", "pos", etc.
+  isEnabled  Boolean  @default(true)
+  enabledAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([tenantId, moduleCode])
+  @@index([tenantId])
+}
+
+// ============================================================
 // USERS & AUTH
 // ============================================================
 
 model User {
   id            String    @id @default(cuid())
-  email         String?   @unique
-  phone         String?   @unique
+  tenantId      String?
+  email         String?
+  phone         String?
   passwordHash  String?
   firstName     String?
   lastName      String?
@@ -28,6 +164,7 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  tenant        Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   addresses     Address[]
   orders        Order[]
   reviews       Review[]
@@ -48,6 +185,9 @@ model User {
   passwordResetToken   String?
   passwordResetExpires DateTime?
 
+  @@unique([tenantId, email])
+  @@unique([tenantId, phone])
+  @@index([tenantId])
   @@index([email])
   @@index([phone])
 }
@@ -75,7 +215,8 @@ model Address {
 
 model AdminUser {
   id           String   @id @default(cuid())
-  email        String   @unique
+  tenantId     String?
+  email        String   @unique  // Globally unique — no tenant context needed at admin login
   passwordHash String
   firstName    String
   lastName     String
@@ -99,16 +240,19 @@ model AdminUser {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   activityLogs AdminActivityLog[]
   checkedItems RentalChecklistEntry[]
   roles        AdminUserRole[]
 
+  @@index([tenantId])
   @@index([email])
   @@index([deletedAt])
 }
 
 model AdminActivityLog {
   id          String   @id @default(cuid())
+  tenantId    String?
   adminUserId String
   action      String
   entity      String
@@ -119,6 +263,7 @@ model AdminActivityLog {
 
   adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
+  @@index([tenantId])
   @@index([adminUserId])
   @@index([createdAt])
 }
@@ -128,42 +273,48 @@ model AdminActivityLog {
 // ============================================================
 
 model Category {
-  id          String     @id @default(cuid())
-  name        String
-  nameSwahili String?
-  slug        String     @unique
-  description String?
-  imageUrl    String?
-  parentId    String?
-  sortOrder   Int        @default(0)
-  isActive    Boolean    @default(true)
-  deletedAt   DateTime?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id            String     @id @default(cuid())
+  tenantId      String?
+  name          String
+  nameSwahili   String?
+  slug          String
+  description   String?
+  imageUrl      String?
+  parentId      String?
+  sizeGuideId   String?
+  sortOrder     Int        @default(0)
+  isActive      Boolean    @default(true)
+  deletedAt     DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
-  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  children Category[] @relation("CategoryTree")
-  products Product[]
+  parent       Category?   @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  children     Category[]  @relation("CategoryTree")
+  products     Product[]
+  sizeGuideRef SizeGuide?  @relation(fields: [sizeGuideId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
+  @@unique([tenantId, slug])
+  @@index([tenantId])
   @@index([parentId])
   @@index([slug])
 }
 
 model Product {
   id                String   @id @default(cuid())
+  tenantId          String?
   name              String
   nameSwahili       String?
-  slug              String   @unique
+  slug              String
   description       String?
   descriptionSwahili String?
   categoryId        String
   availabilityMode  String   @default("PURCHASE_ONLY") // PURCHASE_ONLY, RENTAL_ONLY, BOTH
   basePrice         Decimal  @db.Decimal(12, 2)
   compareAtPrice    Decimal? @db.Decimal(12, 2)
-  sku               String?  @unique
+  sku               String?
   isActive          Boolean  @default(true)
   isFeatured        Boolean  @default(false)
-  sizeGuide         Json?
+  sizeGuideId       String?
   specifications    Json?
 
   // Rental-specific fields
@@ -184,11 +335,16 @@ model Product {
   supplierContact   String?
   lastRestockedAt   DateTime?
 
+  // 3D model
+  model3dUrl        String?   // URL to GLB/GLTF file in /uploads/models/
+  model3dPosterUrl  String?   // Optional poster image shown while 3D model loads
+
   deletedAt    DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   category               Category               @relation(fields: [categoryId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  sizeGuideRef           SizeGuide?             @relation(fields: [sizeGuideId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   variants               ProductVariant[]
   images                 ProductImage[]
   videos                 ProductVideo[]
@@ -201,6 +357,9 @@ model Product {
   inventoryTransactions  InventoryTransaction[]
   events                 CustomerEvent[]
 
+  @@unique([tenantId, slug])
+  @@unique([tenantId, sku])
+  @@index([tenantId])
   @@index([categoryId])
   @@index([slug])
   @@index([availabilityMode])
@@ -209,10 +368,11 @@ model Product {
 
 model ProductVariant {
   id        String  @id @default(cuid())
+  tenantId  String?
   productId String
   name      String  // e.g., "Red / Large"
-  sku       String  @unique
-  barcode   String? @unique
+  sku       String
+  barcode   String?
   size      String?
   color     String?
   colorHex  String?
@@ -227,6 +387,9 @@ model ProductVariant {
   orderItems   OrderItem[]
   rentalOrders RentalOrder[]
 
+  @@unique([tenantId, sku])
+  @@unique([tenantId, barcode])
+  @@index([tenantId])
   @@index([productId])
   @@index([sku])
   @@index([barcode])
@@ -300,7 +463,8 @@ model WishlistItem {
 
 model Order {
   id            String   @id @default(cuid())
-  orderNumber   String   @unique
+  tenantId      String?
+  orderNumber   String
   userId        String?
   addressId     String?
   status        String   @default("PENDING")
@@ -333,6 +497,8 @@ model Order {
   shipment   Shipment?
   invoice    Invoice?
 
+  @@unique([tenantId, orderNumber])
+  @@index([tenantId])
   @@index([userId])
   @@index([orderNumber])
   @@index([status])
@@ -360,6 +526,7 @@ model OrderItem {
 
 model Payment {
   id              String   @id @default(cuid())
+  tenantId        String?
   orderId         String?
   rentalOrderId   String?
   layawayId       String?
@@ -375,6 +542,7 @@ model Payment {
   rentalOrder RentalOrder? @relation(fields: [rentalOrderId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   layaway     Layaway?     @relation(fields: [layawayId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
+  @@index([tenantId])
   @@index([orderId])
   @@index([rentalOrderId])
   @@index([layawayId])
@@ -383,6 +551,7 @@ model Payment {
 
 model Shipment {
   id            String   @id @default(cuid())
+  tenantId      String?
   orderId       String   @unique
   trackingCode  String?
   carrier       String?
@@ -397,17 +566,22 @@ model Shipment {
   order        Order         @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   shippingZone ShippingZone? @relation(fields: [shippingZoneId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
+  @@index([tenantId])
   @@index([orderId])
 }
 
 model Invoice {
-  id          String   @id @default(cuid())
-  orderId     String   @unique
-  invoiceNumber String @unique
+  id            String   @id @default(cuid())
+  tenantId      String?
+  orderId       String   @unique
+  invoiceNumber String
   pdfUrl      String?
   issuedAt    DateTime @default(now())
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([tenantId, invoiceNumber])
+  @@index([tenantId])
 }
 
 // ============================================================
@@ -416,6 +590,7 @@ model Invoice {
 
 model ShippingZone {
   id          String   @id @default(cuid())
+  tenantId    String?
   name        String
   description String?
   regions     String[] // List of region names
@@ -425,6 +600,8 @@ model ShippingZone {
 
   rates     ShippingRate[]
   shipments Shipment[]
+
+  @@index([tenantId])
 }
 
 model ShippingRate {
@@ -450,6 +627,7 @@ model ShippingRate {
 
 model Review {
   id         String   @id @default(cuid())
+  tenantId   String?
   userId     String
   productId  String
   rating     Int      // 1-5
@@ -465,6 +643,7 @@ model Review {
   images  ReviewImage[]
 
   @@unique([userId, productId])
+  @@index([tenantId])
   @@index([productId])
   @@index([isApproved])
 }
@@ -475,6 +654,7 @@ model Review {
 
 model CustomerIDDocument {
   id               String   @id @default(cuid())
+  tenantId         String?
   userId           String
   idType           String   @default("NATIONAL_ID")
   idNumber         String
@@ -488,13 +668,15 @@ model CustomerIDDocument {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
+  @@index([tenantId])
   @@index([userId])
   @@index([verificationStatus])
 }
 
 model RentalOrder {
   id               String   @id @default(cuid())
-  rentalNumber     String   @unique
+  tenantId         String?
+  rentalNumber     String
   userId           String
   productId        String
   variantId        String
@@ -531,6 +713,8 @@ model RentalOrder {
   checklist RentalChecklistEntry[]
   reminders RentalPreparationReminder[]
 
+  @@unique([tenantId, rentalNumber])
+  @@index([tenantId])
   @@index([userId])
   @@index([status])
   @@index([pickupDate])
@@ -552,6 +736,7 @@ model RentalPreparationReminder {
 
 model RentalChecklistTemplate {
   id          String   @id @default(cuid())
+  tenantId    String?
   name        String
   description String?
   isDefault   Boolean  @default(false)
@@ -561,6 +746,8 @@ model RentalChecklistTemplate {
   updatedAt   DateTime @updatedAt
 
   items RentalChecklistTemplateItem[]
+
+  @@index([tenantId])
 }
 
 model RentalChecklistTemplateItem {
@@ -595,12 +782,15 @@ model RentalChecklistEntry {
 
 model RentalPolicy {
   id                           String   @id @default(cuid())
+  tenantId                     String?
   bufferDaysBetweenRentals     Int      @default(7)
   defaultDownPaymentPct        Int      @default(25)
   lateFeePerDay                Decimal  @db.Decimal(12, 2) @default(10000)
   maxRentalDurationDays        Int      @default(30)
   advancePreparationReminderDays Int    @default(8)
   updatedAt                    DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 // ============================================================
@@ -609,6 +799,7 @@ model RentalPolicy {
 
 model FlashSale {
   id          String   @id @default(cuid())
+  tenantId    String?
   title       String
   titleSwahili String?
   description String?
@@ -621,6 +812,7 @@ model FlashSale {
 
   items FlashSaleItem[]
 
+  @@index([tenantId])
   @@index([startDate, endDate])
   @@index([isActive])
 }
@@ -640,8 +832,9 @@ model FlashSaleItem {
 
 model ReferralCode {
   id        String   @id @default(cuid())
+  tenantId  String?
   userId    String   @unique
-  code      String   @unique
+  code      String
   discount  Decimal  @db.Decimal(12, 2) @default(5000) // TZS discount
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -649,6 +842,8 @@ model ReferralCode {
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   referrals Referral[]
 
+  @@unique([tenantId, code])
+  @@index([tenantId])
   @@index([code])
 }
 
@@ -675,6 +870,7 @@ model Referral {
 
 model Banner {
   id          String   @id @default(cuid())
+  tenantId    String?
   title       String
   titleSwahili String?
   subtitle    String?
@@ -686,10 +882,13 @@ model Banner {
   deletedAt   DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 model HeroSlide {
   id          String    @id @default(cuid())
+  tenantId    String?
   title       String?
   imageUrl    String
   sortOrder   Int       @default(0)
@@ -698,15 +897,17 @@ model HeroSlide {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  @@index([tenantId])
   @@index([isActive, sortOrder])
   @@index([deletedAt])
 }
 
 model Page {
   id             String   @id @default(cuid())
+  tenantId       String?
   title          String
   titleSwahili   String?
-  slug           String   @unique
+  slug           String
   content        String
   contentSwahili String?
   isPublished    Boolean  @default(false)
@@ -714,20 +915,52 @@ model Page {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  @@unique([tenantId, slug])
+  @@index([tenantId])
   @@index([slug])
 }
 
-model SiteSetting {
-  id    String @id @default(cuid())
-  key   String @unique
-  value String
-  type  String @default("string") // string, json, boolean, number
+model SizeGuide {
+  id               String    @id @default(cuid())
+  tenantId         String?
+  name             String
+  nameSwahili      String?
+  slug             String
+  content          String
+  contentSwahili   String?
+  pdfUrl           String?
+  pdfUrlSwahili    String?
+  isDefault        Boolean   @default(false)
+  isActive         Boolean   @default(true)
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
+  products   Product[]
+  categories Category[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@index([slug])
+  @@index([isDefault])
+  @@index([deletedAt])
+}
+
+model SiteSetting {
+  id       String  @id @default(cuid())
+  tenantId String?
+  key      String
+  value    String
+  type     String  @default("string") // string, json, boolean, number
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
   @@index([key])
 }
 
 model InstagramPost {
   id               String    @id @default(cuid())
+  tenantId         String?
   caption          String?
   imageUrl         String
   postUrl          String?
@@ -745,6 +978,7 @@ model InstagramPost {
   mediaType        String?   // IMAGE, VIDEO, CAROUSEL_ALBUM
   postedAt         DateTime?
 
+  @@index([tenantId])
   @@index([isActive, sortOrder])
   @@index([deletedAt])
   @@index([source])
@@ -757,7 +991,8 @@ model InstagramPost {
 
 model NewsletterSubscriber {
   id               String    @id @default(cuid())
-  email            String    @unique
+  tenantId         String?
+  email            String
   name             String?
   isActive         Boolean   @default(true)
   source           String    @default("STOREFRONT") // STOREFRONT, ADMIN, IMPORT
@@ -769,6 +1004,8 @@ model NewsletterSubscriber {
 
   deliveries NewsletterDelivery[]
 
+  @@unique([tenantId, email])
+  @@index([tenantId])
   @@index([email])
   @@index([isActive])
   @@index([unsubscribeToken])
@@ -776,6 +1013,7 @@ model NewsletterSubscriber {
 
 model Newsletter {
   id           String    @id @default(cuid())
+  tenantId     String?
   subject      String
   bodyHtml     String
   templateType String    @default("CUSTOM") // NEW_ARRIVALS, NEW_DEALS, TIPS, CUSTOM
@@ -788,6 +1026,7 @@ model Newsletter {
   deliveries NewsletterDelivery[]
   products   NewsletterProduct[]
 
+  @@index([tenantId])
   @@index([status])
   @@index([templateType])
   @@index([createdAt])
@@ -830,6 +1069,7 @@ model NewsletterProduct {
 
 model PickupPoint {
   id          String   @id @default(cuid())
+  tenantId    String?
   name        String
   address     String
   city        String
@@ -840,6 +1080,8 @@ model PickupPoint {
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 // ============================================================
@@ -848,6 +1090,7 @@ model PickupPoint {
 
 model InventoryTransaction {
   id             String   @id @default(cuid())
+  tenantId       String?
   productId      String
   product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   variantId      String?
@@ -862,6 +1105,7 @@ model InventoryTransaction {
   performedBy    String?
   createdAt      DateTime @default(now())
 
+  @@index([tenantId])
   @@index([productId])
   @@index([type])
   @@index([createdAt])
@@ -873,7 +1117,8 @@ model InventoryTransaction {
 
 model ExpenseCategory {
   id           String            @id @default(cuid())
-  name         String            @unique
+  tenantId     String?
+  name         String
   description  String?
   categoryType String            @default("OPERATING") // COGS|OPERATING|TAX|OTHER
   sortOrder    Int               @default(0)
@@ -883,12 +1128,15 @@ model ExpenseCategory {
   updatedAt    DateTime          @updatedAt
   expenses     BusinessExpense[]
 
+  @@unique([tenantId, name])
+  @@index([tenantId])
   @@index([isActive])
   @@index([deletedAt])
 }
 
 model BusinessExpense {
   id          String          @id @default(cuid())
+  tenantId    String?
   categoryId  String
   category    ExpenseCategory @relation(fields: [categoryId], references: [id])
   amount      Decimal         @db.Decimal(12, 2)
@@ -901,6 +1149,7 @@ model BusinessExpense {
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
+  @@index([tenantId])
   @@index([categoryId])
   @@index([period])
   @@index([expenseDate])
@@ -908,7 +1157,8 @@ model BusinessExpense {
 
 model FinancialPeriod {
   id         String    @id @default(cuid())
-  periodKey  String    @unique   // "YYYY-MM"
+  tenantId   String?
+  periodKey  String                // "YYYY-MM"
   periodName String
   startDate  DateTime
   endDate    DateTime
@@ -920,6 +1170,8 @@ model FinancialPeriod {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
+  @@unique([tenantId, periodKey])
+  @@index([tenantId])
   @@index([periodKey])
   @@index([status])
 }
@@ -946,7 +1198,8 @@ model Permission {
 
 model Role {
   id          String   @id @default(cuid())
-  name        String   @unique
+  tenantId    String?
+  name        String
   description String?
   isSystem    Boolean  @default(false)
   isActive    Boolean  @default(true)
@@ -958,6 +1211,8 @@ model Role {
   permissions RolePermission[]
   adminUsers  AdminUserRole[]
 
+  @@unique([tenantId, name])
+  @@index([tenantId])
   @@index([isActive])
   @@index([deletedAt])
 }
@@ -985,6 +1240,7 @@ model AdminUserRole {
 
 model LoginAttempt {
   id          String   @id @default(cuid())
+  tenantId    String?
   email       String
   isAdmin     Boolean
   success     Boolean
@@ -992,6 +1248,7 @@ model LoginAttempt {
   userAgent   String?
   attemptedAt DateTime @default(now())
 
+  @@index([tenantId])
   @@index([email])
   @@index([attemptedAt])
 }
@@ -1002,9 +1259,10 @@ model LoginAttempt {
 
 model CustomerEvent {
   id                 String    @id @default(cuid())
+  tenantId           String?
   title              String
   titleSwahili       String?
-  slug               String    @unique
+  slug               String
   description        String?
   descriptionSwahili String?
   eventDate          DateTime
@@ -1034,6 +1292,8 @@ model CustomerEvent {
   product Product? @relation(fields: [productId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   media   EventMedia[]
 
+  @@unique([tenantId, slug])
+  @@index([tenantId])
   @@index([userId])
   @@index([status])
   @@index([eventDate])
@@ -1062,6 +1322,7 @@ model EventMedia {
 
 model PosSession {
   id             String    @id @default(cuid())
+  tenantId       String?
   adminUserId    String
   openedAt       DateTime  @default(now())
   closedAt       DateTime?
@@ -1077,6 +1338,7 @@ model PosSession {
   orders   Order[]
   layaways Layaway[]
 
+  @@index([tenantId])
   @@index([adminUserId])
   @@index([status])
   @@index([openedAt])
@@ -1084,6 +1346,7 @@ model PosSession {
 
 model HeldSale {
   id           String   @id @default(cuid())
+  tenantId     String?
   adminUserId  String
   customerId   String?
   customerName String?
@@ -1095,12 +1358,14 @@ model HeldSale {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  @@index([tenantId])
   @@index([adminUserId])
 }
 
 model Layaway {
   id             String    @id @default(cuid())
-  layawayNumber  String    @unique
+  tenantId       String?
+  layawayNumber  String
   customerId     String
   cashierId      String
   posSessionId   String?
@@ -1124,6 +1389,8 @@ model Layaway {
   posSession PosSession? @relation(fields: [posSessionId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   payments   Payment[]
 
+  @@unique([tenantId, layawayNumber])
+  @@index([tenantId])
   @@index([customerId])
   @@index([status])
   @@index([dueDate])
@@ -1132,7 +1399,8 @@ model Layaway {
 
 model PosExchange {
   id               String   @id @default(cuid())
-  exchangeNumber   String   @unique
+  tenantId         String?
+  exchangeNumber   String
   originalOrderId  String
   newOrderId       String?
   cashierId        String
@@ -1149,6 +1417,8 @@ model PosExchange {
   note             String?
   createdAt        DateTime @default(now())
 
+  @@unique([tenantId, exchangeNumber])
+  @@index([tenantId])
   @@index([originalOrderId])
   @@index([cashierId])
   @@index([createdAt])
@@ -1160,7 +1430,8 @@ model PosExchange {
 
 model PromoCode {
   id                 String    @id @default(cuid())
-  code               String    @unique
+  tenantId           String?
+  code               String
   description        String?
   discountType       String    // PERCENTAGE, FIXED
   discountValue      Decimal   @db.Decimal(12, 2) // percentage (0-100) or fixed amount
@@ -1179,6 +1450,8 @@ model PromoCode {
   usages   PromoCodeUsage[]
   orders   Order[]
 
+  @@unique([tenantId, code])
+  @@index([tenantId])
   @@index([code])
   @@index([isActive])
   @@index([validFrom, validUntil])
@@ -1217,11 +1490,37 @@ model ReviewImage {
 }
 
 // ============================================================
+// CONTACT SUBMISSIONS
+// ============================================================
+
+model ContactSubmission {
+  id          String    @id @default(cuid())
+  tenantId    String?
+  name        String
+  email       String
+  phone       String?
+  subject     String?
+  message     String
+  status      String    @default("PENDING") // PENDING, IN_PROGRESS, CLOSED, UNATTENDED
+  adminReply  String?
+  repliedAt   DateTime?
+  repliedById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([email])
+  @@index([createdAt])
+}
+
+// ============================================================
 // ABANDONED CART TRACKING
 // ============================================================
 
 model AbandonedCartReminder {
   id        String   @id @default(cuid())
+  tenantId  String?
   userId    String
   cartTotal Decimal? @db.Decimal(12, 2)
   itemCount Int      @default(0)
@@ -1231,6 +1530,33 @@ model AbandonedCartReminder {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
+  @@index([tenantId])
   @@index([userId])
   @@index([sentAt])
+}
+
+// ============================================================
+// PAYMENT METHODS
+// ============================================================
+
+model PaymentMethod {
+  id               String    @id @default(cuid())
+  tenantId         String?
+  name             String
+  code             String
+  description      String?
+  iconUrl          String?
+  isActive         Boolean   @default(true)
+  sortOrder        Int       @default(0)
+  integrationKey   String?
+  integrationParams Json?
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([isActive])
+  @@index([deletedAt])
+  @@index([sortOrder])
 }

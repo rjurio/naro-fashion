@@ -19,10 +19,20 @@ import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { formatPrice } from "@/lib/utils";
 import { productsApi, rentalsApi } from "@/lib/api";
+import { useToast } from "@/contexts/ToastContext";
+
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
+
+function resolveImg(url?: string): string {
+  if (!url) return '';
+  if (url.startsWith('/uploads')) return `${API_ORIGIN}${url}`;
+  return url;
+}
 
 export default function RentalDetailPage() {
   const params = useParams();
   const slug = params.slug as string;
+  const toast = useToast();
 
   const [product, setProduct] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -65,9 +75,9 @@ export default function RentalDetailPage() {
         startDate,
         endDate,
       });
-      alert("Rental booked successfully!");
+      toast.success("Rental booked successfully!");
     } catch {
-      alert("Failed to book rental. Please try again.");
+      toast.error("Failed to book rental. Please try again.");
     } finally {
       setBooking(false);
     }
@@ -115,17 +125,18 @@ export default function RentalDetailPage() {
     );
   }
 
-  const images = product.images || [];
-  const productSizes = product.sizes || [];
-  const features = product.features || [];
-  const rentalIncludes = product.rentalIncludes || [];
-  const rentalPricePerDay = product.rentalPricePerDay || product.rentPrice || 0;
-  const depositAmount = product.depositAmount || 0;
-  const downPaymentPercent = product.downPaymentPercent || 25;
+  const images = (product.images || []).map((img: any) => resolveImg(typeof img === 'string' ? img : img.url));
+  const variants = (product.variants || []).filter((v: any) => v.isActive !== false);
+  const uniqueSizes = [...new Set(variants.map((v: any) => v.size).filter(Boolean))] as string[];
+  const features: string[] = Array.isArray(product.specifications) ? product.specifications : [];
+  const rentalPricePerDay = Number(product.rentalPricePerDay) || 0;
+  const depositAmount = Number(product.rentalDepositAmount) || 0;
+  const downPaymentPercent = product.rentalDownPaymentPct || 25;
   const maxRentalDays = product.maxRentalDays || 7;
-  const bufferDays = product.bufferDays || 7;
-  const rating = product.rating || 0;
+  const bufferDays = product.bufferDaysOverride || 7;
+  const rating = product.avgRating || 0;
   const reviewCount = product.reviewCount || 0;
+  const retailPrice = Number(product.basePrice) || 0;
 
   const rentalDays =
     startDate && endDate
@@ -163,41 +174,38 @@ export default function RentalDetailPage() {
           {/* Image Gallery */}
           <div>
             <div className="relative aspect-[3/4] rounded-2xl overflow-hidden bg-muted mb-4">
-              <div
-                className="h-full w-full bg-muted flex items-center justify-center text-muted-foreground"
-                style={{
-                  backgroundImage: images[selectedImage] ? `url(${images[selectedImage]})` : undefined,
-                  backgroundSize: "cover",
-                  backgroundPosition: "center",
-                }}
-              >
-                {!images[selectedImage] && "Product Image"}
-              </div>
+              {images[selectedImage] ? (
+                <img
+                  src={images[selectedImage]}
+                  alt={product.name}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-muted-foreground">
+                  No Image
+                </div>
+              )}
               <div className="absolute top-4 left-4">
-                <Badge variant="rent">Rental Only</Badge>
+                <Badge variant="rent">
+                  {product.availabilityMode === 'RENTAL_ONLY' ? 'Rental Only' : 'Rent Available'}
+                </Badge>
               </div>
             </div>
 
-            {images.length > 0 && (
-              <div className="flex gap-3">
+            {images.length > 1 && (
+              <div className="flex gap-3 overflow-x-auto pb-2">
                 {images.map((image: string, idx: number) => (
                   <button
                     key={idx}
+                    type="button"
                     onClick={() => setSelectedImage(idx)}
-                    className={`relative w-20 h-24 rounded-lg overflow-hidden border-2 transition-all ${
+                    className={`relative w-20 h-24 rounded-lg overflow-hidden border-2 transition-all flex-shrink-0 ${
                       selectedImage === idx
                         ? "border-gold-500 ring-2 ring-gold-500/30"
                         : "border-border hover:border-gold-300"
                     }`}
                   >
-                    <div
-                      className="h-full w-full bg-muted"
-                      style={{
-                        backgroundImage: `url(${image})`,
-                        backgroundSize: "cover",
-                        backgroundPosition: "center",
-                      }}
-                    />
+                    <img src={image} alt={`${product.name} ${idx + 1}`} className="h-full w-full object-cover" />
                   </button>
                 ))}
               </div>
@@ -242,9 +250,9 @@ export default function RentalDetailPage() {
                 </span>
                 <span className="text-muted-foreground">/ day</span>
               </div>
-              {product.price && (
+              {retailPrice > 0 && (
                 <p className="text-sm text-muted-foreground mt-1">
-                  Retail price: {formatPrice(product.price)}
+                  Retail price: {formatPrice(retailPrice)}
                 </p>
               )}
             </div>
@@ -256,13 +264,14 @@ export default function RentalDetailPage() {
             )}
 
             {/* Size Selection */}
-            {productSizes.length > 0 && (
+            {uniqueSizes.length > 0 ? (
               <div className="mt-6">
                 <h3 className="text-sm font-semibold text-foreground mb-3">Select Size</h3>
                 <div className="flex flex-wrap gap-2">
-                  {productSizes.map((size: string) => (
+                  {uniqueSizes.map((size) => (
                     <button
                       key={size}
+                      type="button"
                       onClick={() => setSelectedSize(size)}
                       className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
                         selectedSize === size
@@ -275,7 +284,27 @@ export default function RentalDetailPage() {
                   ))}
                 </div>
               </div>
-            )}
+            ) : variants.length > 0 ? (
+              <div className="mt-6">
+                <h3 className="text-sm font-semibold text-foreground mb-3">Select Variant</h3>
+                <div className="flex flex-wrap gap-2">
+                  {variants.map((v: any) => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => setSelectedSize(v.name || v.id)}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                        selectedSize === (v.name || v.id)
+                          ? "border-gold-500 bg-gold-500 text-[#1A1A1A]"
+                          : "border-border text-foreground hover:border-gold-500"
+                      }`}
+                    >
+                      {v.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {/* Date Picker */}
             <div className="mt-6">
@@ -409,23 +438,6 @@ export default function RentalDetailPage() {
                 </p>
               )}
             </div>
-
-            {/* What's Included */}
-            {rentalIncludes.length > 0 && (
-              <div className="mt-8">
-                <h3 className="text-sm font-semibold text-foreground mb-3">
-                  Rental Includes
-                </h3>
-                <ul className="space-y-2">
-                  {rentalIncludes.map((item: string) => (
-                    <li key={item} className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Check className="h-4 w-4 text-gold-500 flex-shrink-0" />
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
 
             {/* Features */}
             {features.length > 0 && (

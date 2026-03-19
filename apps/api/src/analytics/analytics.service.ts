@@ -1,12 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 
 export type RevenuePeriod = 'daily' | 'weekly' | 'monthly';
 
 @Injectable()
 export class AnalyticsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   private calcChange(current: number, previous: number): string {
     if (previous === 0) return current > 0 ? '+100%' : '0%';
@@ -15,6 +19,7 @@ export class AnalyticsService {
   }
 
   async getDashboard() {
+    const tenantId = this.tenantContext.requireId;
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
     const sixtyDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 60);
@@ -56,39 +61,39 @@ export class AnalyticsService {
       this.prisma.order
         .aggregate({
           _sum: { total: true },
-          where: { status: { not: 'CANCELLED' }, createdAt: { gte: thirtyDaysAgo } },
+          where: { tenantId, status: { not: 'CANCELLED' }, createdAt: { gte: thirtyDaysAgo } },
         })
         .then((r) => Number(r._sum?.total ?? 0)),
 
       // Current period order count
       this.prisma.order.count({
-        where: { status: { not: 'CANCELLED' }, createdAt: { gte: thirtyDaysAgo } },
+        where: { tenantId, status: { not: 'CANCELLED' }, createdAt: { gte: thirtyDaysAgo } },
       }),
 
       // Total customers
-      this.prisma.user.count(),
+      this.prisma.user.count({ where: { tenantId } }),
 
       // Active rentals
-      this.prisma.rentalOrder.count({ where: { status: 'ACTIVE' } }),
+      this.prisma.rentalOrder.count({ where: { tenantId, status: 'ACTIVE' } }),
 
       // Previous period revenue
       this.prisma.order
         .aggregate({
           _sum: { total: true },
-          where: { status: { not: 'CANCELLED' }, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } },
+          where: { tenantId, status: { not: 'CANCELLED' }, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } },
         })
         .then((r) => Number(r._sum?.total ?? 0)),
 
       // Previous period orders
       this.prisma.order.count({
-        where: { status: { not: 'CANCELLED' }, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } },
+        where: { tenantId, status: { not: 'CANCELLED' }, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } },
       }),
 
       // Rental revenue
       this.prisma.rentalOrder
         .aggregate({
           _sum: { totalRentalPrice: true },
-          where: { status: { not: 'CANCELLED' }, createdAt: { gte: thirtyDaysAgo } },
+          where: { tenantId, status: { not: 'CANCELLED' }, createdAt: { gte: thirtyDaysAgo } },
         })
         .then((r) => Number(r._sum?.totalRentalPrice ?? 0)),
 
@@ -96,7 +101,7 @@ export class AnalyticsService {
       this.prisma.rentalOrder
         .aggregate({
           _sum: { totalRentalPrice: true },
-          where: { status: { not: 'CANCELLED' }, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } },
+          where: { tenantId, status: { not: 'CANCELLED' }, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } },
         })
         .then((r) => Number(r._sum?.totalRentalPrice ?? 0)),
 
@@ -104,7 +109,7 @@ export class AnalyticsService {
       this.prisma.order
         .aggregate({
           _avg: { total: true },
-          where: { status: { not: 'CANCELLED' }, createdAt: { gte: thirtyDaysAgo } },
+          where: { tenantId, status: { not: 'CANCELLED' }, createdAt: { gte: thirtyDaysAgo } },
         })
         .then((r) => Number(r._avg?.total ?? 0)),
 
@@ -113,7 +118,7 @@ export class AnalyticsService {
         SELECT COUNT(DISTINCT p."id")::int AS "count"
         FROM "Product" p
         JOIN "ProductVariant" pv ON pv."productId" = p."id"
-        WHERE p."deletedAt" IS NULL AND p."isActive" = true
+        WHERE p."deletedAt" IS NULL AND p."isActive" = true AND p."tenantId" = ${tenantId}
         GROUP BY p."id", p."minimumStock"
         HAVING SUM(pv."stock") > 0 AND SUM(pv."stock") < p."minimumStock"
       `.then((rows) => rows.length),
@@ -123,58 +128,59 @@ export class AnalyticsService {
         SELECT COUNT(DISTINCT p."id")::int AS "count"
         FROM "Product" p
         LEFT JOIN "ProductVariant" pv ON pv."productId" = p."id"
-        WHERE p."deletedAt" IS NULL AND p."isActive" = true
+        WHERE p."deletedAt" IS NULL AND p."isActive" = true AND p."tenantId" = ${tenantId}
         GROUP BY p."id"
         HAVING COALESCE(SUM(pv."stock"), 0) = 0
       `.then((rows) => rows.length),
 
       // Total SKUs
-      this.prisma.product.count({ where: { deletedAt: null, isActive: true } }),
+      this.prisma.product.count({ where: { tenantId, deletedAt: null, isActive: true } }),
 
       // Total expenses this month
       this.prisma.businessExpense
         .aggregate({
           _sum: { amount: true },
-          where: { expenseDate: { gte: thisMonthStart } },
+          where: { tenantId, expenseDate: { gte: thisMonthStart } },
         })
         .then((r) => Number(r._sum?.amount ?? 0)),
 
       // Pending orders
-      this.prisma.order.count({ where: { status: 'PENDING' } }),
+      this.prisma.order.count({ where: { tenantId, status: 'PENDING' } }),
 
       // Cancelled orders (last 30 days)
       this.prisma.order.count({
-        where: { status: 'CANCELLED', createdAt: { gte: thirtyDaysAgo } },
+        where: { tenantId, status: 'CANCELLED', createdAt: { gte: thirtyDaysAgo } },
       }),
 
       // Total orders last 30 days (including cancelled)
-      this.prisma.order.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+      this.prisma.order.count({ where: { tenantId, createdAt: { gte: thirtyDaysAgo } } }),
 
       // Overdue rentals
-      this.prisma.rentalOrder.count({ where: { status: 'OVERDUE' } }),
+      this.prisma.rentalOrder.count({ where: { tenantId, status: 'OVERDUE' } }),
 
       // Upcoming returns (next 7 days)
       this.prisma.rentalOrder.count({
         where: {
+          tenantId,
           status: 'ACTIVE',
           returnDate: { gte: now, lte: sevenDaysFromNow },
         },
       }),
 
       // Active banners
-      this.prisma.banner.count({ where: { isActive: true, deletedAt: null } }),
+      this.prisma.banner.count({ where: { tenantId, isActive: true, deletedAt: null } }),
 
       // Published pages
-      this.prisma.page.count({ where: { isPublished: true, deletedAt: null } }),
+      this.prisma.page.count({ where: { tenantId, isPublished: true, deletedAt: null } }),
 
       // Approved events
-      this.prisma.customerEvent.count({ where: { status: 'APPROVED', deletedAt: null } }),
+      this.prisma.customerEvent.count({ where: { tenantId, status: 'APPROVED', deletedAt: null } }),
 
       // Pending events
-      this.prisma.customerEvent.count({ where: { status: 'PENDING_APPROVAL', deletedAt: null } }),
+      this.prisma.customerEvent.count({ where: { tenantId, status: 'PENDING_APPROVAL', deletedAt: null } }),
 
       // New customers this period
-      this.prisma.user.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+      this.prisma.user.count({ where: { tenantId, createdAt: { gte: thirtyDaysAgo } } }),
     ]);
 
     // COGS calculation (purchasePrice × quantity sold in last 30 days)
@@ -186,6 +192,7 @@ export class AnalyticsService {
       WHERE o."status" != 'CANCELLED'
         AND o."createdAt" >= ${thirtyDaysAgo}
         AND p."purchasePrice" IS NOT NULL
+        AND o."tenantId" = ${tenantId}
     `;
     const cogs = cogsResult[0]?.cogs ?? 0;
     const grossProfit = totalRevenue - cogs;
@@ -226,6 +233,7 @@ export class AnalyticsService {
   }
 
   async getSalesAnalytics() {
+    const tenantId = this.tenantContext.requireId;
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
 
@@ -240,6 +248,7 @@ export class AnalyticsService {
       // Top products by revenue
       this.prisma.orderItem.groupBy({
         by: ['productId'],
+        where: { order: { tenantId } },
         _sum: { total: true, quantity: true },
         orderBy: { _sum: { total: 'desc' } },
         take: 10,
@@ -252,18 +261,19 @@ export class AnalyticsService {
         JOIN "Product" p ON oi."productId" = p."id"
         JOIN "Category" c ON p."categoryId" = c."id"
         JOIN "Order" o ON oi."orderId" = o."id"
-        WHERE o."status" != 'CANCELLED'
+        WHERE o."status" != 'CANCELLED' AND o."tenantId" = ${tenantId}
         GROUP BY c."name"
         ORDER BY "revenue" DESC
         LIMIT 8
       `,
 
       // Order status distribution
-      this.prisma.order.groupBy({ by: ['status'], _count: true }),
+      this.prisma.order.groupBy({ by: ['status'], where: { tenantId }, _count: true }),
 
       // Payment method distribution
       this.prisma.order.groupBy({
         by: ['paymentMethod'],
+        where: { tenantId },
         _count: true,
         _sum: { total: true },
       }),
@@ -276,12 +286,14 @@ export class AnalyticsService {
         FROM "Order"
         WHERE "createdAt" >= ${new Date(now.getFullYear(), now.getMonth(), now.getDate() - 14)}
           AND "status" != 'CANCELLED'
+          AND "tenantId" = ${tenantId}
         GROUP BY "createdAt"::date
         ORDER BY "createdAt"::date ASC
       `,
 
       // Recent orders
       this.prisma.order.findMany({
+        where: { tenantId },
         take: 10,
         orderBy: { createdAt: 'desc' },
         select: {
@@ -300,7 +312,7 @@ export class AnalyticsService {
     const productIds = topProducts.map((p) => p.productId);
     const products = productIds.length > 0
       ? await this.prisma.product.findMany({
-          where: { id: { in: productIds } },
+          where: { id: { in: productIds }, tenantId },
           select: { id: true, name: true, availabilityMode: true, category: { select: { name: true } } },
         })
       : [];
@@ -309,6 +321,7 @@ export class AnalyticsService {
     // Low performers (bottom 5)
     const lowPerformers = await this.prisma.orderItem.groupBy({
       by: ['productId'],
+      where: { order: { tenantId } },
       _sum: { total: true, quantity: true },
       orderBy: { _sum: { total: 'asc' } },
       take: 5,
@@ -316,7 +329,7 @@ export class AnalyticsService {
     const lowPerfIds = lowPerformers.map((p) => p.productId);
     const lowPerfProducts = lowPerfIds.length > 0
       ? await this.prisma.product.findMany({
-          where: { id: { in: lowPerfIds } },
+          where: { id: { in: lowPerfIds }, tenantId },
           select: { id: true, name: true, category: { select: { name: true } } },
         })
       : [];
@@ -369,6 +382,7 @@ export class AnalyticsService {
   }
 
   async getRentalsAnalytics() {
+    const tenantId = this.tenantContext.requireId;
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
     const sevenDaysFromNow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);
@@ -386,18 +400,19 @@ export class AnalyticsService {
       this.prisma.rentalOrder
         .aggregate({
           _sum: { totalRentalPrice: true },
-          where: { status: { not: 'CANCELLED' }, createdAt: { gte: thirtyDaysAgo } },
+          where: { tenantId, status: { not: 'CANCELLED' }, createdAt: { gte: thirtyDaysAgo } },
         })
         .then((r) => Number(r._sum?.totalRentalPrice ?? 0)),
 
-      this.prisma.rentalOrder.count({ where: { status: 'ACTIVE' } }),
-      this.prisma.rentalOrder.count({ where: { status: 'OVERDUE' } }),
+      this.prisma.rentalOrder.count({ where: { tenantId, status: 'ACTIVE' } }),
+      this.prisma.rentalOrder.count({ where: { tenantId, status: 'OVERDUE' } }),
 
-      this.prisma.rentalOrder.groupBy({ by: ['status'], _count: true }),
+      this.prisma.rentalOrder.groupBy({ by: ['status'], where: { tenantId }, _count: true }),
 
       // Total rental-eligible products
       this.prisma.product.count({
         where: {
+          tenantId,
           deletedAt: null,
           isActive: true,
           availabilityMode: { in: ['RENTAL_ONLY', 'BOTH'] },
@@ -408,13 +423,14 @@ export class AnalyticsService {
       this.prisma.rentalOrder
         .groupBy({
           by: ['productId'],
-          where: { status: { in: ['ACTIVE', 'OVERDUE'] } },
+          where: { tenantId, status: { in: ['ACTIVE', 'OVERDUE'] } },
         })
         .then((r) => r.length),
 
       // Upcoming returns
       this.prisma.rentalOrder.findMany({
         where: {
+          tenantId,
           status: 'ACTIVE',
           returnDate: { gte: now, lte: sevenDaysFromNow },
         },
@@ -434,7 +450,7 @@ export class AnalyticsService {
       this.prisma.$queryRaw<[{ avg: number }]>`
         SELECT COALESCE(AVG(EXTRACT(DAY FROM ("returnDate" - "startDate"))), 0)::float AS "avg"
         FROM "RentalOrder"
-        WHERE "status" != 'CANCELLED'
+        WHERE "status" != 'CANCELLED' AND "tenantId" = ${tenantId}
       `.then((r) => Math.round(r[0]?.avg ?? 0)),
     ]);
 
@@ -464,13 +480,14 @@ export class AnalyticsService {
   }
 
   async getInventoryAnalytics() {
+    const tenantId = this.tenantContext.requireId;
     const [
       totalSkus,
       inventoryValuation,
       stockDistribution,
       recentRestocks,
     ] = await Promise.all([
-      this.prisma.product.count({ where: { deletedAt: null, isActive: true } }),
+      this.prisma.product.count({ where: { tenantId, deletedAt: null, isActive: true } }),
 
       // Inventory valuation
       this.prisma.$queryRaw<[{ costValue: number; retailValue: number }]>`
@@ -479,7 +496,7 @@ export class AnalyticsService {
           COALESCE(SUM(pv."stock" * pv."price"), 0)::float AS "retailValue"
         FROM "ProductVariant" pv
         JOIN "Product" p ON pv."productId" = p."id"
-        WHERE p."deletedAt" IS NULL AND p."isActive" = true
+        WHERE p."deletedAt" IS NULL AND p."isActive" = true AND p."tenantId" = ${tenantId}
       `.then((r) => r[0] || { costValue: 0, retailValue: 0 }),
 
       // Stock status distribution
@@ -497,13 +514,13 @@ export class AnalyticsService {
           FROM "ProductVariant"
           GROUP BY "productId"
         ) pv ON pv."productId" = p."id"
-        WHERE p."deletedAt" IS NULL AND p."isActive" = true
+        WHERE p."deletedAt" IS NULL AND p."isActive" = true AND p."tenantId" = ${tenantId}
         GROUP BY "status"
       `,
 
       // Recent restocks
       this.prisma.inventoryTransaction.findMany({
-        where: { type: 'RESTOCK' },
+        where: { tenantId, type: 'RESTOCK' },
         orderBy: { createdAt: 'desc' },
         take: 10,
         select: {
@@ -522,7 +539,7 @@ export class AnalyticsService {
     const adminIds = [...new Set(recentRestocks.map((r) => r.performedBy).filter(Boolean))] as string[];
     const admins = adminIds.length > 0
       ? await this.prisma.adminUser.findMany({
-          where: { id: { in: adminIds } },
+          where: { id: { in: adminIds }, tenantId },
           select: { id: true, firstName: true, lastName: true },
         })
       : [];
@@ -547,6 +564,7 @@ export class AnalyticsService {
   }
 
   async getCustomersAnalytics() {
+    const tenantId = this.tenantContext.requireId;
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
 
@@ -558,9 +576,9 @@ export class AnalyticsService {
       returningCustomers,
       totalWithOrders,
     ] = await Promise.all([
-      this.prisma.user.count(),
+      this.prisma.user.count({ where: { tenantId } }),
 
-      this.prisma.user.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+      this.prisma.user.count({ where: { tenantId, createdAt: { gte: thirtyDaysAgo } } }),
 
       // Customer growth (last 12 months)
       this.prisma.$queryRaw<Array<{ month: string; count: number }>>`
@@ -568,6 +586,7 @@ export class AnalyticsService {
                COUNT(*)::int AS "count"
         FROM "User"
         WHERE "createdAt" >= ${new Date(now.getFullYear() - 1, now.getMonth(), 1)}
+          AND "tenantId" = ${tenantId}
         GROUP BY DATE_TRUNC('month', "createdAt")
         ORDER BY DATE_TRUNC('month', "createdAt") ASC
       `,
@@ -579,7 +598,7 @@ export class AnalyticsService {
                COUNT(o."id")::int AS "orderCount"
         FROM "User" u
         JOIN "Order" o ON o."userId" = u."id"
-        WHERE o."status" != 'CANCELLED'
+        WHERE o."status" != 'CANCELLED' AND o."tenantId" = ${tenantId}
         GROUP BY u."id", u."firstName", u."lastName", u."email"
         ORDER BY "total" DESC
         LIMIT 10
@@ -589,7 +608,7 @@ export class AnalyticsService {
       this.prisma.$queryRaw<[{ count: number }]>`
         SELECT COUNT(*)::int AS "count"
         FROM (
-          SELECT "userId" FROM "Order" WHERE "status" != 'CANCELLED'
+          SELECT "userId" FROM "Order" WHERE "status" != 'CANCELLED' AND "tenantId" = ${tenantId}
           GROUP BY "userId" HAVING COUNT(*) > 1
         ) sub
       `.then((r) => r[0]?.count ?? 0),
@@ -597,7 +616,7 @@ export class AnalyticsService {
       // Total customers with at least 1 order
       this.prisma.$queryRaw<[{ count: number }]>`
         SELECT COUNT(DISTINCT "userId")::int AS "count"
-        FROM "Order" WHERE "status" != 'CANCELLED'
+        FROM "Order" WHERE "status" != 'CANCELLED' AND "tenantId" = ${tenantId}
       `.then((r) => r[0]?.count ?? 0),
     ]);
 
@@ -616,15 +635,16 @@ export class AnalyticsService {
   }
 
   async getProductsAnalytics() {
+    const tenantId = this.tenantContext.requireId;
     const [
       totalProducts,
       publishedProducts,
       categoryPerformance,
       topRated,
     ] = await Promise.all([
-      this.prisma.product.count({ where: { deletedAt: null } }),
+      this.prisma.product.count({ where: { tenantId, deletedAt: null } }),
 
-      this.prisma.product.count({ where: { deletedAt: null, isActive: true } }),
+      this.prisma.product.count({ where: { tenantId, deletedAt: null, isActive: true } }),
 
       // Category performance
       this.prisma.$queryRaw<Array<{ name: string; productCount: number; revenue: number; units: number }>>`
@@ -636,14 +656,14 @@ export class AnalyticsService {
         LEFT JOIN "Product" p ON p."categoryId" = c."id" AND p."deletedAt" IS NULL
         LEFT JOIN "OrderItem" oi ON oi."productId" = p."id"
         LEFT JOIN "Order" o ON oi."orderId" = o."id" AND o."status" != 'CANCELLED'
-        WHERE c."deletedAt" IS NULL
+        WHERE c."deletedAt" IS NULL AND c."tenantId" = ${tenantId}
         GROUP BY c."id", c."name"
         ORDER BY "revenue" DESC
       `,
 
       // Top rated products
       this.prisma.product.findMany({
-        where: { deletedAt: null, isActive: true, reviewCount: { gt: 0 } },
+        where: { tenantId, deletedAt: null, isActive: true, reviewCount: { gt: 0 } },
         orderBy: { avgRating: 'desc' },
         take: 5,
         select: {
@@ -671,6 +691,7 @@ export class AnalyticsService {
   }
 
   async getRevenue(period: RevenuePeriod) {
+    const tenantId = this.tenantContext.requireId;
     const now = new Date();
     let startDate: Date;
     let truncFn: Prisma.Sql;
@@ -704,6 +725,7 @@ export class AnalyticsService {
       FROM "Order"
       WHERE "createdAt" >= ${startDate}
         AND "status" != 'CANCELLED'
+        AND "tenantId" = ${tenantId}
       GROUP BY ${truncFn}, ${labelFormat}
       ORDER BY ${truncFn} ASC
     `;
@@ -718,6 +740,7 @@ export class AnalyticsService {
       FROM "RentalOrder"
       WHERE "createdAt" >= ${startDate}
         AND "status" != 'CANCELLED'
+        AND "tenantId" = ${tenantId}
       GROUP BY ${truncFn}, ${labelFormat}
       ORDER BY ${truncFn} ASC
     `;

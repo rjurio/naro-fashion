@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { X, ArrowLeftRight, Search, Plus, Minus, Trash2 } from 'lucide-react';
 import adminApi from '../../../../lib/api';
+import { useToast } from '@/contexts/ToastContext';
 import { PAYMENT_METHOD_LABELS } from '@naro/shared';
 
 interface ReturnItem {
@@ -32,6 +33,7 @@ interface Props {
 const PAYMENT_METHODS = ['CASH', 'MPESA', 'TIGO_PESA', 'AIRTEL_MONEY', 'MIX_BY_YAS', 'CARD'];
 
 export default function ExchangeModal({ onClose, onComplete }: Props) {
+  const toast = useToast();
   const [step, setStep] = useState<'search' | 'select' | 'new_items' | 'settle'>('search');
   const [orderSearch, setOrderSearch] = useState('');
   const [originalOrder, setOriginalOrder] = useState<any>(null);
@@ -66,10 +68,10 @@ export default function ExchangeModal({ onClose, onComplete }: Props) {
           setOriginalOrder(order);
           setStep('select');
         } else {
-          alert('Order not found');
+          toast.error('Order not found');
         }
       } catch {
-        alert('Order not found');
+        toast.error('Order not found');
       }
     }
   };
@@ -148,7 +150,7 @@ export default function ExchangeModal({ onClose, onComplete }: Props) {
       onComplete();
       onClose();
     } catch (err: any) {
-      alert(err.message || 'Exchange failed');
+      toast.error(err.message || 'Exchange failed');
     } finally {
       setProcessing(false);
     }

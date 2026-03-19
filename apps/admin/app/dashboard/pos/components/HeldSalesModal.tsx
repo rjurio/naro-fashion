@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { X, Play, Trash2, Clock } from 'lucide-react';
 import adminApi from '../../../../lib/api';
+import { useToast } from '@/contexts/ToastContext';
 
 interface Props {
   onClose: () => void;
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export default function HeldSalesModal({ onClose, onResume }: Props) {
+  const toast = useToast();
   const [heldSales, setHeldSales] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -33,7 +35,7 @@ export default function HeldSalesModal({ onClose, onResume }: Props) {
       const held = await adminApi.posResumeHeldSale(id);
       onResume(held);
     } catch (err: any) {
-      alert(err.message || 'Failed to resume sale');
+      toast.error(err.message || 'Failed to resume sale');
     }
   };
 
@@ -43,7 +45,7 @@ export default function HeldSalesModal({ onClose, onResume }: Props) {
       await adminApi.posDiscardHeldSale(id);
       setHeldSales((prev) => prev.filter((s) => s.id !== id));
     } catch (err: any) {
-      alert(err.message || 'Failed to discard');
+      toast.error(err.message || 'Failed to discard');
     }
   };
 

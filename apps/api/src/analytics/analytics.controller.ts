@@ -1,8 +1,11 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AnalyticsService, RevenuePeriod } from './analytics.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard } from '../auth/guards/module.guard';
+import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ModuleGuard)
+@RequiresModule('analytics')
 @Controller('analytics')
 export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}

@@ -289,23 +289,48 @@ export default function HomePage() {
     <div>
       {/* Hero Section */}
       <section className="relative min-h-[600px] lg:min-h-[700px] flex items-center overflow-hidden">
-        {/* Animated background slideshow */}
+        {/* Animated background slideshow with Ken Burns cinematic zoom+drift */}
         {heroSlides.length > 0 ? (
           heroSlides.map((slide, index) => (
             <div
               key={slide.id}
-              className="absolute inset-0 transition-opacity duration-1000 ease-in-out"
+              className="absolute inset-0 transition-opacity duration-[1.5s] ease-in-out"
               style={{ opacity: index === currentSlide ? 1 : 0 }}
             >
               <img
                 src={slide.imageUrl.startsWith('/uploads') ? `${API_ORIGIN}${slide.imageUrl}` : slide.imageUrl}
                 alt={slide.title || 'Hero background'}
-                className="absolute inset-0 w-full h-full object-cover"
+                className={`absolute inset-0 w-full h-full object-cover will-change-transform ${
+                  index === currentSlide ? 'animate-hero-kenburns' : ''
+                }`}
+                style={{
+                  transformOrigin: index % 2 === 0 ? 'center center' : 'left center',
+                }}
               />
             </div>
           ))
         ) : (
-          <div className="absolute inset-0 bg-gradient-to-br from-[#1A1A1A] via-[#2d1a2e] to-[#1A1A1A]" />
+          /* Fallback animated gradient when no slides */
+          <div className="absolute inset-0">
+            <div className="absolute inset-0 bg-gradient-to-br from-[#1A1A1A] via-[#2d1a2e] to-[#1A1A1A] animate-hero-gradient" />
+            {/* Floating particles */}
+            <div className="absolute inset-0 overflow-hidden">
+              {[...Array(6)].map((_, i) => (
+                <div
+                  key={i}
+                  className="absolute rounded-full bg-[#D4AF37]/10 animate-hero-float"
+                  style={{
+                    width: `${60 + i * 40}px`,
+                    height: `${60 + i * 40}px`,
+                    left: `${10 + i * 15}%`,
+                    top: `${20 + (i % 3) * 25}%`,
+                    animationDelay: `${i * 1.2}s`,
+                    animationDuration: `${8 + i * 2}s`,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
         )}
         {/* Dark overlay for text readability */}
         <div className="absolute inset-0 bg-black/50" />

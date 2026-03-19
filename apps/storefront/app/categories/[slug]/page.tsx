@@ -3,6 +3,14 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
+
+function resolveImg(url?: string): string {
+  if (!url) return '';
+  if (url.startsWith('/uploads')) return `${API_ORIGIN}${url}`;
+  return url;
+}
 import {
   SlidersHorizontal,
   X,
@@ -263,38 +271,48 @@ export default function CategoryPage() {
               </div>
             ) : (
               <div className={viewMode === "grid" ? "grid grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6" : "space-y-4"}>
-                {products.map((product) => (
-                  <Link key={product.id} href={`/products/${product.slug || product.id}`}>
-                    <div className="group rounded-xl border border-border bg-card overflow-hidden hover:border-gold-500/50 transition-colors">
-                      <div className="relative">
-                        <div
-                          className="aspect-[3/4] bg-muted"
-                          style={{ backgroundImage: `url(${product.images?.[0] || product.image || ""})`, backgroundSize: "cover", backgroundPosition: "center" }}
-                        />
-                        {product.originalPrice && product.originalPrice > product.price && (
-                          <span className="absolute top-2 left-2 bg-gold-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                            -{Math.round(((product.originalPrice - product.price) / product.originalPrice) * 100)}%
-                          </span>
-                        )}
-                      </div>
-                      <div className="p-3">
-                        <h3 className="text-sm font-medium text-foreground line-clamp-2 group-hover:text-gold-500 transition-colors">
-                          {product.name}
-                        </h3>
-                        <div className="flex items-center gap-1 mt-1">
-                          <Star className="h-3 w-3 fill-gold-500 text-gold-500" />
-                          <span className="text-xs text-muted-foreground">{product.rating ?? 0} ({product.reviewCount ?? 0})</span>
-                        </div>
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className="text-sm font-bold text-foreground">{formatPrice(product.price)}</span>
-                          {product.originalPrice && product.originalPrice > product.price && (
-                            <span className="text-xs text-muted-foreground line-through">{formatPrice(product.originalPrice)}</span>
+                {products.map((product) => {
+                  const imgRaw = product.images?.[0];
+                  const imgUrl = resolveImg(typeof imgRaw === 'string' ? imgRaw : imgRaw?.url);
+                  const price = Number(product.basePrice ?? product.price ?? 0);
+                  const originalPrice = Number(product.compareAtPrice ?? 0);
+                  const rating = product.avgRating ?? product.rating ?? 0;
+                  return (
+                    <Link key={product.id} href={`/products/${product.slug || product.id}`}>
+                      <div className="group rounded-xl border border-border bg-card overflow-hidden hover:border-gold-500/50 transition-colors">
+                        <div className="relative aspect-[3/4] bg-muted overflow-hidden">
+                          {imgUrl && (
+                            <img
+                              src={imgUrl}
+                              alt={product.name}
+                              className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            />
+                          )}
+                          {originalPrice > 0 && originalPrice > price && (
+                            <span className="absolute top-2 left-2 bg-gold-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                              -{Math.round(((originalPrice - price) / originalPrice) * 100)}%
+                            </span>
                           )}
                         </div>
+                        <div className="p-3">
+                          <h3 className="text-sm font-medium text-foreground line-clamp-2 group-hover:text-gold-500 transition-colors">
+                            {product.name}
+                          </h3>
+                          <div className="flex items-center gap-1 mt-1">
+                            <Star className="h-3 w-3 fill-gold-500 text-gold-500" />
+                            <span className="text-xs text-muted-foreground">{rating} ({product.reviewCount ?? 0})</span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-2">
+                            <span className="text-sm font-bold text-foreground">{formatPrice(price)}</span>
+                            {originalPrice > 0 && originalPrice > price && (
+                              <span className="text-xs text-muted-foreground line-through">{formatPrice(originalPrice)}</span>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </Link>
-                ))}
+                    </Link>
+                  );
+                })}
               </div>
             )}
 

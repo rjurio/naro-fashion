@@ -1,17 +1,25 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { UpdatePolicyDto } from './dto/update-policy.dto';
 
 @Injectable()
 export class RentalPoliciesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async get() {
-    const policy = await this.prisma.rentalPolicy.findFirst();
+    const tenantId = this.tenantContext.requireId;
+    const policy = await this.prisma.rentalPolicy.findFirst({
+      where: { tenantId },
+    });
     if (!policy) {
       // Create default policy if none exists
       return this.prisma.rentalPolicy.create({
         data: {
+          tenantId,
           bufferDaysBetweenRentals: 7,
           defaultDownPaymentPct: 25,
           lateFeePerDay: 10000,
@@ -24,11 +32,15 @@ export class RentalPoliciesService {
   }
 
   async update(dto: UpdatePolicyDto) {
-    let policy = await this.prisma.rentalPolicy.findFirst();
+    const tenantId = this.tenantContext.requireId;
+    let policy = await this.prisma.rentalPolicy.findFirst({
+      where: { tenantId },
+    });
     if (!policy) {
       // Create with provided values
       return this.prisma.rentalPolicy.create({
         data: {
+          tenantId,
           bufferDaysBetweenRentals: dto.bufferDaysBetweenRentals ?? 7,
           defaultDownPaymentPct: dto.defaultDownPaymentPct ?? 25,
           lateFeePerDay: dto.lateFeePerDay ?? 10000,

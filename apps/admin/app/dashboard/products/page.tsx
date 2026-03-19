@@ -36,6 +36,8 @@ interface Product {
   [key: string]: unknown;
 }
 
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
+
 const availabilityStyles: Record<string, string> = {
   PURCHASE_ONLY: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
   RENTAL_ONLY: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
@@ -113,7 +115,7 @@ export default function ProductsPage() {
   );
 
   const getImage = (item: Product) => {
-    if (item.images?.[0]?.url) return item.images[0].url.startsWith('/') ? `http://localhost:4000${item.images[0].url}` : item.images[0].url;
+    if (item.images?.[0]?.url) return item.images[0].url.startsWith('/') ? `${API_ORIGIN}${item.images[0].url}` : item.images[0].url;
     if ((item as any).image) return (item as any).image;
     return null;
   };

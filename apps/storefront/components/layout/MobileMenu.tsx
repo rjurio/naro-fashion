@@ -150,7 +150,7 @@ export default function MobileMenu({
 
           {/* Secondary Links */}
           <Link
-            href="/wishlist"
+            href="/account/wishlist"
             onClick={onClose}
             className="flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors hover:bg-muted hover:text-gold-500"
           >

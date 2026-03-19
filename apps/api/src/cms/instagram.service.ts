@@ -119,11 +119,19 @@ export class InstagramService {
       const newToken = response.data?.access_token;
       if (newToken) {
         // Store the refreshed token in SiteSetting for persistence
-        await this.prisma.siteSetting.upsert({
+        const existingSetting = await this.prisma.siteSetting.findFirst({
           where: { key: 'instagram_access_token' },
-          update: { value: newToken },
-          create: { key: 'instagram_access_token', value: newToken, type: 'string' },
         });
+        if (existingSetting) {
+          await this.prisma.siteSetting.update({
+            where: { id: existingSetting.id },
+            data: { value: newToken },
+          });
+        } else {
+          await this.prisma.siteSetting.create({
+            data: { key: 'instagram_access_token', value: newToken, type: 'string' },
+          });
+        }
         this.logger.log('Instagram access token refreshed and stored in site settings');
         return true;
       }
@@ -142,7 +150,7 @@ export class InstagramService {
    */
   async getActiveToken(): Promise<string> {
     try {
-      const setting = await this.prisma.siteSetting.findUnique({
+      const setting = await this.prisma.siteSetting.findFirst({
         where: { key: 'instagram_access_token' },
       });
       if (setting?.value) return setting.value;

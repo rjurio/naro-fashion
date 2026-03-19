@@ -14,8 +14,12 @@ import {
   UpdateFlashSaleDto,
 } from './flash-sales.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard } from '../auth/guards/module.guard';
 import { Public } from '../auth/decorators/public.decorator';
+import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
+@UseGuards(ModuleGuard)
+@RequiresModule('flash-sales')
 @Controller('flash-sales')
 export class FlashSalesController {
   constructor(private readonly flashSalesService: FlashSalesService) {}

@@ -8,8 +8,12 @@ import {
 import { RentalPoliciesService } from './rental-policies.service';
 import { UpdatePolicyDto } from './dto/update-policy.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard } from '../auth/guards/module.guard';
 import { Public } from '../auth/decorators/public.decorator';
+import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
+@UseGuards(ModuleGuard)
+@RequiresModule('rental-policies')
 @Controller('rental-policies')
 export class RentalPoliciesController {
   constructor(

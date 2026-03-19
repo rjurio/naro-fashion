@@ -196,6 +196,21 @@ class AdminApiClient {
     }
     return res.json();
   }
+  async upload3dModel(file: File): Promise<{ url: string; filename: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const res = await fetch(`${this.baseUrl}/upload/3d-model`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
+      throw new Error(err.message || 'Upload failed');
+    }
+    return res.json();
+  }
   createProduct(data: any) {
     return this.post<any>('/products', data);
   }
@@ -383,6 +398,36 @@ class AdminApiClient {
     return this.patch<any>(`/flash-sales/${id}/restore`, {});
   }
 
+  // ===== Payment Methods =====
+  getPaymentMethods() {
+    return this.get<any[]>('/payment-methods/admin');
+  }
+  createPaymentMethod(data: any) {
+    return this.post<any>('/payment-methods', data);
+  }
+  updatePaymentMethod(id: string, data: any) {
+    return this.patch<any>(`/payment-methods/${id}`, data);
+  }
+  togglePaymentMethod(id: string) {
+    return this.patch<any>(`/payment-methods/${id}/toggle-active`, {});
+  }
+  deletePaymentMethod(id: string) {
+    return this.delete<any>(`/payment-methods/${id}`);
+  }
+  restorePaymentMethod(id: string) {
+    return this.patch<any>(`/payment-methods/${id}/restore`, {});
+  }
+  async uploadPaymentIcon(file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`${this.baseUrl}/upload/payment-icon`, { method: 'POST', headers, body: formData });
+    if (!res.ok) throw new Error('Upload failed');
+    return res.json() as Promise<{ url: string }>;
+  }
+
   // ===== Customers =====
   getCustomers(params?: Record<string, string>) {
     return this.get<any>('/users', { params });
@@ -499,6 +544,21 @@ class AdminApiClient {
   }
   getDeletedHeroSlides() {
     return this.get<any[]>('/cms/hero-slides/deleted');
+  }
+  async uploadDocument(file: File): Promise<{ url: string; filename: string; format: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const res = await fetch(`${this.baseUrl}/upload/document`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
+      throw new Error(err.message || 'Upload failed');
+    }
+    return res.json();
   }
   async uploadHeroSlide(file: File): Promise<{ url: string; filename: string }> {
     const formData = new FormData();
@@ -894,6 +954,111 @@ class AdminApiClient {
   // ===== POS - Daily Summary =====
   posGetDailySummary(date?: string) {
     return this.get<any>('/pos/daily-summary', { params: date ? { date } : undefined });
+  }
+
+  // ===== Contact Submissions =====
+  getContactSubmissions(status?: string) {
+    return this.get<any[]>('/cms/contact-submissions', { params: status ? { status } : undefined });
+  }
+  getContactSubmission(id: string) {
+    return this.get<any>(`/cms/contact-submissions/${id}`);
+  }
+  getContactSubmissionStats() {
+    return this.get<any>('/cms/contact-submissions/stats');
+  }
+  updateContactStatus(id: string, status: string) {
+    return this.patch<any>(`/cms/contact-submissions/${id}/status`, { status });
+  }
+  replyToContact(id: string, reply: string) {
+    return this.post<any>(`/cms/contact-submissions/${id}/reply`, { reply });
+  }
+  deleteContactSubmission(id: string) {
+    return this.delete<any>(`/cms/contact-submissions/${id}`);
+  }
+
+  // ===== Size Guides =====
+  getSizeGuides() {
+    return this.get<any[]>('/size-guides/admin');
+  }
+  getSizeGuide(id: string) {
+    return this.get<any>(`/size-guides/${id}`);
+  }
+  createSizeGuide(data: any) {
+    return this.post<any>('/size-guides', data);
+  }
+  updateSizeGuide(id: string, data: any) {
+    return this.patch<any>(`/size-guides/${id}`, data);
+  }
+  deleteSizeGuide(id: string) {
+    return this.delete<any>(`/size-guides/${id}`);
+  }
+  restoreSizeGuide(id: string) {
+    return this.patch<any>(`/size-guides/${id}/restore`, {});
+  }
+  setDefaultSizeGuide(id: string) {
+    return this.patch<any>(`/size-guides/${id}/set-default`, {});
+  }
+  toggleSizeGuideActive(id: string) {
+    return this.patch<any>(`/size-guides/${id}/toggle-active`, {});
+  }
+  getDeletedSizeGuides() {
+    return this.get<any[]>('/size-guides/deleted');
+  }
+
+  // ============================================================
+  // PLATFORM ADMIN (Tenant Management)
+  // ============================================================
+
+  getPlatformStats() {
+    return this.get<any>('/tenants/platform/stats');
+  }
+  getTenants(params?: Record<string, string>) {
+    return this.get<any[]>('/tenants', { params });
+  }
+  getTenant(id: string) {
+    return this.get<any>(`/tenants/${id}`);
+  }
+  createTenant(data: any) {
+    return this.post<any>('/tenants', data);
+  }
+  updateTenant(id: string, data: any) {
+    return this.patch<any>(`/tenants/${id}`, data);
+  }
+  updateTenantStatus(id: string, status: string) {
+    return this.patch<any>(`/tenants/${id}/status`, { status });
+  }
+  getTenantModules(id: string) {
+    return this.get<any[]>(`/tenants/${id}/modules`);
+  }
+  toggleTenantModule(id: string, moduleCode: string, isEnabled: boolean) {
+    return this.patch<any>(`/tenants/${id}/modules`, { moduleCode, isEnabled });
+  }
+  getTenantBranding(id: string) {
+    return this.get<any>(`/tenants/${id}/branding`);
+  }
+  updateTenantBranding(id: string, data: any) {
+    return this.patch<any>(`/tenants/${id}/branding`, data);
+  }
+  subscribeTenant(id: string, planId: string, billingCycle?: string) {
+    return this.post<any>(`/tenants/${id}/subscribe`, { planId, billingCycle });
+  }
+  recordTenantPayment(id: string, data: any) {
+    return this.post<any>(`/tenants/${id}/payments`, data);
+  }
+  getTenantPayments(id: string) {
+    return this.get<any[]>(`/tenants/${id}/payments`);
+  }
+  getSubscriptionPlans() {
+    return this.get<any[]>('/tenants/plans');
+  }
+  createSubscriptionPlan(data: any) {
+    return this.post<any>('/tenants/plans', data);
+  }
+  updateSubscriptionPlan(id: string, data: any) {
+    return this.patch<any>(`/tenants/plans/${id}`, data);
+  }
+  getAllTenantPayments(params?: Record<string, string>) {
+    return this.get<any[]>('/tenants/payments', { params });
   }
 }
 

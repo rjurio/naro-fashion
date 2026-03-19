@@ -6,6 +6,14 @@ import { ChevronRight } from "lucide-react";
 import { useTranslation } from "@/lib/i18n";
 import { categoriesApi } from "@/lib/api";
 
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
+
+function resolveImg(url?: string): string {
+  if (!url) return '';
+  if (url.startsWith('/uploads')) return `${API_ORIGIN}${url}`;
+  return url;
+}
+
 const colorMap: Record<string, string> = {
   women: "from-[#D4AF37]/20 to-[#D4AF37]/5",
   men: "from-[#1A1A1A]/20 to-[#1A1A1A]/5",
@@ -90,7 +98,7 @@ export default function CategoriesPage() {
           {categories.map((cat) => {
             const slug = cat.slug || "";
             const color = colorMap[slug] || "from-[#D4AF37]/15 to-[#D4AF37]/5";
-            const image = cat.image || cat.imageUrl || `/uploads/categories/${slug}.jpg`;
+            const imageUrl = resolveImg(cat.imageUrl || cat.image);
             const count = cat.productCount ?? cat._count?.products ?? 0;
             const name = cat.name || t(slug) || slug;
 
@@ -100,11 +108,19 @@ export default function CategoriesPage() {
                 href={`/categories/${slug}`}
                 className="group relative rounded-2xl border border-border bg-card overflow-hidden hover:shadow-lg hover:border-gold-500/50 transition-all duration-300"
               >
-                {/* Image placeholder */}
-                <div className={`h-48 bg-gradient-to-br ${color} flex items-center justify-center`}>
-                  <span className="text-5xl font-heading font-bold text-foreground/10 group-hover:text-foreground/20 transition-colors">
-                    {name.charAt(0)}
-                  </span>
+                {/* Category image / gradient fallback */}
+                <div className={`h-48 bg-gradient-to-br ${color} flex items-center justify-center relative overflow-hidden`}>
+                  {imageUrl ? (
+                    <img
+                      src={imageUrl}
+                      alt={name}
+                      className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                  ) : (
+                    <span className="text-5xl font-heading font-bold text-foreground/10 group-hover:text-foreground/20 transition-colors">
+                      {name.charAt(0)}
+                    </span>
+                  )}
                 </div>
 
                 {/* Info */}

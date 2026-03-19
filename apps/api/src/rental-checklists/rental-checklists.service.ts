@@ -4,24 +4,28 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreateTemplateDto } from './dto/create-template.dto';
 import { UpdateTemplateDto } from './dto/update-template.dto';
 
 @Injectable()
 export class RentalChecklistsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async getTemplates() {
     return this.prisma.rentalChecklistTemplate.findMany({
-      where: { deletedAt: null },
+      where: { deletedAt: null, tenantId: this.tenantContext.requireId },
       include: { items: { orderBy: { sortOrder: 'asc' } } },
       orderBy: { createdAt: 'desc' },
     });
   }
 
   async getTemplate(id: string) {
-    const template = await this.prisma.rentalChecklistTemplate.findUnique({
-      where: { id },
+    const template = await this.prisma.rentalChecklistTemplate.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
       include: { items: { orderBy: { sortOrder: 'asc' } } },
     });
     if (!template) {
@@ -33,6 +37,7 @@ export class RentalChecklistsService {
   async createTemplate(dto: CreateTemplateDto) {
     return this.prisma.rentalChecklistTemplate.create({
       data: {
+        tenantId: this.tenantContext.requireId,
         name: dto.name,
         description: dto.description,
         isDefault: dto.isDefault ?? false,
@@ -50,8 +55,8 @@ export class RentalChecklistsService {
   }
 
   async updateTemplate(id: string, dto: UpdateTemplateDto) {
-    const template = await this.prisma.rentalChecklistTemplate.findUnique({
-      where: { id },
+    const template = await this.prisma.rentalChecklistTemplate.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
     });
     if (!template) {
       throw new NotFoundException('Checklist template not found');
@@ -86,8 +91,8 @@ export class RentalChecklistsService {
   }
 
   async deleteTemplate(id: string) {
-    const template = await this.prisma.rentalChecklistTemplate.findUnique({
-      where: { id },
+    const template = await this.prisma.rentalChecklistTemplate.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
     });
     if (!template) {
       throw new NotFoundException('Checklist template not found');
@@ -101,8 +106,8 @@ export class RentalChecklistsService {
   }
 
   async restoreTemplate(id: string) {
-    const template = await this.prisma.rentalChecklistTemplate.findUnique({
-      where: { id },
+    const template = await this.prisma.rentalChecklistTemplate.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
     });
     if (!template || !template.deletedAt) {
       throw new NotFoundException('Deleted template not found');
@@ -117,15 +122,15 @@ export class RentalChecklistsService {
 
   async findDeletedTemplates() {
     return this.prisma.rentalChecklistTemplate.findMany({
-      where: { deletedAt: { not: null } },
+      where: { deletedAt: { not: null }, tenantId: this.tenantContext.requireId },
       include: { items: { orderBy: { sortOrder: 'asc' } } },
       orderBy: { deletedAt: 'desc' },
     });
   }
 
   async toggleActive(id: string) {
-    const template = await this.prisma.rentalChecklistTemplate.findUnique({
-      where: { id },
+    const template = await this.prisma.rentalChecklistTemplate.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
     });
     if (!template) {
       throw new NotFoundException('Checklist template not found');
@@ -140,22 +145,23 @@ export class RentalChecklistsService {
 
   async getActiveTemplates() {
     return this.prisma.rentalChecklistTemplate.findMany({
-      where: { isActive: true, deletedAt: null },
+      where: { isActive: true, deletedAt: null, tenantId: this.tenantContext.requireId },
       include: { items: { orderBy: { sortOrder: 'asc' } } },
       orderBy: { createdAt: 'desc' },
     });
   }
 
   async assignToRental(rentalOrderId: string, templateId: string) {
-    const rental = await this.prisma.rentalOrder.findUnique({
-      where: { id: rentalOrderId },
+    const tenantId = this.tenantContext.requireId;
+    const rental = await this.prisma.rentalOrder.findFirst({
+      where: { id: rentalOrderId, tenantId },
     });
     if (!rental) {
       throw new NotFoundException('Rental order not found');
     }
 
-    const template = await this.prisma.rentalChecklistTemplate.findUnique({
-      where: { id: templateId },
+    const template = await this.prisma.rentalChecklistTemplate.findFirst({
+      where: { id: templateId, tenantId },
       include: { items: { orderBy: { sortOrder: 'asc' } } },
     });
     if (!template) {
@@ -187,8 +193,9 @@ export class RentalChecklistsService {
   }
 
   async getRentalChecklist(rentalOrderId: string) {
-    const rental = await this.prisma.rentalOrder.findUnique({
-      where: { id: rentalOrderId },
+    const tenantId = this.tenantContext.requireId;
+    const rental = await this.prisma.rentalOrder.findFirst({
+      where: { id: rentalOrderId, tenantId },
     });
     if (!rental) {
       throw new NotFoundException('Rental order not found');
@@ -206,7 +213,7 @@ export class RentalChecklistsService {
   }
 
   async checkItem(entryId: string, adminUserId: string, notes?: string) {
-    const entry = await this.prisma.rentalChecklistEntry.findUnique({
+    const entry = await this.prisma.rentalChecklistEntry.findFirst({
       where: { id: entryId },
     });
     if (!entry) {
@@ -230,7 +237,7 @@ export class RentalChecklistsService {
   }
 
   async uncheckItem(entryId: string) {
-    const entry = await this.prisma.rentalChecklistEntry.findUnique({
+    const entry = await this.prisma.rentalChecklistEntry.findFirst({
       where: { id: entryId },
     });
     if (!entry) {

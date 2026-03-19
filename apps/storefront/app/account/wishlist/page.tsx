@@ -7,6 +7,14 @@ import Button from "@/components/ui/Button";
 import { formatPrice } from "@/lib/utils";
 import { wishlistApi } from "@/lib/api";
 
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
+
+function resolveImg(url?: string): string {
+  if (!url) return '/uploads/products/placeholder.jpg';
+  if (url.startsWith('/uploads')) return `${API_ORIGIN}${url}`;
+  return url;
+}
+
 interface WishlistItem {
   id: string;
   name: string;
@@ -21,15 +29,18 @@ interface WishlistItem {
 
 function normalizeItem(raw: any): WishlistItem {
   const product = raw.product || raw;
+  const imgRaw = product.images?.[0];
+  const imgUrl = typeof imgRaw === 'string' ? imgRaw : imgRaw?.url;
   return {
     id: product.id || raw.productId,
     name: product.name || product.title || "Product",
-    price: product.price ?? product.salePrice ?? 0,
-    originalPrice: product.originalPrice ?? product.compareAtPrice ?? undefined,
-    image: product.image || product.images?.[0]?.url || product.images?.[0] || "/uploads/products/placeholder.jpg",
-    rating: product.rating ?? product.averageRating ?? 0,
-    reviewCount: product.reviewCount ?? product.totalReviews ?? 0,
-    inStock: product.inStock != null ? product.inStock : (product.stockQuantity > 0),
+    price: Number(product.basePrice) || Number(product.price) || 0,
+    originalPrice: product.compareAtPrice ? Number(product.compareAtPrice) : undefined,
+    image: resolveImg(imgUrl),
+    rating: product.avgRating ?? product.rating ?? 0,
+    reviewCount: product.reviewCount ?? 0,
+    // Wishlist API doesn't include stock info; default to active if product is active
+    inStock: product.inStock != null ? product.inStock : (product.isActive !== false),
     slug: product.slug,
   };
 }
@@ -127,7 +138,7 @@ export default function WishlistPage() {
                     <button
                       onClick={() => removeItem(item.id)}
                       disabled={removingId === item.id}
-                      className="absolute top-2 right-2 flex items-center justify-center h-8 w-8 rounded-full bg-white/90 text-red-500 hover:bg-red-500 hover:text-white transition-colors shadow-sm disabled:opacity-50"
+                      className="absolute top-2 right-2 z-20 flex items-center justify-center h-8 w-8 rounded-full bg-white/90 text-red-500 hover:bg-red-500 hover:text-white transition-colors shadow-sm disabled:opacity-50"
                       title="Remove from wishlist"
                     >
                       <X className="h-4 w-4" />

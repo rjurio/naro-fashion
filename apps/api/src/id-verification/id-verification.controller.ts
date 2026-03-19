@@ -13,9 +13,12 @@ import {
   RejectVerificationDto,
 } from './id-verification.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard } from '../auth/guards/module.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ModuleGuard)
+@RequiresModule('id-verification')
 @Controller('id-verification')
 export class IdVerificationController {
   constructor(

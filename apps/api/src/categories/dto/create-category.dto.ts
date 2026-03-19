@@ -16,4 +16,8 @@ export class CreateCategoryDto {
   @IsOptional()
   @IsString()
   parentId?: string;
+
+  @IsOptional()
+  @IsString()
+  sizeGuideId?: string;
 }

@@ -16,6 +16,37 @@ import ProductCard from "@/components/ui/ProductCard";
 import Button from "@/components/ui/Button";
 import { productsApi, categoriesApi } from "@/lib/api";
 
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
+
+function resolveImg(url?: string): string {
+  if (!url) return '';
+  if (url.startsWith('/uploads')) return `${API_ORIGIN}${url}`;
+  return url;
+}
+
+/** Map raw API product to the Product interface used by this page */
+function mapApiProduct(p: any): Product {
+  const price = Number(p.basePrice) || 0;
+  const compareAt = p.compareAtPrice ? Number(p.compareAtPrice) : undefined;
+  const primaryImage = p.images?.[0]?.url || p.images?.[0];
+  return {
+    id: p.id,
+    name: p.name,
+    slug: p.slug,
+    price,
+    originalPrice: compareAt,
+    image: resolveImg(typeof primaryImage === 'string' ? primaryImage : primaryImage?.url),
+    rating: p.avgRating ?? 0,
+    reviewCount: p.reviewCount ?? 0,
+    isNew: false,
+    isOnSale: compareAt != null && compareAt > price,
+    isRentable: p.availabilityMode === 'RENTAL_ONLY' || p.availabilityMode === 'BOTH',
+    rentPrice: p.rentalPricePerDay ? Number(p.rentalPricePerDay) : undefined,
+    availabilityMode: p.availabilityMode,
+    defaultVariantId: p.variants?.[0]?.id,
+  };
+}
+
 const sizes = ["XS", "S", "M", "L", "XL", "XXL"];
 
 const colors = [
@@ -58,7 +89,6 @@ interface Product {
   price: number;
   originalPrice?: number;
   image?: string;
-  images?: string[];
   rating?: number;
   reviewCount?: number;
   isNew?: boolean;
@@ -66,6 +96,7 @@ interface Product {
   isRentable?: boolean;
   rentPrice?: number;
   availabilityMode?: string;
+  defaultVariantId?: string;
 }
 
 export default function ProductsPage() {
@@ -143,10 +174,11 @@ export default function ProductsPage() {
     productsApi
       .getAll(buildParams(1))
       .then((res) => {
-        const items = res?.data ?? [];
+        const raw = res?.data ?? [];
+        const items = raw.map(mapApiProduct);
         setProducts(items);
-        setTotalProducts(res?.total ?? items.length);
-        setHasMore(items.length >= 12 && items.length < (res?.total ?? 0));
+        setTotalProducts(res?.meta?.total ?? res?.total ?? items.length);
+        setHasMore(items.length >= 12 && items.length < (res?.meta?.total ?? res?.total ?? 0));
       })
       .catch(() => {
         setProducts([]);
@@ -163,11 +195,12 @@ export default function ProductsPage() {
     productsApi
       .getAll(buildParams(nextPage))
       .then((res) => {
-        const items = res?.data ?? [];
+        const raw = res?.data ?? [];
+        const items = raw.map(mapApiProduct);
         setProducts((prev) => [...prev, ...items]);
         setPage(nextPage);
         setHasMore(
-          products.length + items.length < (res?.total ?? 0)
+          products.length + items.length < (res?.meta?.total ?? res?.total ?? 0)
         );
       })
       .catch(() => {
@@ -201,19 +234,21 @@ export default function ProductsPage() {
     selectedColors.length +
     (selectedPriceRange !== null ? 1 : 0);
 
-  // Map API product to ProductCard props
+  // Map Product to ProductCard props (data already mapped by mapApiProduct)
   const toCardProps = (p: Product) => ({
     id: p.id,
     name: p.name,
+    slug: p.slug,
     price: p.price,
     originalPrice: p.originalPrice,
-    image: p.image || (p.images && p.images[0]) || "/images/placeholder.jpg",
+    image: p.image,
     rating: p.rating ?? 0,
     reviewCount: p.reviewCount ?? 0,
     isNew: p.isNew,
-    isOnSale: p.isOnSale ?? (p.originalPrice ? p.originalPrice > p.price : false),
-    isRentable: p.isRentable ?? (p.availabilityMode === "RENTAL_ONLY" || p.availabilityMode === "BOTH"),
+    isOnSale: p.isOnSale,
+    isRentable: p.isRentable,
     rentPrice: p.rentPrice,
+    defaultVariantId: p.defaultVariantId,
   });
 
   const allCategories = [

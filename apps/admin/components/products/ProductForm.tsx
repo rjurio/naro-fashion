@@ -5,6 +5,7 @@ import { Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import adminApi from '@/lib/api';
 import { useToast } from '@/contexts/ToastContext';
 import ImageUploader from './ImageUploader';
+import Model3dUploader from './Model3dUploader';
 import InfoLabel from '@/components/ui/InfoLabel';
 
 interface VariantRow {
@@ -37,6 +38,8 @@ export interface ProductFormData {
   maxRentalDays: number | null;
   bufferDaysOverride: number | null;
   images: string[];
+  model3dUrl: string | null;
+  model3dPosterUrl: string | null;
   variants: VariantRow[];
   published: boolean;
 }
@@ -54,6 +57,7 @@ const emptyVariant = (): VariantRow => ({
 export default function ProductForm({ initialData, onSubmit, submitLabel }: Props) {
   const { toast } = useToast();
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
+  const [sizeGuides, setSizeGuides] = useState<{ id: string; name: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [showRental, setShowRental] = useState(false);
   const [showVariants, setShowVariants] = useState(true);
@@ -75,13 +79,19 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
   const [minRentalDays, setMinRentalDays] = useState<number | null>(null);
   const [maxRentalDays, setMaxRentalDays] = useState<number | null>(null);
   const [bufferDaysOverride, setBufferDaysOverride] = useState<number | null>(null);
+  const [sizeGuideId, setSizeGuideId] = useState('');
   const [images, setImages] = useState<string[]>([]);
+  const [model3dUrl, setModel3dUrl] = useState<string | null>(null);
+  const [model3dPosterUrl, setModel3dPosterUrl] = useState<string | null>(null);
   const [variants, setVariants] = useState<VariantRow[]>([emptyVariant()]);
 
   // Load categories
   useEffect(() => {
     adminApi.getCategories().then((cats) => {
       setCategories(Array.isArray(cats) ? cats : []);
+    }).catch(() => {});
+    adminApi.getSizeGuides().then((guides) => {
+      setSizeGuides((Array.isArray(guides) ? guides : []).filter((g: any) => g.isActive));
     }).catch(() => {});
   }, []);
 
@@ -99,11 +109,14 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
     setSku(initialData.sku || '');
     setAvailabilityMode(initialData.availabilityMode || 'PURCHASE_ONLY');
     setIsFeatured(initialData.isFeatured || false);
+    setSizeGuideId(initialData.sizeGuideId || '');
     setRentalPricePerDay(initialData.rentalPricePerDay ? Number(initialData.rentalPricePerDay) : null);
     setRentalDepositAmount(initialData.rentalDepositAmount ? Number(initialData.rentalDepositAmount) : null);
     setMinRentalDays(initialData.minRentalDays || null);
     setMaxRentalDays(initialData.maxRentalDays || null);
     setBufferDaysOverride(initialData.bufferDaysOverride ?? null);
+    setModel3dUrl(initialData.model3dUrl || null);
+    setModel3dPosterUrl(initialData.model3dPosterUrl || null);
 
     if (initialData.images?.length) {
       setImages(initialData.images.map((img: any) => typeof img === 'string' ? img : img.url));
@@ -179,6 +192,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
         categoryId,
         sku: sku.trim(),
         availabilityMode,
+        sizeGuideId: sizeGuideId || undefined,
         isFeatured,
         rentalPricePerDay: showRental ? rentalPricePerDay : null,
         rentalDepositAmount: showRental ? rentalDepositAmount : null,
@@ -186,6 +200,8 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
         maxRentalDays: showRental ? maxRentalDays : null,
         bufferDaysOverride: showRental ? bufferDaysOverride : null,
         images,
+        model3dUrl,
+        model3dPosterUrl,
         variants: validVariants,
         published: !asDraft,
       });
@@ -246,7 +262,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
             <input value={sku} onChange={(e) => setSku(e.target.value)} className={inputCls} placeholder="Auto-generated" />
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div>
             <InfoLabel label="Category" tooltip="The product category this item belongs to (e.g. Gowns, Suits, Accessories). Helps customers find products." required />
             <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={inputCls}>
@@ -262,6 +278,15 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
               <option value="PURCHASE_ONLY">Purchase Only</option>
               <option value="RENTAL_ONLY">Rental Only</option>
               <option value="BOTH">Purchase & Rental</option>
+            </select>
+          </div>
+          <div>
+            <InfoLabel label="Size Guide" tooltip="Attach a size guide to help customers pick the right size. Manage size guides under CMS > Size Guides." />
+            <select value={sizeGuideId} onChange={(e) => setSizeGuideId(e.target.value)} className={inputCls}>
+              <option value="">No size guide</option>
+              {sizeGuides.map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
             </select>
           </div>
           <div>
@@ -309,6 +334,20 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
       <section className="bg-[hsl(var(--card))] rounded-xl border border-[hsl(var(--border))] p-5 space-y-4">
         <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Product Images</h3>
         <ImageUploader images={images} onChange={setImages} />
+      </section>
+
+      {/* 3D Model */}
+      <section className="bg-[hsl(var(--card))] rounded-xl border border-[hsl(var(--border))] p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">3D Model (Optional)</h3>
+        <p className="text-xs text-[hsl(var(--muted-foreground))]">
+          Upload a 3D model to let customers view and interact with the product in 3D on the storefront.
+        </p>
+        <Model3dUploader
+          modelUrl={model3dUrl}
+          posterUrl={model3dPosterUrl}
+          onModelChange={setModel3dUrl}
+          onPosterChange={setModel3dPosterUrl}
+        />
       </section>
 
       {/* Variants */}

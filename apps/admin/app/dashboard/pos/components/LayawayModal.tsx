@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { X, Clock, Plus, CreditCard, Check } from 'lucide-react';
 import adminApi from '../../../../lib/api';
+import { useToast } from '@/contexts/ToastContext';
 import { PAYMENT_METHOD_LABELS } from '@naro/shared';
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 const PAYMENT_METHODS = ['CASH', 'MPESA', 'TIGO_PESA', 'AIRTEL_MONEY', 'MIX_BY_YAS', 'CARD'];
 
 export default function LayawayModal({ onClose }: Props) {
+  const toast = useToast();
   const [tab, setTab] = useState<'list' | 'create'>('list');
   const [layaways, setLayaways] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,7 +54,7 @@ export default function LayawayModal({ onClose }: Props) {
       setPayingLayawayId(null);
       loadLayaways();
     } catch (err: any) {
-      alert(err.message || 'Payment failed');
+      toast.error(err.message || 'Payment failed');
     } finally {
       setPayProcessing(false);
     }
@@ -64,7 +66,7 @@ export default function LayawayModal({ onClose }: Props) {
       await adminApi.posCompleteLayaway(id);
       loadLayaways();
     } catch (err: any) {
-      alert(err.message || 'Failed to complete layaway');
+      toast.error(err.message || 'Failed to complete layaway');
     }
   };
 
@@ -74,7 +76,7 @@ export default function LayawayModal({ onClose }: Props) {
       await adminApi.posCancelLayaway(id);
       loadLayaways();
     } catch (err: any) {
-      alert(err.message || 'Failed to cancel');
+      toast.error(err.message || 'Failed to cancel');
     }
   };
 

@@ -15,9 +15,12 @@ import { UpdateTemplateDto } from './dto/update-template.dto';
 import { AssignChecklistDto } from './dto/assign-checklist.dto';
 import { CheckItemDto } from './dto/check-item.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard } from '../auth/guards/module.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ModuleGuard)
+@RequiresModule('rental-checklists')
 @Controller('rental-checklists')
 export class RentalChecklistsController {
   constructor(

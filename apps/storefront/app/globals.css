@@ -189,3 +189,57 @@ body {
     background-color: var(--color-gold-700);
   }
 }
+
+/* ===== Hero Background Animations ===== */
+
+/* Ken Burns cinematic zoom+drift effect for hero slides */
+@keyframes hero-kenburns {
+  0% {
+    transform: scale(1) translate(0, 0);
+  }
+  50% {
+    transform: scale(1.12) translate(-1.5%, -1%);
+  }
+  100% {
+    transform: scale(1.05) translate(0.5%, 0.5%);
+  }
+}
+
+.animate-hero-kenburns {
+  animation: hero-kenburns 12s ease-in-out infinite alternate;
+}
+
+/* Subtle gradient shift for fallback (no hero slides) */
+@keyframes hero-gradient {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.animate-hero-gradient {
+  background-size: 200% 200%;
+  animation: hero-gradient 15s ease-in-out infinite;
+}
+
+/* Floating gold particles for fallback */
+@keyframes hero-float {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.08;
+  }
+  33% {
+    transform: translateY(-30px) scale(1.1);
+    opacity: 0.15;
+  }
+  66% {
+    transform: translateY(15px) scale(0.95);
+    opacity: 0.05;
+  }
+}
+
+.animate-hero-float {
+  animation: hero-float 10s ease-in-out infinite;
+}

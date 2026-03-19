@@ -5,6 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreateAdminUserDto } from './dto/create-admin-user.dto';
 import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 import * as bcrypt from 'bcryptjs';
@@ -12,11 +13,15 @@ import * as crypto from 'crypto';
 
 @Injectable()
 export class AdminUsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async findAll(params: { isActive?: boolean; role?: string; includeDeleted?: boolean }) {
     return this.prisma.adminUser.findMany({
       where: {
+        tenantId: this.tenantContext.requireId,
         ...(params.includeDeleted ? {} : { deletedAt: null }),
         ...(params.isActive !== undefined ? { isActive: params.isActive } : {}),
         ...(params.role ? { role: params.role } : {}),
@@ -33,7 +38,7 @@ export class AdminUsersService {
 
   async findOne(id: string) {
     const admin = await this.prisma.adminUser.findUnique({
-      where: { id },
+      where: { id, tenantId: this.tenantContext.requireId },
       select: {
         id: true, email: true, firstName: true, lastName: true, role: true,
         isActive: true, avatarUrl: true, createdBy: true, createdAt: true,
@@ -47,7 +52,8 @@ export class AdminUsersService {
   }
 
   async create(dto: CreateAdminUserDto, createdById: string) {
-    const existing = await this.prisma.adminUser.findUnique({ where: { email: dto.email } });
+    const tenantId = this.tenantContext.requireId;
+    const existing = await this.prisma.adminUser.findFirst({ where: { email: dto.email, tenantId } });
     if (existing) throw new ConflictException('Email already in use');
 
     const tempPassword = crypto.randomBytes(8).toString('hex');
@@ -56,6 +62,7 @@ export class AdminUsersService {
     try {
       const admin = await this.prisma.adminUser.create({
         data: {
+          tenantId,
           email: dto.email,
           firstName: dto.firstName,
           lastName: dto.lastName,
@@ -77,7 +84,7 @@ export class AdminUsersService {
   }
 
   async update(id: string, dto: UpdateAdminUserDto) {
-    const admin = await this.prisma.adminUser.findUnique({ where: { id } });
+    const admin = await this.prisma.adminUser.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!admin) throw new NotFoundException('Admin user not found');
     try {
       return await this.prisma.adminUser.update({
@@ -93,7 +100,7 @@ export class AdminUsersService {
 
   async remove(id: string, performedById: string) {
     if (id === performedById) throw new ForbiddenException('Cannot delete your own account');
-    const admin = await this.prisma.adminUser.findUnique({ where: { id } });
+    const admin = await this.prisma.adminUser.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!admin) throw new NotFoundException('Admin user not found');
     if (admin.role === 'SUPER_ADMIN') throw new ForbiddenException('Cannot delete SUPER_ADMIN accounts');
     return this.prisma.adminUser.update({
@@ -104,7 +111,7 @@ export class AdminUsersService {
 
   async toggle(id: string, performedById: string) {
     if (id === performedById) throw new ForbiddenException('Cannot disable your own account');
-    const admin = await this.prisma.adminUser.findUnique({ where: { id } });
+    const admin = await this.prisma.adminUser.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!admin) throw new NotFoundException('Admin user not found');
     return this.prisma.adminUser.update({
       where: { id },
@@ -114,7 +121,7 @@ export class AdminUsersService {
   }
 
   async unlock(id: string) {
-    const admin = await this.prisma.adminUser.findUnique({ where: { id } });
+    const admin = await this.prisma.adminUser.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!admin) throw new NotFoundException('Admin user not found');
     return this.prisma.adminUser.update({
       where: { id },
@@ -124,11 +131,12 @@ export class AdminUsersService {
   }
 
   async assignRole(adminUserId: string, roleId: string, performedById: string) {
+    const tenantId = this.tenantContext.requireId;
     if (adminUserId === performedById) throw new ForbiddenException('Cannot change your own roles');
-    const role = await this.prisma.role.findUnique({ where: { id: roleId } });
+    const role = await this.prisma.role.findUnique({ where: { id: roleId, tenantId } });
     if (!role) throw new NotFoundException('Role not found');
     if (role.name === 'SUPER_ADMIN') {
-      const performer = await this.prisma.adminUser.findUnique({ where: { id: performedById } });
+      const performer = await this.prisma.adminUser.findUnique({ where: { id: performedById, tenantId } });
       if (performer?.role !== 'SUPER_ADMIN') throw new ForbiddenException('Only SUPER_ADMIN can assign the SUPER_ADMIN role');
     }
     try {
@@ -147,7 +155,7 @@ export class AdminUsersService {
 
   async getActivity(id: string) {
     return this.prisma.adminActivityLog.findMany({
-      where: { adminUserId: id },
+      where: { adminUserId: id, tenantId: this.tenantContext.requireId },
       orderBy: { createdAt: 'desc' },
       take: 50,
     });

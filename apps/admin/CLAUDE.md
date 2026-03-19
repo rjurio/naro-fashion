@@ -1,20 +1,39 @@
 # Admin Dashboard
 
-Internal admin dashboard for Naro Fashion. Runs on port 3001.
+Admin dashboard for Naro Fashion. Runs on port 3001.
+Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin** (manages all tenants).
 
 ## Stack
 - Next.js 15+ (App Router), React 19, TypeScript, Tailwind CSS v4
 - Recharts for analytics/financial charts (dynamically imported, SSR disabled)
 - next-themes for Light/Dark/Luxury theme switching
 
+## Theming
+- ThemeProvider: `attribute="class"`, themes: `light | dark | luxury`, `enableSystem={false}` (in `app/providers.tsx`)
+- **First-visit auto-detection**: Inline `<script>` in `app/layout.tsx` runs before React hydrates — reads `prefers-color-scheme`, sets `localStorage('theme')` and `class` on `<html>` (dark→`dark`, else→`light`)
+- **Returning visitors**: next-themes reads `localStorage('theme')` — user's manual choice is preserved
+- Theme toggle in TopBar dropdown cycles: light, dark, luxury
+
 ## Auth
-- AuthContext in `contexts/AuthContext.tsx` provides `user`, `login`, `logout`, `refreshUser`
-- Providers wrapper in `app/providers.tsx` (ThemeProvider + AuthProvider)
-- Login calls `POST /auth/login`, stores token in localStorage
-- JWT validates against AdminUser table when `isAdmin: true` in payload
-- `lib/api.ts` `getHeaders()` falls back to `localStorage.getItem('token')` when `this.token` is null
+- AuthContext in `contexts/AuthContext.tsx` provides `user`, `login`, `platformLogin`, `logout`, `refreshUser`, `isPlatformAdmin`, `enabledModules`, `isModuleEnabled()`
+- **Tenant admin login**: `/login` → `POST /auth/login` → tenant admin dashboard (`/dashboard/*`)
+- **Platform admin login**: `/platform-login` → `POST /auth/platform-login` → platform dashboard (`/platform/*`)
+- JWT validates against AdminUser (isAdmin) or PlatformAdmin (isPlatformAdmin)
+- `lib/api.ts` includes platform/tenant API methods (getTenants, createTenant, etc.)
+- Sidebar (`components/layout/Sidebar.tsx`) shows platform nav for platform admins, tenant nav (filtered by `enabledModules`) for tenant admins
 
 ## Pages
+
+### Platform Admin Pages (isPlatformAdmin)
+- `/platform-login` - Platform admin login (checks PlatformAdmin table)
+- `/platform` - Platform dashboard (total tenants, MRR, active/trial/suspended counts, recent payments)
+- `/platform/tenants` - Tenant list with search, status badges, plan info
+- `/platform/tenants/new` - Create tenant wizard (company info, admin user, plan, branding colors)
+- `/platform/tenants/[id]` - Tenant detail (status, modules toggle, payment history, suspend/activate)
+- `/platform/plans` - Subscription plan CRUD (name, price, limits, modules)
+- `/platform/payments` - All tenant payments across platform
+
+### Tenant Admin Pages
 - `/login` - Admin login (checks AdminUser table)
 - `/dashboard` - Overview with stats cards, revenue chart, recent orders
 - `/dashboard/products` - Product CRUD (list, create, edit, soft delete, activate/deactivate toggle, barcode generation)
@@ -35,6 +54,7 @@ Internal admin dashboard for Naro Fashion. Runs on port 3001.
 - `/dashboard/reviews` - Review moderation
 - `/dashboard/recycle-bin` - Recycle bin with tabs: Products, Categories, Flash Sales, Checklists, Banners, Pages — restore soft-deleted items
 - `/dashboard/settings` - Profile edit, password change, 2FA toggle, appearance, notifications
+- `/dashboard/settings/payment-methods` - Payment Methods CRUD (name, code, uploaded+cropped icon, description, integration key/params, active toggle, sort order)
 - `/dashboard/profile` - Admin profile view/edit
 - `/dashboard/reports/rentals` - Rental reports (per-item rental count, cumulative income, rental history modal)
 - `/dashboard/inventory` - Inventory management (stock levels, low-stock alerts, transaction history, valuation, EditInventoryModal, AdjustStockModal)
@@ -57,6 +77,7 @@ Internal admin dashboard for Naro Fashion. Runs on port 3001.
 - `components/products/ImageCropModal.tsx` - 3:4 aspect ratio image cropper (react-cropper, quality slider, 900×1200 output)
 - `components/products/BarcodeLabel.tsx` - Barcode label preview (JsBarcode CODE128, product name, price in TZS)
 - `components/products/BarcodeModal.tsx` - Barcode PDF generation (jsPDF, 3×9 labels per A4, quantity selector, print dialog)
+- `components/products/Model3dUploader.tsx` - 3D model upload (drag-drop GLB/GLTF, max 25MB, live model-viewer preview, remove button)
 
 ## UI Foundation Components (all in `components/ui/`)
 - `Toast.tsx` / `contexts/ToastContext.tsx` - ToastProvider + useToast() hook (success/error/warning/info, top-right, auto-dismiss 4s)

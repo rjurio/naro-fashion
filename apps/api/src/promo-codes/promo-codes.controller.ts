@@ -12,10 +12,13 @@ import {
 import { PromoCodesService } from './promo-codes.service';
 import { CreatePromoCodeDto, ValidatePromoCodeDto } from './dto/create-promo-code.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard } from '../auth/guards/module.guard';
 import { Public } from '../auth/decorators/public.decorator';
+import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
 @Controller('promo-codes')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ModuleGuard)
+@RequiresModule('promo-codes')
 export class PromoCodesController {
   constructor(private readonly promoCodesService: PromoCodesService) {}
 

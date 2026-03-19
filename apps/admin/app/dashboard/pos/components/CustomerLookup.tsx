@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Search, UserPlus, X, User } from 'lucide-react';
 import adminApi from '../../../../lib/api';
+import { useToast } from '@/contexts/ToastContext';
 
 interface Customer {
   id: string;
@@ -29,6 +30,7 @@ export default function CustomerLookup({
   onCustomerNameChange,
   onCustomerPhoneChange,
 }: Props) {
+  const toast = useToast();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Customer[]>([]);
   const [showResults, setShowResults] = useState(false);
@@ -94,7 +96,7 @@ export default function CustomerLookup({
       setNewFirstName('');
       setNewPhone('');
     } catch (err: any) {
-      alert(err.message || 'Failed to create customer');
+      toast.error(err.message || 'Failed to create customer');
     } finally {
       setCreating(false);
     }

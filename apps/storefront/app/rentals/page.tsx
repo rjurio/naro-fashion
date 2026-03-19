@@ -18,6 +18,14 @@ import ProductCard from "@/components/ui/ProductCard";
 import Button from "@/components/ui/Button";
 import { productsApi, categoriesApi } from "@/lib/api";
 
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
+
+function resolveImg(url?: string): string {
+  if (!url) return '';
+  if (url.startsWith('/uploads')) return `${API_ORIGIN}${url}`;
+  return url;
+}
+
 interface RentalCategory {
   name: string;
   slug?: string;
@@ -26,13 +34,16 @@ interface RentalCategory {
 
 interface RentalProduct {
   id: string;
+  slug: string;
   name: string;
   price: number;
   image: string;
   rating: number;
   reviewCount: number;
   isRentable: boolean;
-  rentPrice: number;
+  rentPrice?: number;
+  defaultVariantId?: string;
+  categoryName?: string;
 }
 
 export default function RentalsPage() {
@@ -41,35 +52,55 @@ export default function RentalsPage() {
   const [rentalCategories, setRentalCategories] = useState<RentalCategory[]>([]);
   const [rentalProducts, setRentalProducts] = useState<RentalProduct[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const PAGE_SIZE = 12;
+
+  const mapProduct = (p: any): RentalProduct => {
+    const primaryImage = p.images?.[0]?.url || p.images?.[0];
+    return {
+      id: p.id,
+      slug: p.slug ?? p.id,
+      name: p.name ?? "Unknown",
+      price: Number(p.basePrice) || 0,
+      image: resolveImg(typeof primaryImage === 'string' ? primaryImage : primaryImage?.url),
+      rating: p.avgRating ?? 0,
+      reviewCount: p.reviewCount ?? 0,
+      isRentable: true,
+      rentPrice: p.rentalPricePerDay ? Number(p.rentalPricePerDay) : undefined,
+      defaultVariantId: p.variants?.[0]?.id,
+      categoryName: p.category?.name,
+    };
+  };
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         const [productsRes, categoriesRes] = await Promise.all([
-          productsApi.getAll({ availability_mode: "RENTAL_ONLY,BOTH" }).catch(() => ({ data: [], total: 0, page: 1, limit: 20 })),
+          productsApi.getAll({ availability_mode: "RENTAL_ONLY,BOTH", limit: String(PAGE_SIZE), page: "1" }).catch(() => ({ data: [], total: 0, page: 1, limit: PAGE_SIZE })),
           categoriesApi.getAll().catch(() => []),
         ]);
 
-        const products = (productsRes?.data ?? []).map((p: any) => ({
-          id: p.id ?? p.slug,
-          name: p.name ?? "Unknown",
-          price: p.price ?? 0,
-          image: p.image ?? p.images?.[0] ?? "/images/placeholder.jpg",
-          rating: p.rating ?? p.averageRating ?? 0,
-          reviewCount: p.reviewCount ?? p.review_count ?? 0,
-          isRentable: true,
-          rentPrice: p.rentPrice ?? p.rent_price ?? p.rentalPrice ?? 0,
-        }));
+        const products = (productsRes?.data ?? []).map(mapProduct);
+        const total = productsRes?.total ?? 0;
         setRentalProducts(products);
+        setCurrentPage(1);
+        setHasMore(products.length < total);
 
+        // Build category filter from actual products
         const cats = Array.isArray(categoriesRes) ? categoriesRes : [];
+        const catCounts: Record<string, number> = {};
+        products.forEach((p) => { if (p.categoryName) catCounts[p.categoryName] = (catCounts[p.categoryName] || 0) + 1; });
         const mappedCats: RentalCategory[] = [
-          { name: "All", count: products.length },
-          ...cats.map((c: any) => ({
-            name: c.name ?? "Unknown",
-            slug: c.slug,
-            count: c.productCount ?? c.product_count ?? 0,
-          })),
+          { name: "All", count: total },
+          ...cats
+            .filter((c: any) => catCounts[c.name])
+            .map((c: any) => ({
+              name: c.name ?? "Unknown",
+              slug: c.slug,
+              count: catCounts[c.name] ?? 0,
+            })),
         ];
         setRentalCategories(mappedCats);
       } catch {
@@ -81,6 +112,22 @@ export default function RentalsPage() {
     };
     fetchData();
   }, []);
+
+  const handleLoadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const nextPage = currentPage + 1;
+      const res = await productsApi.getAll({ availability_mode: "RENTAL_ONLY,BOTH", limit: String(PAGE_SIZE), page: String(nextPage) });
+      const more = (res?.data ?? []).map(mapProduct);
+      setRentalProducts((prev) => [...prev, ...more]);
+      setCurrentPage(nextPage);
+      setHasMore(rentalProducts.length + more.length < (res?.total ?? 0));
+    } catch {
+      // silently fail
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   return (
     <div className="bg-background min-h-screen">
@@ -154,6 +201,7 @@ export default function RentalsPage() {
           <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 w-full sm:w-auto">
             {rentalCategories.map((cat) => (
               <button
+                type="button"
                 key={cat.name}
                 onClick={() => setSelectedCategory(cat.name)}
                 className={`whitespace-nowrap px-4 py-2 rounded-full text-sm font-medium transition-colors ${
@@ -169,6 +217,7 @@ export default function RentalsPage() {
 
           <div className="relative">
             <select
+              title="Sort rentals"
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
               className="appearance-none rounded-lg border border-border bg-card px-4 py-2 pr-8 text-sm font-medium text-foreground outline-none focus:border-gold-500 cursor-pointer"
@@ -208,19 +257,25 @@ export default function RentalsPage() {
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
-            {rentalProducts.map((product) => (
-              <Link key={product.id} href={`/rentals/${product.id}`}>
-                <ProductCard {...product} />
-              </Link>
+            {rentalProducts
+              .filter((p) => selectedCategory === "All" || p.categoryName === selectedCategory)
+              .sort((a, b) => {
+                if (sortBy === "price-asc") return (a.rentPrice ?? a.price) - (b.rentPrice ?? b.price);
+                if (sortBy === "price-desc") return (b.rentPrice ?? b.price) - (a.rentPrice ?? a.price);
+                if (sortBy === "rating") return (b.rating ?? 0) - (a.rating ?? 0);
+                return (b.reviewCount ?? 0) - (a.reviewCount ?? 0); // popular
+              })
+              .map((product) => (
+              <ProductCard key={product.id} {...product} href={`/rentals/${product.slug}`} />
             ))}
           </div>
         )}
 
         {/* Load More */}
-        {rentalProducts.length > 0 && (
+        {hasMore && (
           <div className="mt-12 text-center">
-            <Button variant="outline" size="lg">
-              Load More Rentals
+            <Button type="button" variant="outline" size="lg" onClick={handleLoadMore} disabled={loadingMore}>
+              {loadingMore ? <><Loader2 className="inline h-4 w-4 animate-spin mr-2" />Loading...</> : "Load More Rentals"}
             </Button>
           </div>
         )}
@@ -238,7 +293,7 @@ export default function RentalsPage() {
             perfect outfit for your special occasion.
           </p>
           <div className="mt-6 flex flex-col sm:flex-row gap-3 justify-center">
-            <Link href="/contact">
+            <Link href="/pages/contact">
               <Button variant="secondary" size="lg" className="gap-2">
                 Contact Us <ArrowRight className="h-5 w-5" />
               </Button>

@@ -18,13 +18,16 @@ import { UpdateRentalDto } from './dto/update-rental.dto';
 import { QueryRentalsDto } from './dto/query-rentals.dto';
 import { UpdateRentalStatusDto } from './dto/update-rental-status.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard } from '../auth/guards/module.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { extname } from 'path';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { diskStorage } = require('multer');
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ModuleGuard)
+@RequiresModule('rentals')
 @Controller('rentals')
 export class RentalsController {
   constructor(private readonly rentalsService: RentalsService) {}

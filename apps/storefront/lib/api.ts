@@ -25,12 +25,19 @@ async function request<T>(
 ): Promise<T> {
   const { method = "GET", body, headers = {}, cache, tags } = options;
 
-  // Auto-inject auth token from localStorage when running in the browser
+  // Auto-inject auth token and tenant context when running in the browser
   const authHeaders: Record<string, string> = {};
   if (typeof window !== "undefined") {
     const token = localStorage.getItem("token");
     if (token) {
       authHeaders["Authorization"] = `Bearer ${token}`;
+    }
+    // Read tenantId from cookie (set by storefront middleware)
+    const tenantId =
+      document.cookie.match(/(?:^|;\s*)tenantId=([^;]*)/)?.[1] ||
+      localStorage.getItem("tenantId");
+    if (tenantId) {
+      authHeaders["X-Tenant-Id"] = tenantId;
     }
   }
 
@@ -113,6 +120,7 @@ export const wishlistApi = {
   get: () => api.get<any>('/wishlist'),
   toggle: (productId: string) => api.post<any>(`/wishlist/${productId}`, {}),
   remove: (productId: string) => api.delete<any>(`/wishlist/${productId}`),
+  check: (productId: string) => api.get<{ inWishlist: boolean }>(`/wishlist/check/${productId}`),
 };
 
 export const ordersApi = {
@@ -150,6 +158,12 @@ export const cmsApi = {
   getSettings: () => api.get<any[]>('/cms/settings'),
   getInstagramPosts: () => api.get<any[]>('/cms/instagram-posts'),
   getBusinessProfile: () => api.get<any>('/cms/settings/business-profile'),
+};
+
+export const sizeGuidesApi = {
+  getAll: () => api.get<any[]>('/size-guides'),
+  getDefault: () => api.get<any>('/size-guides/default'),
+  getBySlug: (slug: string) => api.get<any>(`/size-guides/by-slug/${slug}`),
 };
 
 export const newsletterApi = {
@@ -270,6 +284,15 @@ export const promoCodesApi = {
       discountAmount: number;
       description?: string;
     }>('/promo-codes/validate', { code, orderAmount }),
+};
+
+export const addressesApi = {
+  getAll: () => api.get<any[]>('/users/addresses'),
+  create: (data: { street: string; city: string; state: string; zipCode: string; country: string; label?: string; isDefault?: boolean }) =>
+    api.post<any>('/users/addresses', data),
+  update: (id: string, data: Partial<{ street: string; city: string; state: string; zipCode: string; country: string; label?: string; isDefault?: boolean }>) =>
+    api.patch<any>(`/users/addresses/${id}`, data),
+  delete: (id: string) => api.delete<any>(`/users/addresses/${id}`),
 };
 
 export { ApiError };

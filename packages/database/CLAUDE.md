@@ -1,17 +1,27 @@
 # Database Package
 
-Prisma schema and client for Naro Fashion.
+Prisma schema and client for Naro Fashion multi-tenant SaaS.
 
 ## Files
-- `prisma/schema.prisma` - Database schema (40+ models)
-- `prisma/seed.ts` - Seed data (admin user, categories, products, shipping zones, rental policies, CMS content)
+- `prisma/schema.prisma` - Database schema (50+ models, all tenant-scoped)
+- `prisma/seed.ts` - Original seed (categories, products, shipping) — pre-multi-tenant
+- `prisma/migrate-to-multi-tenant.js` - Creates first Tenant, PlatformAdmin, subscription plans, backfills tenantId
+- `prisma/seed-tenant.js` - Seeds site settings, CMS pages, branding, payment methods, expense categories
+- `prisma/seed-mock-data.js` - Seeds demo customers, orders, rentals, reviews, expenses, events, etc.
 - `.env` - Database connection string
 
-## Models
-Users, Address, Product, ProductImage, ProductVideo, ProductVariant, Category, Cart, CartItem, Wishlist, Order, OrderItem, Payment, Invoice, ShippingZone, ShippingRate, PickupPoint, Shipment, Review, RentalOrder, RentalPayment, RentalChecklistTemplate, RentalChecklistItem, RentalChecklistEntry, RentalPolicy, FlashSale, FlashSaleItem, ReferralCode, ReferralUsage, CustomerIDDocument, Banner, Page, SiteSetting, AdminUser,
-InventoryTransaction, ExpenseCategory, BusinessExpense, FinancialPeriod,
-Permission, Role, RolePermission, AdminUserRole, LoginAttempt,
-InstagramPost, NewsletterSubscriber, Newsletter, NewsletterDelivery, NewsletterProduct
+## Multi-Tenant Models (platform-level, no tenantId)
+Tenant, PlatformAdmin, TenantBranding, SubscriptionPlan, TenantSubscription, TenantPayment, TenantModule
+
+## Tenant-Scoped Models (have tenantId field)
+User, AdminUser, AdminActivityLog, LoginAttempt, CustomerIDDocument, Category, Product, ProductVariant, Order, Payment, Shipment, Invoice, ShippingZone, Review, RentalOrder, RentalChecklistTemplate, RentalPolicy, FlashSale, ReferralCode, Banner, HeroSlide, Page, SizeGuide, SiteSetting, InstagramPost, NewsletterSubscriber, Newsletter, PickupPoint, InventoryTransaction, ExpenseCategory, BusinessExpense, FinancialPeriod, Role, PosSession, HeldSale, Layaway, PosExchange, PromoCode, CustomerEvent, AbandonedCartReminder, PaymentMethod, ContactSubmission
+
+## Child Models (no tenantId, inherit scope via parent FK)
+Address, CartItem, WishlistItem, OrderItem, ProductImage, ProductVideo, ShippingRate, ReviewImage, FlashSaleItem, RentalChecklistTemplateItem, RentalChecklistEntry, RentalPreparationReminder, Referral, EventMedia, NewsletterDelivery, NewsletterProduct, PromoCodeUsage, RolePermission, AdminUserRole
+
+## Unique Constraints (per-tenant)
+Many fields changed from `@unique` to `@@unique([tenantId, field])`: Category.slug, Product.slug, Product.sku, ProductVariant.sku, ProductVariant.barcode, Order.orderNumber, RentalOrder.rentalNumber, Page.slug, SiteSetting.key, Role.name, etc.
+**Keep globally unique**: AdminUser.email, Permission.code, Payment.transactionRef
 
 ## Instagram & Newsletter Models (added 2026-03)
 - **InstagramPost** - Posts synced from Instagram Graph API or manually added. Fields: source (INSTAGRAM_API/MANUAL), isPinned, instagramMediaId (unique for dedup), mediaType, postedAt

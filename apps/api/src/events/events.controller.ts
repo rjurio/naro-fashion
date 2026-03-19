@@ -19,8 +19,12 @@ import {
   ReorderMediaDto,
 } from './events.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard } from '../auth/guards/module.guard';
 import { Public } from '../auth/decorators/public.decorator';
+import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
+@UseGuards(ModuleGuard)
+@RequiresModule('events')
 @Controller('events')
 export class EventsController {
   constructor(private readonly eventsService: EventsService) {}

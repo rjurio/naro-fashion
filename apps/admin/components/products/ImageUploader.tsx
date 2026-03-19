@@ -77,7 +77,7 @@ export default function ImageUploader({ images, onChange, maxImages = 8 }: Props
           {images.map((url, i) => (
             <div key={i} className="relative group aspect-[3/4] rounded-lg overflow-hidden border border-[hsl(var(--border))] bg-[hsl(var(--accent))]">
               <img
-                src={url.startsWith('/') ? `http://localhost:4000${url}` : url}
+                src={url.startsWith('/') ? `${(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '')}${url}` : url}
                 alt={`Product image ${i + 1}`}
                 className="w-full h-full object-cover"
               />

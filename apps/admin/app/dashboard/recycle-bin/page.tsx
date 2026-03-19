@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useToast } from '@/contexts/ToastContext';
 import {
   Trash2, RotateCcw, Loader2, Package, FolderTree, Zap,
   ClipboardList, Image as ImageIcon, FileText, AlertTriangle, Camera,
@@ -64,6 +65,7 @@ function formatDate(dateStr: string): string {
 }
 
 export default function RecycleBinPage() {
+  const toast = useToast();
   const [activeTab, setActiveTab] = useState<TabKey>('products');
   const [items, setItems] = useState<DeletedItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -122,7 +124,7 @@ export default function RecycleBinPage() {
       setCounts((prev) => ({ ...prev, [activeTab]: Math.max(0, prev[activeTab] - 1) }));
     } catch (err) {
       console.error('Failed to restore:', err);
-      alert('Failed to restore item. Please try again.');
+      toast.error('Failed to restore item. Please try again.');
     } finally {
       setRestoring(null);
     }

@@ -9,15 +9,27 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - Local file storage for image uploads (ServeStaticModule serves `/uploads`), Multer for multipart
 - @nestjs/serve-static for serving uploaded files
 
+## Multi-Tenancy
+- **TenantContext** (`src/tenant/tenant.context.ts`): Request-scoped injectable providing `tenantId`. Use `this.tenantContext.requireId` in all Prisma queries.
+- **TenantInterceptor** (`src/tenant/tenant.interceptor.ts`): Global interceptor, extracts tenantId from JWT or `X-Tenant-Id` header.
+- **TenantGuard** (`src/auth/guards/tenant.guard.ts`): Validates tenant is ACTIVE.
+- **ModuleGuard** (`src/auth/guards/module.guard.ts`): Checks `@RequiresModule()` decorator against TenantModule table. 5-min cache per tenant.
+- **PlatformAdminGuard** (`src/auth/guards/platform-admin.guard.ts`): Restricts to platform admins.
+- **@RequiresModule()** (`src/auth/decorators/requires-module.decorator.ts`): Decorator for optional module controllers.
+- **TenantsModule** (`src/tenants/`): Full CRUD for tenants, subscriptions, billing, modules. Public resolve endpoint for storefront.
+- All 26 services inject TenantContext and scope queries with `tenantId`.
+- Do NOT import from `@naro/shared` in API services (ESM/CJS mismatch). Define constants locally.
+
 ## Authentication
-- Dual-table auth: `User` (customers) and `AdminUser` (admin staff)
-- `validateUser()` checks both tables, returns `isAdmin: true` for AdminUser
-- `generateTokens()` includes `isAdmin` and `role` in JWT payload
-- `JwtStrategy.validate()` checks AdminUser first if `payload.isAdmin`, then User, then AdminUser fallback
-- Endpoints: `POST /auth/login`, `POST /auth/register`, `POST /auth/refresh`, `POST /auth/logout`
-- Profile: `GET /auth/me`, `PATCH /auth/me`, `POST /auth/change-password`, `PATCH /auth/2fa`
+- Three-tier auth: `PlatformAdmin` (platform) → `AdminUser` (tenant staff) → `User` (customers)
+- `validateUser()` checks User (with tenantId from header) then AdminUser (globally unique email)
+- `validatePlatformAdmin()` checks PlatformAdmin table separately
+- `generateTokens()` includes `tenantId`, `isAdmin`, `isPlatformAdmin`, `role` in JWT payload
+- `JwtStrategy.validate()` checks: isPlatformAdmin → AdminUser (isAdmin) → User → AdminUser fallback
+- Endpoints: `POST /auth/login`, `POST /auth/platform-login`, `POST /auth/register`, `POST /auth/refresh`, `POST /auth/logout`
+- Profile: `GET /auth/me` returns `enabledModules[]` for tenant admins
 - Password reset: `POST /auth/forgot-password`, `POST /auth/reset-password`
-- Account lockout: 5 failed attempts → lockedUntil = +30min, auto-unlocks; logged to LoginAttempt table
+- Account lockout: 5 failed attempts → lockedUntil = +30min; logged to LoginAttempt table
 
 ## Modules (all fully implemented)
 - **auth** - Login, register, JWT access/refresh tokens, profile, password change, 2FA toggle, forgot/reset password, account lockout
@@ -33,13 +45,14 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - **rentals** - Booking, availability check, status workflow, upcoming pickups, pending returns, overdue tracking, admin update (wedding/shipping/transport details), transport receipt upload
 - **rental-checklists** - Templates CRUD with activate/deactivate toggle, assign to rental (active-only), check/uncheck items per rental, soft delete/restore
 - **rental-policies** - Global policy settings (buffer days, late fees, etc.)
-- **flash-sales** - Time-limited sales CRUD with product pricing, soft delete/restore
+- **flash-sales** - Time-limited sales CRUD with product pricing, soft delete/restore. Schema fields: `endDate` (not `endTime`), items via `FlashSaleItem` relation with `salePrice` + nested `product`
+- **payment-methods** - DB-driven payment method CRUD (`PaymentMethod` model). 1 public endpoint (`GET /payment-methods` — active only), 7 admin endpoints (create, update, toggle-active, soft delete, restore, deleted list). Icon upload via `POST /upload/payment-icon` (2MB, JPEG/PNG/WebP/SVG → `uploads/payment-methods/`). Seeded: Visa, Mastercard, M-Pesa, Tigo Pesa, Airtel Money, Selcom Pesa, Halopesa.
 - **referrals** - Referral code tracking and stats
 - **id-verification** - National ID upload, admin approve/reject
 - **cms** - Banners (soft delete/restore), pages (soft delete/restore), site settings CRUD
 - **analytics** - Dashboard stats, revenue charts (daily/weekly/monthly)
 - **notifications** - Email + SMS sending
-- **upload** - Local file upload (saves to `uploads/products/`, validates type jpeg/png/webp and 5MB max, Multer FileInterceptor)
+- **upload** - Local file upload. `POST /upload/product-image` → `uploads/products/` (JPEG/PNG/WebP, 5MB). `POST /upload/payment-icon` → `uploads/payment-methods/` (JPEG/PNG/WebP/SVG, 2MB). ServeStaticModule serves all `/uploads` paths.
 - **pos** - POS shift management and sales
 - **scheduler** - Cron jobs for rental prep reminders (8am daily), overdue rental alerts (9am daily), pending return reminders (8:30am daily, 3-day window)
 - **permissions** - 40+ granular permissions, seeded on startup via OnModuleInit
@@ -85,7 +98,9 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - Use DTOs with class-validator for request validation
 - Use `JwtAuthGuard` for protected endpoints
 - RESTful endpoint naming under `/api/v1/`
-- Shared types/enums from `@naro/shared`
+- **All new services MUST inject TenantContext and scope queries with tenantId**
+- **All new optional-module controllers MUST use `@RequiresModule('code')` + `ModuleGuard`**
+- Do NOT import from `@naro/shared` in API services — ESM/CJS mismatch causes runtime crash
 - Catch Prisma P2002 (unique constraint) → throw ConflictException (409)
 
 ## Database

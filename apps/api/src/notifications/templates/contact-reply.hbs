@@ -1,0 +1,29 @@
+<h2 style="color: #1A1A1A; margin-top: 0;">Response to Your Inquiry</h2>
+
+<p>Dear {{customerName}},</p>
+
+<p>Thank you for contacting us. Our team has reviewed your message and here is our response:</p>
+
+<div class="info-box">
+  <p><span class="label">Subject:</span> {{subject}}</p>
+  <p><span class="label">Our Reply:</span></p>
+  <p style="margin-top: 4px; white-space: pre-wrap;">{{reply}}</p>
+</div>
+
+{{#if originalMessage}}
+<p style="margin-top: 16px; padding: 12px; background: #f5f5f5; border-radius: 8px; font-size: 13px; color: #666;">
+  <strong>Your original message:</strong><br />
+  <span style="white-space: pre-wrap;">{{originalMessage}}</span>
+</p>
+{{/if}}
+
+<p>If you have further questions, please don't hesitate to reach out to us again.</p>
+
+<p style="text-align: center;">
+  <a href="{{storeUrl}}/pages/contact" class="btn-primary">Contact Us Again</a>
+</p>
+
+<p>
+  Best regards,<br />
+  <strong style="color: #D4AF37;">{{businessName}} Team</strong>
+</p>

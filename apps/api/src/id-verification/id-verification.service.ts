@@ -4,6 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { NotificationsService } from '../notifications/notifications.service';
 
 export class SubmitIdVerificationDto {
@@ -21,13 +22,17 @@ export class IdVerificationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly tenantContext: TenantContext,
   ) {}
 
   async submit(userId: string, dto: SubmitIdVerificationDto) {
+    const tenantId = this.tenantContext.requireId;
+
     // Check if user already has a pending or approved verification
     const existing = await this.prisma.customerIDDocument.findFirst({
       where: {
         userId,
+        tenantId,
         verificationStatus: { in: ['PENDING', 'APPROVED'] },
       },
     });
@@ -44,6 +49,7 @@ export class IdVerificationService {
 
     return this.prisma.customerIDDocument.create({
       data: {
+        tenantId,
         userId,
         frontImageUrl: dto.frontImageUrl,
         backImageUrl: dto.backImageUrl,
@@ -54,8 +60,10 @@ export class IdVerificationService {
   }
 
   async getStatus(userId: string) {
+    const tenantId = this.tenantContext.requireId;
+
     const verification = await this.prisma.customerIDDocument.findFirst({
-      where: { userId },
+      where: { userId, tenantId },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -77,8 +85,10 @@ export class IdVerificationService {
   }
 
   async getPending() {
+    const tenantId = this.tenantContext.requireId;
+
     return this.prisma.customerIDDocument.findMany({
-      where: { verificationStatus: 'PENDING' },
+      where: { verificationStatus: 'PENDING', tenantId },
       include: {
         user: {
           select: {
@@ -95,8 +105,10 @@ export class IdVerificationService {
   }
 
   async approve(id: string) {
-    const verification = await this.prisma.customerIDDocument.findUnique({
-      where: { id },
+    const tenantId = this.tenantContext.requireId;
+
+    const verification = await this.prisma.customerIDDocument.findFirst({
+      where: { id, tenantId },
       include: { user: { select: { email: true } } },
     });
 
@@ -127,8 +139,10 @@ export class IdVerificationService {
   }
 
   async reject(id: string, dto: RejectVerificationDto) {
-    const verification = await this.prisma.customerIDDocument.findUnique({
-      where: { id },
+    const tenantId = this.tenantContext.requireId;
+
+    const verification = await this.prisma.customerIDDocument.findFirst({
+      where: { id, tenantId },
       include: { user: { select: { email: true } } },
     });
 

@@ -24,6 +24,8 @@ interface Banner {
   createdAt: string;
 }
 
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
+
 const emptyForm = {
   title: '', titleSwahili: '', subtitle: '', subtitleSwahili: '',
   imageUrl: '', linkUrl: '', sortOrder: 0,
@@ -209,7 +211,7 @@ export default function BannersPage() {
               <div className="flex flex-col sm:flex-row">
                 <div className="sm:w-48 h-32 sm:h-auto bg-[hsl(var(--muted))] flex items-center justify-center shrink-0">
                   {banner.imageUrl ? (
-                    <img src={banner.imageUrl.startsWith('/uploads') ? `http://localhost:4000${banner.imageUrl}` : banner.imageUrl} alt={banner.title} className="w-full h-full object-cover" />
+                    <img src={banner.imageUrl.startsWith('/uploads') ? `${API_ORIGIN}${banner.imageUrl}` : banner.imageUrl} alt={banner.title} className="w-full h-full object-cover" />
                   ) : (
                     <div className="flex flex-col items-center gap-1 text-[hsl(var(--muted-foreground))]">
                       <ImageIcon className="w-8 h-8" /><span className="text-xs">No image</span>

@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
 
@@ -10,11 +11,14 @@ function toPeriod(date: Date | string): string {
 
 @Injectable()
 export class ExpensesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async findAll(params: { categoryId?: string; period?: string; startDate?: string; endDate?: string; vendor?: string; page?: number; limit?: number }) {
     const { categoryId, period, startDate, endDate, vendor, page = 1, limit = 25 } = params;
-    const where: any = {};
+    const where: any = { tenantId: this.tenantContext.requireId };
     if (categoryId) where.categoryId = categoryId;
     if (period) where.period = period;
     if (vendor) where.vendor = { contains: vendor, mode: 'insensitive' };
@@ -40,7 +44,7 @@ export class ExpensesService {
 
   async getSummary(period: string) {
     const expenses = await this.prisma.businessExpense.findMany({
-      where: { period },
+      where: { tenantId: this.tenantContext.requireId, period },
       include: { category: true },
     });
     const byCategory: Record<string, { name: string; type: string; total: number }> = {};
@@ -56,7 +60,7 @@ export class ExpensesService {
   }
 
   async findOne(id: string) {
-    const e = await this.prisma.businessExpense.findUnique({ where: { id }, include: { category: true } });
+    const e = await this.prisma.businessExpense.findFirst({ where: { id, tenantId: this.tenantContext.requireId }, include: { category: true } });
     if (!e) throw new NotFoundException('Expense not found');
     return e;
   }
@@ -65,6 +69,7 @@ export class ExpensesService {
     const period = toPeriod(dto.expenseDate);
     return this.prisma.businessExpense.create({
       data: {
+        tenantId: this.tenantContext.requireId,
         categoryId: dto.categoryId,
         amount: dto.amount,
         description: dto.description,

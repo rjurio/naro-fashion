@@ -11,14 +11,21 @@ interface User {
   role: string;
   phone?: string;
   avatarUrl?: string;
+  tenantId?: string;
+  isPlatformAdmin?: boolean;
+  enabledModules?: string[];
 }
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  platformLogin: (email: string, password: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
+  isPlatformAdmin: boolean;
+  enabledModules: string[];
+  isModuleEnabled: (moduleCode: string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -57,15 +64,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await fetchProfile();
   };
 
+  const platformLogin = async (email: string, password: string) => {
+    const res = await adminApi.post<{ accessToken: string; user: any }>('/auth/platform-login', {
+      email,
+      password,
+    });
+    const token = res.accessToken;
+    if (!token) throw new Error('No token received');
+    localStorage.setItem('token', token);
+    adminApi.setToken(token);
+    await fetchProfile();
+  };
+
   const logout = () => {
     localStorage.removeItem('token');
     adminApi.clearToken();
     setUser(null);
-    window.location.href = '/login';
+    if (user?.isPlatformAdmin) {
+      window.location.href = '/platform-login';
+    } else {
+      window.location.href = '/login';
+    }
   };
 
+  const isPlatformAdmin = !!user?.isPlatformAdmin;
+  const enabledModules = user?.enabledModules || [];
+
+  const isModuleEnabled = useCallback(
+    (moduleCode: string) => {
+      if (isPlatformAdmin) return true; // Platform admins see everything
+      return enabledModules.includes(moduleCode);
+    },
+    [isPlatformAdmin, enabledModules],
+  );
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout, refreshUser: fetchProfile }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        isLoading,
+        login,
+        platformLogin,
+        logout,
+        refreshUser: fetchProfile,
+        isPlatformAdmin,
+        enabledModules,
+        isModuleEnabled,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

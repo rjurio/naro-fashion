@@ -23,13 +23,22 @@ export class AuthService {
     private readonly notifications: NotificationsService,
   ) {}
 
-  async register(dto: RegisterDto) {
-    const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-
-    if (existing) {
-      throw new ConflictException('Email already registered');
+  async register(dto: RegisterDto, tenantId?: string) {
+    // If tenantId provided, check uniqueness within tenant
+    if (tenantId) {
+      const existing = await this.prisma.user.findFirst({
+        where: { email: dto.email, tenantId },
+      });
+      if (existing) {
+        throw new ConflictException('Email already registered');
+      }
+    } else {
+      const existing = await this.prisma.user.findFirst({
+        where: { email: dto.email },
+      });
+      if (existing) {
+        throw new ConflictException('Email already registered');
+      }
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 12);
@@ -41,6 +50,7 @@ export class AuthService {
         firstName: dto.firstName,
         lastName: dto.lastName,
         phone: dto.phone,
+        tenantId: tenantId || undefined,
       },
       select: {
         id: true,
@@ -53,11 +63,12 @@ export class AuthService {
     return user;
   }
 
-  async validateUser(email: string, password: string) {
-    // Check regular User table first
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-    });
+  async validateUser(email: string, password: string, tenantId?: string) {
+    // Check regular User table first (scoped by tenant if provided)
+    const userWhere: any = { email };
+    if (tenantId) userWhere.tenantId = tenantId;
+
+    const user = await this.prisma.user.findFirst({ where: userWhere });
 
     if (user && user.passwordHash) {
       const isValid = await bcrypt.compare(password, user.passwordHash);
@@ -67,7 +78,7 @@ export class AuthService {
       }
     }
 
-    // Check AdminUser table
+    // Check AdminUser table (globally unique email — no tenant filter needed)
     const admin = await this.prisma.adminUser.findUnique({
       where: { email },
     });
@@ -85,7 +96,9 @@ export class AuthService {
           where: { email },
           data: { failedLoginAttempts: 0, lockedUntil: null },
         });
-        await this.prisma.loginAttempt.create({ data: { email, isAdmin: true, success: true } });
+        await this.prisma.loginAttempt.create({
+          data: { email, isAdmin: true, success: true, tenantId: admin.tenantId },
+        });
         const { passwordHash: _, ...result } = admin;
         return { ...result, isAdmin: true };
       } else {
@@ -98,16 +111,44 @@ export class AuthService {
             lockedUntil: attempts >= 5 ? new Date(Date.now() + 30 * 60 * 1000) : null,
           },
         });
-        await this.prisma.loginAttempt.create({ data: { email, isAdmin: true, success: false } });
+        await this.prisma.loginAttempt.create({
+          data: { email, isAdmin: true, success: false, tenantId: admin.tenantId },
+        });
       }
     }
 
     return null;
   }
 
-  generateTokens(user: { id: string; email: string | null; isAdmin?: boolean; role?: string }) {
+  /**
+   * Platform Admin login — separate from tenant auth
+   */
+  async validatePlatformAdmin(email: string, password: string) {
+    const admin = await this.prisma.platformAdmin.findUnique({
+      where: { email },
+    });
+
+    if (!admin || !admin.isActive) return null;
+
+    const isValid = await bcrypt.compare(password, admin.passwordHash);
+    if (!isValid) return null;
+
+    const { passwordHash: _, ...result } = admin;
+    return { ...result, isPlatformAdmin: true };
+  }
+
+  generateTokens(user: {
+    id: string;
+    email: string | null;
+    tenantId?: string | null;
+    isAdmin?: boolean;
+    isPlatformAdmin?: boolean;
+    role?: string;
+  }) {
     const payload: Record<string, any> = { sub: user.id, email: user.email };
+    if (user.tenantId) payload.tenantId = user.tenantId;
     if (user.isAdmin) payload.isAdmin = true;
+    if (user.isPlatformAdmin) payload.isPlatformAdmin = true;
     if (user.role) payload.role = user.role;
 
     const accessToken = this.jwtService.sign(payload, {
@@ -135,9 +176,30 @@ export class AuthService {
         ),
       });
 
+      // Platform admin refresh
+      if (payload.isPlatformAdmin) {
+        const admin = await this.prisma.platformAdmin.findUnique({
+          where: { id: payload.sub },
+          select: { id: true, email: true, role: true },
+        });
+        if (!admin) throw new UnauthorizedException('Platform admin not found');
+        return this.generateTokens({ ...admin, isPlatformAdmin: true });
+      }
+
+      // Tenant admin refresh
+      if (payload.isAdmin) {
+        const admin = await this.prisma.adminUser.findUnique({
+          where: { id: payload.sub },
+          select: { id: true, email: true, role: true, tenantId: true },
+        });
+        if (!admin) throw new UnauthorizedException('Admin not found');
+        return this.generateTokens({ ...admin, isAdmin: true });
+      }
+
+      // Customer refresh
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
-        select: { id: true, email: true },
+        select: { id: true, email: true, tenantId: true },
       });
 
       if (!user) {
@@ -150,7 +212,24 @@ export class AuthService {
     }
   }
 
-  async getProfile(userId: string, isAdmin?: boolean) {
+  async getProfile(userId: string, isAdmin?: boolean, isPlatformAdmin?: boolean) {
+    // Platform admin profile
+    if (isPlatformAdmin) {
+      const admin = await this.prisma.platformAdmin.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          role: true,
+          createdAt: true,
+        },
+      });
+      if (admin) return { ...admin, isPlatformAdmin: true };
+    }
+
+    // Tenant admin profile
     if (isAdmin) {
       const admin = await this.prisma.adminUser.findUnique({
         where: { id: userId },
@@ -162,12 +241,25 @@ export class AuthService {
           phone: true,
           role: true,
           is2FAEnabled: true,
+          tenantId: true,
           createdAt: true,
         },
       });
-      if (admin) return { ...admin, isAdmin: true };
+      if (admin) {
+        // Fetch enabled modules for this tenant
+        let enabledModules: string[] = [];
+        if (admin.tenantId) {
+          const modules = await this.prisma.tenantModule.findMany({
+            where: { tenantId: admin.tenantId, isEnabled: true },
+            select: { moduleCode: true },
+          });
+          enabledModules = modules.map((m) => m.moduleCode);
+        }
+        return { ...admin, isAdmin: true, enabledModules };
+      }
     }
 
+    // Customer profile
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -177,6 +269,7 @@ export class AuthService {
         lastName: true,
         avatarUrl: true,
         phone: true,
+        tenantId: true,
         createdAt: true,
       },
     });
@@ -192,6 +285,7 @@ export class AuthService {
         firstName: true,
         lastName: true,
         role: true,
+        tenantId: true,
         createdAt: true,
       },
     });
@@ -300,12 +394,12 @@ export class AuthService {
     }
 
     // Check User (customer) table
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    const user = await this.prisma.user.findFirst({ where: { email } });
     if (user) {
       const rawToken = crypto.randomBytes(32).toString('hex');
       const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
       await this.prisma.user.update({
-        where: { email },
+        where: { id: user.id },
         data: {
           passwordResetToken: hashedToken,
           passwordResetExpires: new Date(Date.now() + 30 * 60 * 1000),

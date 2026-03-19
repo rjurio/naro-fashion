@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -19,6 +20,9 @@ import {
   UpdateHeroSlideDto,
   CreateInstagramPostDto,
   UpdateInstagramPostDto,
+  SubmitContactDto,
+  UpdateContactStatusDto,
+  ReplyContactDto,
 } from './cms.service';
 import { InstagramService } from './instagram.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -237,5 +241,49 @@ export class CmsController {
   @Post('instagram-posts/sync')
   syncInstagramPosts() {
     return this.instagramService.syncFromInstagram();
+  }
+
+  // --- Contact Submissions ---
+
+  @Public()
+  @Post('contact')
+  submitContact(@Body() dto: SubmitContactDto) {
+    return this.cmsService.submitContact(dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('contact-submissions')
+  findAllContactSubmissions(@Query('status') status?: string) {
+    return this.cmsService.findAllContactSubmissions(status);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('contact-submissions/stats')
+  getContactSubmissionStats() {
+    return this.cmsService.getContactSubmissionStats();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('contact-submissions/:id')
+  findContactSubmission(@Param('id') id: string) {
+    return this.cmsService.findContactSubmission(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('contact-submissions/:id/status')
+  updateContactStatus(@Param('id') id: string, @Body() dto: UpdateContactStatusDto) {
+    return this.cmsService.updateContactStatus(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('contact-submissions/:id/reply')
+  replyToContact(@Param('id') id: string, @Body() dto: ReplyContactDto) {
+    return this.cmsService.replyToContact(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('contact-submissions/:id')
+  deleteContactSubmission(@Param('id') id: string) {
+    return this.cmsService.deleteContactSubmission(id);
   }
 }

@@ -3,9 +3,12 @@ import { InventoryService } from './inventory.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { UpdateInventorySettingsDto } from './dto/update-inventory-settings.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard } from '../auth/guards/module.guard';
+import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
 @Controller('inventory')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ModuleGuard)
+@RequiresModule('inventory')
 export class InventoryController {
   constructor(private readonly service: InventoryService) {}
 

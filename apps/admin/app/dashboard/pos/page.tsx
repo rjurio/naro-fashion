@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { useToast } from '@/contexts/ToastContext';
 import {
   ArrowLeft,
   Clock,
@@ -32,6 +33,7 @@ interface Customer {
 }
 
 export default function PosPage() {
+  const toast = useToast();
   const router = useRouter();
 
   // Session
@@ -146,7 +148,7 @@ export default function PosPage() {
       const newSession = await adminApi.posOpenSession({ openingCash });
       setSession(newSession);
     } catch (err: any) {
-      alert(err.message || 'Failed to open shift');
+      toast.error(err.message || 'Failed to open shift');
     }
   };
 
@@ -175,7 +177,7 @@ export default function PosPage() {
       setShowReceipt(result.order?.id);
       clearCart();
     } catch (err: any) {
-      alert(err.message || 'Sale failed');
+      toast.error(err.message || 'Sale failed');
     } finally {
       setProcessing(false);
     }
@@ -205,7 +207,7 @@ export default function PosPage() {
       setHeldCount((c) => c + 1);
       clearCart();
     } catch (err: any) {
-      alert(err.message || 'Failed to hold sale');
+      toast.error(err.message || 'Failed to hold sale');
     }
   };
 

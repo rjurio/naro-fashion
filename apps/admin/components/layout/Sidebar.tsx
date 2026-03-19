@@ -42,6 +42,8 @@ import {
   Mail,
   Send,
   Building2,
+  MessageSquare,
+  CreditCard,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -49,14 +51,26 @@ interface NavItem {
   label: string;
   href?: string;
   icon: React.ElementType;
+  requiredModule?: string; // Module that must be enabled to show this item
   children?: { label: string; href: string; icon: React.ElementType }[];
 }
 
+// Platform admin navigation (shown when isPlatformAdmin)
+const platformNavItems: NavItem[] = [
+  { label: 'Platform Dashboard', href: '/platform', icon: LayoutDashboard },
+  { label: 'Tenants', href: '/platform/tenants', icon: Building2 },
+  { label: 'Subscription Plans', href: '/platform/plans', icon: CreditCard },
+  { label: 'All Payments', href: '/platform/payments', icon: ReceiptText },
+  { label: 'Platform Settings', href: '/platform/settings', icon: Settings },
+];
+
+// Tenant admin navigation (shown for regular admins)
 const navItems: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   {
     label: 'Point of Sale',
     icon: Monitor,
+    requiredModule: 'pos',
     children: [
       { label: 'Open POS', href: '/dashboard/pos', icon: Monitor },
       { label: 'Sales History', href: '/dashboard/pos/sales', icon: ReceiptText },
@@ -76,6 +90,7 @@ const navItems: NavItem[] = [
   {
     label: 'Rentals',
     icon: CalendarClock,
+    requiredModule: 'rentals',
     children: [
       { label: 'Active Rentals', href: '/dashboard/rentals', icon: CalendarClock },
       { label: 'Rental Requests', href: '/dashboard/rentals/requests', icon: ClipboardCheck },
@@ -83,9 +98,9 @@ const navItems: NavItem[] = [
       { label: 'Policies', href: '/dashboard/rentals/policies', icon: FileText },
     ],
   },
-  { label: 'Flash Sales', href: '/dashboard/flash-sales', icon: Zap },
-  { label: 'Events Gallery', href: '/dashboard/events', icon: Camera },
-  { label: 'Referrals', href: '/dashboard/referrals', icon: Gift },
+  { label: 'Flash Sales', href: '/dashboard/flash-sales', icon: Zap, requiredModule: 'flash-sales' },
+  { label: 'Events Gallery', href: '/dashboard/events', icon: Camera, requiredModule: 'events' },
+  { label: 'Referrals', href: '/dashboard/referrals', icon: Gift, requiredModule: 'referrals' },
   {
     label: 'CMS',
     icon: PanelLeft,
@@ -94,6 +109,8 @@ const navItems: NavItem[] = [
       { label: 'Banners', href: '/dashboard/cms/banners', icon: ImageIcon },
       { label: 'Instagram Posts', href: '/dashboard/cms/instagram-posts', icon: Instagram },
       { label: 'Pages', href: '/dashboard/cms/pages', icon: FileEdit },
+      { label: 'Size Guides', href: '/dashboard/cms/size-guides', icon: FileText },
+      { label: 'Contact Submissions', href: '/dashboard/cms/contact-submissions', icon: MessageSquare },
       { label: 'Settings', href: '/dashboard/cms/settings', icon: Settings },
     ],
   },
@@ -107,16 +124,17 @@ const navItems: NavItem[] = [
       { label: 'Subscribers', href: '/dashboard/newsletter/subscribers', icon: Users },
     ],
   },
-  { label: 'Analytics', href: '/dashboard/analytics', icon: BarChart3 },
+  { label: 'Analytics', href: '/dashboard/analytics', icon: BarChart3, requiredModule: 'analytics' },
   {
     label: 'Reports',
     icon: FileBarChart2,
+    requiredModule: 'reports',
     children: [
       { label: 'Rental Reports', href: '/dashboard/reports/rentals', icon: CalendarClock },
     ],
   },
-  { label: 'Inventory', href: '/dashboard/inventory', icon: Warehouse },
-  { label: 'Financials', href: '/dashboard/financials', icon: TrendingUp },
+  { label: 'Inventory', href: '/dashboard/inventory', icon: Warehouse, requiredModule: 'inventory' },
+  { label: 'Financials', href: '/dashboard/financials', icon: TrendingUp, requiredModule: 'expenses' },
   {
     label: 'User Management',
     icon: Shield,
@@ -132,6 +150,7 @@ const navItems: NavItem[] = [
     children: [
       { label: 'Admin Settings', href: '/dashboard/settings', icon: Settings },
       { label: 'Business Profile', href: '/dashboard/settings/business-profile', icon: Building2 },
+      { label: 'Payment Methods', href: '/dashboard/settings/payment-methods', icon: CreditCard },
     ],
   },
 ];
@@ -143,9 +162,17 @@ interface SidebarProps {
 
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const { user } = useAuth();
+  const { user, isPlatformAdmin, isModuleEnabled } = useAuth();
   const { settings } = useSiteSettings();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  // Filter nav items based on enabled modules
+  const currentNavItems = isPlatformAdmin
+    ? platformNavItems
+    : navItems.filter((item) => {
+        if (!item.requiredModule) return true; // No module requirement — always show
+        return isModuleEnabled(item.requiredModule);
+      });
 
   const toggleExpanded = (label: string) => {
     setExpanded((prev) => ({ ...prev, [label]: !prev[label] }));
@@ -181,7 +208,9 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             <span className="text-xl font-bold text-brand-gold">{settings.businessName.toUpperCase()}</span>
           </Link>
           <button
+            type="button"
             onClick={onClose}
+            title="Close sidebar"
             className="lg:hidden p-1 rounded-md hover:bg-[hsl(var(--sidebar-accent))] text-[hsl(var(--sidebar-fg))]"
           >
             <X className="w-5 h-5" />
@@ -190,7 +219,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
-          {navItems.map((item) => {
+          {currentNavItems.map((item) => {
             if (item.children) {
               const groupActive = isGroupActive(item);
               const isExpanded = expanded[item.label] ?? groupActive;
@@ -198,6 +227,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               return (
                 <div key={item.label}>
                   <button
+                    type="button"
                     onClick={() => toggleExpanded(item.label)}
                     className={cn(
                       'w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',

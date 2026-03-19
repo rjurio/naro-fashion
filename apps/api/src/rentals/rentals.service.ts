@@ -5,6 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreateRentalDto } from './dto/create-rental.dto';
 import { UpdateRentalDto } from './dto/update-rental.dto';
 import { QueryRentalsDto } from './dto/query-rentals.dto';
@@ -12,12 +13,16 @@ import { Decimal } from '@prisma/client/runtime/library';
 
 @Injectable()
 export class RentalsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async create(userId: string, dto: CreateRentalDto) {
     // Verify customer profile completeness before rental
+    const tenantId = this.tenantContext.requireId;
     const user = await this.prisma.user.findUnique({
-      where: { id: userId },
+      where: { id: userId, tenantId },
       include: { addresses: { take: 1 } },
     });
     if (!user) {
@@ -45,7 +50,7 @@ export class RentalsService {
     }
 
     const product = await this.prisma.product.findUnique({
-      where: { id: dto.productId },
+      where: { id: dto.productId, tenantId },
     });
     if (!product) {
       throw new NotFoundException('Product not found');
@@ -58,7 +63,7 @@ export class RentalsService {
     }
 
     const variant = await this.prisma.productVariant.findUnique({
-      where: { id: dto.variantId },
+      where: { id: dto.variantId, tenantId },
     });
     if (!variant || variant.productId !== dto.productId) {
       throw new NotFoundException('Product variant not found');
@@ -77,7 +82,9 @@ export class RentalsService {
       );
     }
 
-    const policy = await this.prisma.rentalPolicy.findFirst();
+    const policy = await this.prisma.rentalPolicy.findFirst({
+      where: { tenantId },
+    });
     const bufferDays =
       product.bufferDaysOverride ?? policy?.bufferDaysBetweenRentals ?? 7;
     const maxDuration = policy?.maxRentalDurationDays ?? 30;
@@ -119,7 +126,7 @@ export class RentalsService {
 
     // Check ID verification status
     const idDoc = await this.prisma.customerIDDocument.findFirst({
-      where: { userId, verificationStatus: 'APPROVED' },
+      where: { userId, verificationStatus: 'APPROVED', tenantId },
     });
     const initialStatus = idDoc
       ? 'ID_VERIFIED'
@@ -129,6 +136,7 @@ export class RentalsService {
 
     return this.prisma.rentalOrder.create({
       data: {
+        tenantId,
         rentalNumber,
         userId,
         productId: dto.productId,
@@ -159,7 +167,7 @@ export class RentalsService {
 
   async findAll(userId: string) {
     return this.prisma.rentalOrder.findMany({
-      where: { userId },
+      where: { userId, tenantId: this.tenantContext.requireId },
       orderBy: { createdAt: 'desc' },
       include: {
         product: { select: { id: true, name: true, slug: true } },
@@ -170,7 +178,7 @@ export class RentalsService {
 
   async findAllAdmin(query: QueryRentalsDto) {
     const { status, startDate, endDate, page = 1, limit = 20 } = query;
-    const where: any = {};
+    const where: any = { tenantId: this.tenantContext.requireId };
 
     if (status) {
       where.status = status;
@@ -207,8 +215,8 @@ export class RentalsService {
   }
 
   async findOne(id: string) {
-    const rental = await this.prisma.rentalOrder.findUnique({
-      where: { id },
+    const rental = await this.prisma.rentalOrder.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
       include: {
         user: {
           select: {
@@ -241,8 +249,8 @@ export class RentalsService {
   }
 
   async updateStatus(id: string, status: string) {
-    const rental = await this.prisma.rentalOrder.findUnique({
-      where: { id },
+    const rental = await this.prisma.rentalOrder.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
     });
     if (!rental) {
       throw new NotFoundException('Rental order not found');
@@ -286,8 +294,8 @@ export class RentalsService {
   }
 
   async markReadyForPickup(id: string) {
-    const rental = await this.prisma.rentalOrder.findUnique({
-      where: { id },
+    const rental = await this.prisma.rentalOrder.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
     });
     if (!rental) {
       throw new NotFoundException('Rental order not found');
@@ -304,14 +312,17 @@ export class RentalsService {
     startDate: Date,
     endDate: Date,
   ) {
+    const tenantId = this.tenantContext.requireId;
     const product = await this.prisma.product.findUnique({
-      where: { id: productId },
+      where: { id: productId, tenantId },
     });
     if (!product) {
       throw new NotFoundException('Product not found');
     }
 
-    const policy = await this.prisma.rentalPolicy.findFirst();
+    const policy = await this.prisma.rentalPolicy.findFirst({
+      where: { tenantId },
+    });
     const bufferDays =
       product.bufferDaysOverride ?? policy?.bufferDaysBetweenRentals ?? 7;
 
@@ -332,6 +343,7 @@ export class RentalsService {
 
     return this.prisma.rentalOrder.findMany({
       where: {
+        tenantId: this.tenantContext.requireId,
         pickupDate: { gte: now, lte: future },
         status: {
           in: ['FULLY_PAID', 'READY_FOR_PICKUP'],
@@ -349,7 +361,7 @@ export class RentalsService {
   }
 
   async update(id: string, dto: UpdateRentalDto) {
-    const rental = await this.prisma.rentalOrder.findUnique({ where: { id } });
+    const rental = await this.prisma.rentalOrder.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!rental) throw new NotFoundException('Rental order not found');
 
     const data: any = {};
@@ -383,6 +395,7 @@ export class RentalsService {
 
     return this.prisma.rentalOrder.findMany({
       where: {
+        tenantId: this.tenantContext.requireId,
         returnDate: { lte: threeDaysFromNow },
         status: { in: ['ACTIVE', 'ITEM_DISPATCHED'] },
       },
@@ -399,6 +412,7 @@ export class RentalsService {
     const now = new Date();
     return this.prisma.rentalOrder.findMany({
       where: {
+        tenantId: this.tenantContext.requireId,
         returnDate: { lt: now },
         status: 'ACTIVE',
       },
@@ -423,6 +437,7 @@ export class RentalsService {
 
     const overlapping = await this.prisma.rentalOrder.count({
       where: {
+        tenantId: this.tenantContext.requireId,
         productId,
         status: {
           notIn: ['CLOSED', 'RETURNED', 'INSPECTION'],

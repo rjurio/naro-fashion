@@ -15,7 +15,7 @@ export class NotificationsService {
 
   private async getBusinessName(): Promise<string> {
     try {
-      const setting = await this.prisma.siteSetting.findUnique({ where: { key: 'site_name' } });
+      const setting = await this.prisma.siteSetting.findFirst({ where: { key: 'site_name' } });
       return setting?.value || 'Naro Fashion';
     } catch {
       return 'Naro Fashion';
@@ -24,7 +24,7 @@ export class NotificationsService {
 
   private async getDomain(): Promise<string> {
     try {
-      const setting = await this.prisma.siteSetting.findUnique({ where: { key: 'business_domain' } });
+      const setting = await this.prisma.siteSetting.findFirst({ where: { key: 'business_domain' } });
       return setting?.value || 'narofashion.co.tz';
     } catch {
       return 'narofashion.co.tz';

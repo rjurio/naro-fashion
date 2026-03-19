@@ -25,6 +25,7 @@ export interface BusinessProfile {
   faviconUrl: string;
   domain: string;
   currency: string;
+  acceptedPaymentMethods: string[];
 }
 
 const DEFAULTS: BusinessProfile = {
@@ -47,6 +48,7 @@ const DEFAULTS: BusinessProfile = {
   faviconUrl: '/favicon.jpg',
   domain: 'narofashion.co.tz',
   currency: 'TZS',
+  acceptedPaymentMethods: ['VISA', 'MASTERCARD', 'MPESA', 'TIGOPESA'],
 };
 
 function resolveUrl(url: string): string {

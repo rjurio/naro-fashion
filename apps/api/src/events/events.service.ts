@@ -5,6 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 
 export class CreateEventDto {
   title: string;
@@ -58,7 +59,10 @@ export class ReorderMediaDto {
 
 @Injectable()
 export class EventsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   private generateSlug(title: string): string {
     return title
@@ -72,7 +76,7 @@ export class EventsService {
   private async ensureUniqueSlug(baseSlug: string): Promise<string> {
     let slug = baseSlug;
     let counter = 1;
-    while (await this.prisma.customerEvent.findUnique({ where: { slug } })) {
+    while (await this.prisma.customerEvent.findFirst({ where: { slug, tenantId: this.tenantContext.requireId } })) {
       slug = `${baseSlug}-${counter}`;
       counter++;
     }
@@ -83,9 +87,10 @@ export class EventsService {
 
   async findAllPublic(page = 1, limit = 9) {
     const skip = (page - 1) * limit;
+    const tenantId = this.tenantContext.requireId;
     const [data, total] = await Promise.all([
       this.prisma.customerEvent.findMany({
-        where: { status: 'APPROVED', deletedAt: null },
+        where: { tenantId, status: 'APPROVED', deletedAt: null },
         include: {
           media: { orderBy: { sortOrder: 'asc' }, take: 4 },
           product: { select: { id: true, name: true, slug: true } },
@@ -96,7 +101,7 @@ export class EventsService {
         take: limit,
       }),
       this.prisma.customerEvent.count({
-        where: { status: 'APPROVED', deletedAt: null },
+        where: { tenantId, status: 'APPROVED', deletedAt: null },
       }),
     ]);
     return {
@@ -106,8 +111,8 @@ export class EventsService {
   }
 
   async findBySlug(slug: string) {
-    const event = await this.prisma.customerEvent.findUnique({
-      where: { slug },
+    const event = await this.prisma.customerEvent.findFirst({
+      where: { slug, tenantId: this.tenantContext.requireId },
       include: {
         media: { orderBy: { sortOrder: 'asc' } },
         product: { select: { id: true, name: true, slug: true, images: { take: 1 } } },
@@ -123,7 +128,7 @@ export class EventsService {
   // --- Admin ---
 
   async findAllAdmin(params?: { status?: string; search?: string }) {
-    const where: any = { deletedAt: null };
+    const where: any = { tenantId: this.tenantContext.requireId, deletedAt: null };
     if (params?.status) where.status = params.status;
     if (params?.search) {
       where.OR = [
@@ -145,7 +150,7 @@ export class EventsService {
 
   async findPending() {
     return this.prisma.customerEvent.findMany({
-      where: { status: 'PENDING_APPROVAL', deletedAt: null },
+      where: { tenantId: this.tenantContext.requireId, status: 'PENDING_APPROVAL', deletedAt: null },
       include: {
         media: { orderBy: { sortOrder: 'asc' } },
         product: { select: { id: true, name: true } },
@@ -157,7 +162,7 @@ export class EventsService {
 
   async findDeleted() {
     return this.prisma.customerEvent.findMany({
-      where: { deletedAt: { not: null } },
+      where: { tenantId: this.tenantContext.requireId, deletedAt: { not: null } },
       include: {
         media: { orderBy: { sortOrder: 'asc' }, take: 1 },
         user: { select: { id: true, firstName: true, lastName: true } },
@@ -168,7 +173,7 @@ export class EventsService {
 
   async findOneAdmin(id: string) {
     const event = await this.prisma.customerEvent.findUnique({
-      where: { id },
+      where: { id, tenantId: this.tenantContext.requireId },
       include: {
         media: { orderBy: { sortOrder: 'asc' } },
         product: { select: { id: true, name: true, slug: true } },
@@ -183,6 +188,7 @@ export class EventsService {
     const slug = await this.ensureUniqueSlug(this.generateSlug(dto.title));
     return this.prisma.customerEvent.create({
       data: {
+        tenantId: this.tenantContext.requireId,
         title: dto.title,
         titleSwahili: dto.titleSwahili,
         slug,
@@ -203,9 +209,10 @@ export class EventsService {
   }
 
   async createByCustomer(dto: CustomerSubmitEventDto, userId: string) {
+    const tenantId = this.tenantContext.requireId;
     // Check if customer already has an event
     const existing = await this.prisma.customerEvent.findFirst({
-      where: { userId, deletedAt: null },
+      where: { userId, tenantId, deletedAt: null },
     });
     if (existing) {
       throw new ConflictException('You have already submitted an event. Only one event per customer is allowed.');
@@ -220,6 +227,7 @@ export class EventsService {
     const slug = await this.ensureUniqueSlug(this.generateSlug(dto.title));
     return this.prisma.customerEvent.create({
       data: {
+        tenantId,
         title: dto.title,
         slug,
         description: dto.description,
@@ -237,7 +245,7 @@ export class EventsService {
   }
 
   async update(id: string, dto: UpdateEventDto) {
-    const event = await this.prisma.customerEvent.findUnique({ where: { id } });
+    const event = await this.prisma.customerEvent.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!event || event.deletedAt) throw new NotFoundException('Event not found');
 
     const data: any = { ...dto };
@@ -257,7 +265,7 @@ export class EventsService {
   }
 
   async approve(id: string, adminId: string) {
-    const event = await this.prisma.customerEvent.findUnique({ where: { id } });
+    const event = await this.prisma.customerEvent.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!event || event.deletedAt) throw new NotFoundException('Event not found');
     return this.prisma.customerEvent.update({
       where: { id },
@@ -266,7 +274,7 @@ export class EventsService {
   }
 
   async reject(id: string, reason: string) {
-    const event = await this.prisma.customerEvent.findUnique({ where: { id } });
+    const event = await this.prisma.customerEvent.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!event || event.deletedAt) throw new NotFoundException('Event not found');
     return this.prisma.customerEvent.update({
       where: { id },
@@ -275,7 +283,7 @@ export class EventsService {
   }
 
   async softDelete(id: string) {
-    const event = await this.prisma.customerEvent.findUnique({ where: { id } });
+    const event = await this.prisma.customerEvent.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!event) throw new NotFoundException('Event not found');
     await this.prisma.customerEvent.update({
       where: { id },
@@ -285,7 +293,7 @@ export class EventsService {
   }
 
   async restore(id: string) {
-    const event = await this.prisma.customerEvent.findUnique({ where: { id } });
+    const event = await this.prisma.customerEvent.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!event || !event.deletedAt) throw new NotFoundException('Deleted event not found');
     return this.prisma.customerEvent.update({
       where: { id },
@@ -296,7 +304,7 @@ export class EventsService {
   // --- Media ---
 
   async addMedia(eventId: string, dto: AddMediaDto) {
-    const event = await this.prisma.customerEvent.findUnique({ where: { id: eventId } });
+    const event = await this.prisma.customerEvent.findUnique({ where: { id: eventId, tenantId: this.tenantContext.requireId } });
     if (!event || event.deletedAt) throw new NotFoundException('Event not found');
 
     const mediaCount = await this.prisma.eventMedia.count({ where: { eventId } });
@@ -335,7 +343,7 @@ export class EventsService {
 
   async findMyEvent(userId: string) {
     return this.prisma.customerEvent.findFirst({
-      where: { userId, deletedAt: null },
+      where: { userId, tenantId: this.tenantContext.requireId, deletedAt: null },
       include: {
         media: { orderBy: { sortOrder: 'asc' } },
         product: { select: { id: true, name: true, slug: true } },

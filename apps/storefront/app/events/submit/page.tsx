@@ -14,6 +14,7 @@ import {
   Send,
 } from 'lucide-react';
 import { eventsApi } from '@/lib/api';
+import { useToast } from '@/contexts/ToastContext';
 
 interface ExistingEvent {
   id: string;
@@ -24,6 +25,7 @@ interface ExistingEvent {
 
 export default function SubmitEventPage() {
   const router = useRouter();
+  const toast = useToast();
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [existingEvent, setExistingEvent] = useState<ExistingEvent | null>(null);
@@ -107,7 +109,7 @@ export default function SubmitEventPage() {
 
       setSuccess(true);
     } catch {
-      alert('Failed to submit. Please try again.');
+      toast.error('Failed to submit. Please try again.');
     } finally {
       setSubmitting(false);
     }

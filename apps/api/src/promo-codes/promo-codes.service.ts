@@ -5,15 +5,21 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreatePromoCodeDto, ValidatePromoCodeDto } from './dto/create-promo-code.dto';
 
 @Injectable()
 export class PromoCodesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async create(dto: CreatePromoCodeDto, createdBy?: string) {
-    const existing = await this.prisma.promoCode.findUnique({
-      where: { code: dto.code.toUpperCase() },
+    const tenantId = this.tenantContext.requireId;
+
+    const existing = await this.prisma.promoCode.findFirst({
+      where: { code: dto.code.toUpperCase(), tenantId },
     });
     if (existing) {
       throw new ConflictException(`Promo code "${dto.code}" already exists`);
@@ -21,6 +27,7 @@ export class PromoCodesService {
 
     return this.prisma.promoCode.create({
       data: {
+        tenantId,
         code: dto.code.toUpperCase(),
         description: dto.description,
         discountType: dto.discountType,
@@ -38,15 +45,20 @@ export class PromoCodesService {
   }
 
   async findAll() {
+    const tenantId = this.tenantContext.requireId;
+
     return this.prisma.promoCode.findMany({
+      where: { tenantId },
       orderBy: { createdAt: 'desc' },
       include: { _count: { select: { usages: true } } },
     });
   }
 
   async findOne(id: string) {
-    const promo = await this.prisma.promoCode.findUnique({
-      where: { id },
+    const tenantId = this.tenantContext.requireId;
+
+    const promo = await this.prisma.promoCode.findFirst({
+      where: { id, tenantId },
       include: {
         usages: {
           include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } },
@@ -61,8 +73,10 @@ export class PromoCodesService {
   }
 
   async validate(dto: ValidatePromoCodeDto, userId?: string) {
-    const promo = await this.prisma.promoCode.findUnique({
-      where: { code: dto.code.toUpperCase() },
+    const tenantId = this.tenantContext.requireId;
+
+    const promo = await this.prisma.promoCode.findFirst({
+      where: { code: dto.code.toUpperCase(), tenantId },
     });
 
     if (!promo) {
@@ -127,6 +141,8 @@ export class PromoCodesService {
   }
 
   async recordUsage(promoCodeId: string, userId: string, orderId: string) {
+    const tenantId = this.tenantContext.requireId;
+
     await this.prisma.$transaction([
       this.prisma.promoCodeUsage.create({
         data: { promoCodeId, userId, orderId },
@@ -139,7 +155,9 @@ export class PromoCodesService {
   }
 
   async update(id: string, dto: Partial<CreatePromoCodeDto>) {
-    const promo = await this.prisma.promoCode.findUnique({ where: { id } });
+    const tenantId = this.tenantContext.requireId;
+
+    const promo = await this.prisma.promoCode.findFirst({ where: { id, tenantId } });
     if (!promo) throw new NotFoundException('Promo code not found');
 
     return this.prisma.promoCode.update({
@@ -160,7 +178,9 @@ export class PromoCodesService {
   }
 
   async remove(id: string) {
-    const promo = await this.prisma.promoCode.findUnique({ where: { id } });
+    const tenantId = this.tenantContext.requireId;
+
+    const promo = await this.prisma.promoCode.findFirst({ where: { id, tenantId } });
     if (!promo) throw new NotFoundException('Promo code not found');
     return this.prisma.promoCode.delete({ where: { id } });
   }

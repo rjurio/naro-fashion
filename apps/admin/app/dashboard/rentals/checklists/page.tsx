@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useToast } from '@/contexts/ToastContext';
 import { Plus, ClipboardList, CheckCircle2, Edit2, Trash2, Loader2, X, GripVertical, Power } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { adminApi } from '@/lib/api';
@@ -46,6 +47,7 @@ const emptyForm: TemplateForm = {
 };
 
 export default function ChecklistsPage() {
+  const toast = useToast();
   const [checklists, setChecklists] = useState<ChecklistTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedType, setSelectedType] = useState<'ALL' | 'DISPATCH' | 'RETURN'>('ALL');
@@ -129,9 +131,9 @@ export default function ChecklistsPage() {
   };
 
   const handleSubmit = async () => {
-    if (!form.name.trim()) return alert('Template name is required');
+    if (!form.name.trim()) { toast.warning('Template name is required'); return; }
     const validItems = form.items.filter((i) => i.label.trim());
-    if (validItems.length === 0) return alert('Add at least one checklist item');
+    if (validItems.length === 0) { toast.warning('Add at least one checklist item'); return; }
 
     setSaving(true);
     try {
@@ -157,7 +159,7 @@ export default function ChecklistsPage() {
       setShowModal(false);
     } catch (err) {
       console.error('Failed to save checklist:', err);
-      alert('Failed to save template. Please try again.');
+      toast.error('Failed to save template. Please try again.');
     } finally {
       setSaving(false);
     }

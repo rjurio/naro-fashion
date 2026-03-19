@@ -17,4 +17,8 @@ export class UpdateCategoryDto {
   @IsOptional()
   @IsString()
   parentId?: string;
+
+  @IsOptional()
+  @IsString()
+  sizeGuideId?: string;
 }

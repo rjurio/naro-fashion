@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import {
@@ -11,13 +11,13 @@ import {
   MapPin,
   Phone,
   Mail,
-  CreditCard,
-  Smartphone,
 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useTranslation } from "@/lib/i18n";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
-import { newsletterApi } from "@/lib/api";
+import { newsletterApi, categoriesApi } from "@/lib/api";
+
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
 export default function Footer() {
   const { t } = useTranslation();
@@ -27,36 +27,86 @@ export default function Footer() {
   const [footerMsg, setFooterMsg] = useState("");
   const [footerMsgSuccess, setFooterMsgSuccess] = useState(false);
 
+  // Dynamic data
+  const [categoryLinks, setCategoryLinks] = useState<{ name: string; href: string }[]>([]);
+  const [supportLinks, setSupportLinks] = useState<{ name: string; href: string }[]>([]);
+  const [companyLinks, setCompanyLinks] = useState<{ name: string; href: string }[]>([]);
+  const [paymentMethods, setPaymentMethods] = useState<{ id: string; name: string; iconUrl?: string }[]>([]);
+
+  useEffect(() => {
+    // Load payment methods from API
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1'}/payment-methods`)
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setPaymentMethods(data); })
+      .catch(() => {});
+
+    // Load categories from API
+    categoriesApi.getAll()
+      .then((cats) => {
+        const list = (Array.isArray(cats) ? cats : [])
+          .filter((c: any) => c.isActive !== false)
+          .slice(0, 6)
+          .map((c: any) => ({ name: c.name, href: `/categories/${c.slug}` }));
+        setCategoryLinks(list);
+      })
+      .catch(() => {});
+
+    // Load published CMS pages to build support/company links
+    const supportSlugs: Record<string, string> = {
+      'contact': 'Contact Us',
+      'size-guide': 'Size Guide',
+      'shipping-info': 'Shipping Info',
+      'returns-exchanges': 'Returns & Exchanges',
+      'faq': 'FAQ',
+    };
+    const companySlugs: Record<string, string> = {
+      'about': 'About Us',
+      'terms': 'Terms of Service',
+      'privacy': 'Privacy Policy',
+    };
+
+    // The pages endpoint is public and returns all non-deleted pages
+    const tenantId = document.cookie.match(/(?:^|;\s*)tenantId=([^;]*)/)?.[1] || '';
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1'}/cms/pages`, {
+      headers: tenantId ? { 'X-Tenant-Id': tenantId } : {},
+    })
+      .then((r) => r.json())
+      .then((pages: any[]) => {
+        if (!Array.isArray(pages)) return;
+        const slugSet = new Set(pages.filter((p) => p.isPublished).map((p) => p.slug));
+
+        const support: { name: string; href: string }[] = [];
+        Object.entries(supportSlugs).forEach(([slug, name]) => {
+          if (slugSet.has(slug)) support.push({ name, href: `/pages/${slug}` });
+        });
+        setSupportLinks(support);
+
+        const company: { name: string; href: string }[] = [];
+        Object.entries(companySlugs).forEach(([slug, name]) => {
+          if (slugSet.has(slug)) company.push({ name, href: `/pages/${slug}` });
+        });
+        setCompanyLinks(company);
+      })
+      .catch(() => {
+        // Fallback: show all with i18n defaults
+        setSupportLinks([
+          { name: 'Contact Us', href: '/pages/contact' },
+          { name: 'Size Guide', href: '/pages/size-guide' },
+          { name: 'FAQ', href: '/pages/faq' },
+        ]);
+        setCompanyLinks([
+          { name: 'About Us', href: '/pages/about' },
+          { name: 'Terms of Service', href: '/pages/terms' },
+          { name: 'Privacy Policy', href: '/pages/privacy' },
+        ]);
+      });
+  }, []);
+
   const shopLinks = [
-    { name: t('footer.newArrivals'), href: '/shop?sort=newest' },
-    { name: t('footer.bestSellers'), href: '/shop?sort=popular' },
-    { name: t('footer.flashSales'), href: '/flash-sales' },
-    { name: t('footer.gownRentals'), href: '/rentals' },
-    { name: t('footer.giftCards'), href: '/gift-cards' },
-  ];
-
-  const categoryLinks = [
-    { name: t('footer.women'), href: '/categories/women' },
-    { name: t('footer.men'), href: '/categories/men' },
-    { name: t('footer.kids'), href: '/categories/kids' },
-    { name: t('footer.accessories'), href: '/categories/accessories' },
-    { name: t('footer.shoes'), href: '/categories/shoes' },
-  ];
-
-  const supportLinks = [
-    { name: t('footer.contactUs'), href: '/contact' },
-    { name: t('footer.sizeGuide'), href: '/size-guide' },
-    { name: t('footer.shippingInfo'), href: '/shipping' },
-    { name: t('footer.returnsExchanges'), href: '/returns' },
-    { name: t('footer.faq'), href: '/faq' },
-  ];
-
-  const companyLinks = [
-    { name: t('footer.aboutNaro'), href: '/about' },
-    { name: t('footer.careers'), href: '/careers' },
-    { name: t('footer.privacyPolicy'), href: '/privacy' },
-    { name: t('footer.termsOfService'), href: '/terms' },
-    { name: t('footer.blog'), href: '/blog' },
+    { name: t('footer.newArrivals') !== 'footer.newArrivals' ? t('footer.newArrivals') : 'New Arrivals', href: '/shop?sort=newest' },
+    { name: t('footer.bestSellers') !== 'footer.bestSellers' ? t('footer.bestSellers') : 'Best Sellers', href: '/shop?sort=popular' },
+    { name: t('footer.flashSales') !== 'footer.flashSales' ? t('footer.flashSales') : 'Flash Sales', href: '/flash-sales' },
+    { name: t('footer.gownRentals') !== 'footer.gownRentals' ? t('footer.gownRentals') : 'Gown Rentals', href: '/rentals' },
   ];
 
   return (
@@ -136,11 +186,11 @@ export default function Footer() {
               </div>
               <div className="flex items-center gap-2">
                 <Phone className="h-4 w-4 shrink-0 text-gold-500" />
-                <span>{settings.contactPhone}</span>
+                <a href={`tel:${settings.contactPhone.replace(/\s/g, '')}`} className="hover:text-gold-500 transition-colors">{settings.contactPhone}</a>
               </div>
               <div className="flex items-center gap-2">
                 <Mail className="h-4 w-4 shrink-0 text-gold-500" />
-                <span>{settings.contactEmail}</span>
+                <a href={`mailto:${settings.contactEmail}`} className="hover:text-gold-500 transition-colors">{settings.contactEmail}</a>
               </div>
             </div>
 
@@ -183,80 +233,76 @@ export default function Footer() {
           </div>
 
           {/* Shop */}
-          <div>
-            <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
-              {t('footer.shopTitle')}
-            </h4>
-            <ul className="space-y-2.5">
-              {shopLinks.map((link) => (
-                <li key={link.href}>
-                  <Link
-                    href={link.href}
-                    className="text-sm text-dark-200 hover:text-gold-500 transition-colors"
-                  >
-                    {link.name}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </div>
+          {shopLinks.length > 0 && (
+            <div>
+              <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
+                Shop
+              </h4>
+              <ul className="space-y-2.5">
+                {shopLinks.map((link) => (
+                  <li key={link.href}>
+                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 transition-colors">
+                      {link.name}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* Categories */}
-          <div>
-            <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
-              {t('footer.categoriesTitle')}
-            </h4>
-            <ul className="space-y-2.5">
-              {categoryLinks.map((link) => (
-                <li key={link.href}>
-                  <Link
-                    href={link.href}
-                    className="text-sm text-dark-200 hover:text-gold-500 transition-colors"
-                  >
-                    {link.name}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </div>
+          {categoryLinks.length > 0 && (
+            <div>
+              <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
+                Categories
+              </h4>
+              <ul className="space-y-2.5">
+                {categoryLinks.map((link) => (
+                  <li key={link.href}>
+                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 transition-colors">
+                      {link.name}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* Support */}
-          <div>
-            <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
-              {t('footer.supportTitle')}
-            </h4>
-            <ul className="space-y-2.5">
-              {supportLinks.map((link) => (
-                <li key={link.href}>
-                  <Link
-                    href={link.href}
-                    className="text-sm text-dark-200 hover:text-gold-500 transition-colors"
-                  >
-                    {link.name}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </div>
+          {supportLinks.length > 0 && (
+            <div>
+              <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
+                Support
+              </h4>
+              <ul className="space-y-2.5">
+                {supportLinks.map((link) => (
+                  <li key={link.href}>
+                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 transition-colors">
+                      {link.name}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* Company */}
-          <div>
-            <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
-              {t('footer.companyTitle')}
-            </h4>
-            <ul className="space-y-2.5">
-              {companyLinks.map((link) => (
-                <li key={link.href}>
-                  <Link
-                    href={link.href}
-                    className="text-sm text-dark-200 hover:text-gold-500 transition-colors"
-                  >
-                    {link.name}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </div>
+          {companyLinks.length > 0 && (
+            <div>
+              <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
+                Company
+              </h4>
+              <ul className="space-y-2.5">
+                {companyLinks.map((link) => (
+                  <li key={link.href}>
+                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 transition-colors">
+                      {link.name}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
 
@@ -265,39 +311,30 @@ export default function Footer() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <p className="text-xs text-dark-300">
-              {t('footer.copyright')}
+              © {new Date().getFullYear()} {settings.businessName}. All rights reserved.
             </p>
 
             {/* Payment Methods */}
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-dark-300 mr-1">{t('footer.weAccept')}</span>
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1 bg-dark-400 rounded px-2 py-1">
-                  <CreditCard className="h-3.5 w-3.5 text-dark-200" />
-                  <span className="text-[10px] text-dark-200 font-medium">
-                    Visa
-                  </span>
-                </div>
-                <div className="flex items-center gap-1 bg-dark-400 rounded px-2 py-1">
-                  <CreditCard className="h-3.5 w-3.5 text-dark-200" />
-                  <span className="text-[10px] text-dark-200 font-medium">
-                    Mastercard
-                  </span>
-                </div>
-                <div className="flex items-center gap-1 bg-dark-400 rounded px-2 py-1">
-                  <Smartphone className="h-3.5 w-3.5 text-dark-200" />
-                  <span className="text-[10px] text-dark-200 font-medium">
-                    M-Pesa
-                  </span>
-                </div>
-                <div className="flex items-center gap-1 bg-dark-400 rounded px-2 py-1">
-                  <Smartphone className="h-3.5 w-3.5 text-dark-200" />
-                  <span className="text-[10px] text-dark-200 font-medium">
-                    Tigo Pesa
-                  </span>
+            {paymentMethods.length > 0 && (
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-dark-300 mr-1">{t('footer.weAccept')}</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {paymentMethods.map((pm: any) => (
+                    pm.iconUrl ? (
+                      <img
+                        key={pm.id}
+                        src={pm.iconUrl.startsWith('/uploads') ? `${API_ORIGIN}${pm.iconUrl}` : pm.iconUrl}
+                        alt={pm.name}
+                        title={pm.name}
+                        className="w-10 h-7 object-contain rounded"
+                      />
+                    ) : (
+                      <span key={pm.id} className="text-[10px] text-dark-200 font-medium bg-dark-400 rounded px-2 py-1">{pm.name}</span>
+                    )
+                  ))}
                 </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </div>

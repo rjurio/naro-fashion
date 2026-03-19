@@ -9,6 +9,8 @@ import {
 import Button from '@/components/ui/Button';
 import { adminApi } from '@/lib/api';
 
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
+
 interface Rental {
   id: string;
   rentalNumber?: string;
@@ -291,7 +293,7 @@ function RentalDetailsSection({ rental, onUpdate }: { rental: Rental; onUpdate: 
         {rental.transportReceiptUrl && (
           <div className="flex items-center gap-2">
             <FileText className="w-4 h-4 text-brand-gold" />
-            <a href={`http://localhost:4000${rental.transportReceiptUrl}`} target="_blank" rel="noreferrer"
+            <a href={`${API_ORIGIN}${rental.transportReceiptUrl}`} target="_blank" rel="noreferrer"
               className="text-xs text-brand-gold hover:underline">View Transport Receipt</a>
           </div>
         )}
@@ -376,7 +378,7 @@ function RentalDetailsSection({ rental, onUpdate }: { rental: Rental; onUpdate: 
                   <input type="file" accept="image/*,.pdf" onChange={handleReceiptUpload} className="hidden" disabled={uploading} />
                 </label>
                 {rental.transportReceiptUrl && (
-                  <a href={`http://localhost:4000${rental.transportReceiptUrl}`} target="_blank" rel="noreferrer" className="text-xs text-brand-gold hover:underline">View</a>
+                  <a href={`${API_ORIGIN}${rental.transportReceiptUrl}`} target="_blank" rel="noreferrer" className="text-xs text-brand-gold hover:underline">View</a>
                 )}
               </div>
             </div>

@@ -55,7 +55,7 @@ export class NewsletterService {
   // --- Subscribers ---
 
   async subscribe(dto: SubscribeDto) {
-    const existing = await this.prisma.newsletterSubscriber.findUnique({
+    const existing = await this.prisma.newsletterSubscriber.findFirst({
       where: { email: dto.email.toLowerCase().trim() },
     });
 
@@ -82,7 +82,7 @@ export class NewsletterService {
   }
 
   async unsubscribe(token: string) {
-    const subscriber = await this.prisma.newsletterSubscriber.findUnique({
+    const subscriber = await this.prisma.newsletterSubscriber.findFirst({
       where: { unsubscribeToken: token },
     });
     if (!subscriber) throw new NotFoundException('Invalid unsubscribe link');

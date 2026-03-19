@@ -1,14 +1,20 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 
 @Injectable()
 export class ReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async getRentalsByProduct(params: { page?: number; limit?: number }) {
+    const tenantId = this.tenantContext.requireId;
     const { page = 1, limit = 50 } = params;
     const groups = await this.prisma.rentalOrder.groupBy({
       by: ['productId'],
+      where: { tenantId },
       _count: { id: true },
       _sum: { totalRentalPrice: true },
       orderBy: { _count: { id: 'desc' } },
@@ -16,14 +22,14 @@ export class ReportsService {
 
     const productIds = groups.map(g => g.productId);
     const products = await this.prisma.product.findMany({
-      where: { id: { in: productIds } },
+      where: { id: { in: productIds }, tenantId },
       select: { id: true, name: true, category: { select: { name: true } }, images: { where: { isPrimary: true }, take: 1 } },
     });
     const productMap = new Map(products.map(p => [p.id, p]));
 
     // Get last rental date per product
     const lastRentals = await this.prisma.rentalOrder.findMany({
-      where: { productId: { in: productIds } },
+      where: { productId: { in: productIds }, tenantId },
       select: { productId: true, createdAt: true },
       orderBy: { createdAt: 'desc' },
       distinct: ['productId'],
@@ -53,7 +59,7 @@ export class ReportsService {
 
   async getRentalHistoryForProduct(productId: string, params: { page?: number; limit?: number }) {
     const { page = 1, limit = 25 } = params;
-    const where = { productId };
+    const where = { productId, tenantId: this.tenantContext.requireId };
     const [data, total] = await Promise.all([
       this.prisma.rentalOrder.findMany({
         where,
@@ -71,6 +77,7 @@ export class ReportsService {
   }
 
   async getIncomeStatement(period: string) {
+    const tenantId = this.tenantContext.requireId;
     // period = "YYYY-MM"
     const [year, month] = period.split('-').map(Number);
     const startDate = new Date(year, month - 1, 1);
@@ -78,11 +85,11 @@ export class ReportsService {
 
     // Revenue
     const ordersAgg = await this.prisma.order.aggregate({
-      where: { createdAt: { gte: startDate, lte: endDate }, paymentStatus: 'PAID' },
+      where: { tenantId, createdAt: { gte: startDate, lte: endDate }, paymentStatus: 'PAID' },
       _sum: { total: true },
     });
     const rentalsAgg = await this.prisma.rentalOrder.aggregate({
-      where: { createdAt: { gte: startDate, lte: endDate }, status: { in: ['RETURNED', 'ACTIVE'] } },
+      where: { tenantId, createdAt: { gte: startDate, lte: endDate }, status: { in: ['RETURNED', 'ACTIVE'] } },
       _sum: { totalRentalPrice: true },
     });
 
@@ -92,7 +99,7 @@ export class ReportsService {
 
     // COGS: SUM(orderItem.quantity * product.purchasePrice) for orders in period
     const orderItems = await this.prisma.orderItem.findMany({
-      where: { order: { createdAt: { gte: startDate, lte: endDate }, paymentStatus: 'PAID' } },
+      where: { order: { tenantId, createdAt: { gte: startDate, lte: endDate }, paymentStatus: 'PAID' } },
       include: { product: { select: { purchasePrice: true } } },
     });
     const cogs = orderItems.reduce((sum, item) => {
@@ -105,7 +112,7 @@ export class ReportsService {
 
     // Expenses
     const expenseSummary = await this.prisma.businessExpense.findMany({
-      where: { period },
+      where: { tenantId, period },
       include: { category: { select: { name: true, categoryType: true } } },
     });
 
@@ -123,7 +130,7 @@ export class ReportsService {
     const netMargin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : '0.0';
 
     // Period status
-    const financialPeriod = await this.prisma.financialPeriod.findUnique({ where: { periodKey: period } });
+    const financialPeriod = await this.prisma.financialPeriod.findFirst({ where: { periodKey: period, tenantId } });
 
     return {
       period, salesRevenue, rentalRevenue, totalRevenue,
@@ -155,7 +162,7 @@ export class ReportsService {
 
   async getExpenseBreakdown(period: string) {
     const expenses = await this.prisma.businessExpense.findMany({
-      where: { period },
+      where: { tenantId: this.tenantContext.requireId, period },
       include: { category: true },
     });
     const total = expenses.reduce((sum, e) => sum + Number(e.amount), 0);
@@ -172,13 +179,17 @@ export class ReportsService {
   }
 
   async getFinancialPeriods() {
-    return this.prisma.financialPeriod.findMany({ orderBy: { periodKey: 'desc' } });
+    return this.prisma.financialPeriod.findMany({
+      where: { tenantId: this.tenantContext.requireId },
+      orderBy: { periodKey: 'desc' },
+    });
   }
 
   async createFinancialPeriod(data: { periodKey: string; periodName: string; startDate: string; endDate: string }) {
     return this.prisma.financialPeriod.create({
       data: {
         ...data,
+        tenantId: this.tenantContext.requireId,
         startDate: new Date(data.startDate),
         endDate: new Date(data.endDate),
       },
@@ -186,6 +197,10 @@ export class ReportsService {
   }
 
   async closePeriod(id: string, closedBy?: string) {
+    const period = await this.prisma.financialPeriod.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
+    });
+    if (!period) throw new NotFoundException('Financial period not found');
     return this.prisma.financialPeriod.update({
       where: { id },
       data: { status: 'CLOSED', closedBy, closedAt: new Date() },

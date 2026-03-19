@@ -3,9 +3,12 @@ import { ExpensesService } from './expenses.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard } from '../auth/guards/module.guard';
+import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
 @Controller('expenses')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ModuleGuard)
+@RequiresModule('expenses')
 export class ExpensesController {
   constructor(private readonly service: ExpensesService) {}
 

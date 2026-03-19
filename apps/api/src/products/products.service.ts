@@ -1,23 +1,32 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { QueryProductsDto, SortOrder } from './dto/query-products.dto';
 
+const sizeGuideSelect = { id: true, name: true, nameSwahili: true, slug: true, content: true, contentSwahili: true, pdfUrl: true, pdfUrlSwahili: true };
+
 const productIncludes = {
-  category: { select: { id: true, name: true, slug: true } },
+  category: {
+    select: { id: true, name: true, slug: true, sizeGuideId: true, sizeGuideRef: { select: sizeGuideSelect } },
+  },
   variants: true,
   images: { orderBy: { sortOrder: 'asc' as const } },
+  sizeGuideRef: { select: sizeGuideSelect },
 };
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async findAll(query: QueryProductsDto) {
     const { search, categoryId, availability_mode, minPrice, maxPrice, sort, page = 1, limit = 20 } = query;
 
-    const where: any = { isActive: true, deletedAt: null };
+    const where: any = { tenantId: this.tenantContext.requireId, isActive: true, deletedAt: null };
 
     if (search) {
       where.OR = [
@@ -66,7 +75,7 @@ export class ProductsService {
   async findAllAdmin(query: QueryProductsDto) {
     const { search, categoryId, minPrice, maxPrice, sort, page = 1, limit = 20 } = query;
 
-    const where: any = { deletedAt: null };
+    const where: any = { tenantId: this.tenantContext.requireId, deletedAt: null };
 
     if (search) {
       where.OR = [
@@ -108,8 +117,8 @@ export class ProductsService {
   }
 
   async findBySlug(slug: string) {
-    const product = await this.prisma.product.findUnique({
-      where: { slug },
+    const product = await this.prisma.product.findFirst({
+      where: { slug, tenantId: this.tenantContext.requireId },
       include: {
         ...productIncludes,
         reviews: {
@@ -130,8 +139,8 @@ export class ProductsService {
   }
 
   async findById(id: string) {
-    const product = await this.prisma.product.findUnique({
-      where: { id },
+    const product = await this.prisma.product.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
       include: productIncludes,
     });
 
@@ -146,6 +155,7 @@ export class ProductsService {
     const slug = dto.slug || this.generateSlug(dto.name);
 
     const data: any = {
+      tenantId: this.tenantContext.requireId,
       name: dto.name,
       nameSwahili: dto.nameSwahili,
       slug,
@@ -156,6 +166,7 @@ export class ProductsService {
       categoryId: dto.categoryId,
       sku: dto.sku,
       availabilityMode: dto.availabilityMode || 'PURCHASE_ONLY',
+      sizeGuideId: dto.sizeGuideId || undefined,
       isFeatured: dto.isFeatured ?? false,
       isActive: dto.published !== false,
       rentalPricePerDay: dto.rentalPricePerDay,
@@ -197,7 +208,7 @@ export class ProductsService {
   }
 
   async update(id: string, dto: UpdateProductDto) {
-    const product = await this.prisma.product.findUnique({ where: { id } });
+    const product = await this.prisma.product.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!product || product.deletedAt) {
       throw new NotFoundException('Product not found');
     }
@@ -215,6 +226,7 @@ export class ProductsService {
     if (dto.categoryId !== undefined) data.categoryId = dto.categoryId;
     if (dto.sku !== undefined) data.sku = dto.sku;
     if (dto.availabilityMode !== undefined) data.availabilityMode = dto.availabilityMode;
+    if (dto.sizeGuideId !== undefined) data.sizeGuideId = dto.sizeGuideId || null;
     if (dto.isFeatured !== undefined) data.isFeatured = dto.isFeatured;
     if (dto.published !== undefined) data.isActive = dto.published;
     if (dto.rentalPricePerDay !== undefined) data.rentalPricePerDay = dto.rentalPricePerDay;
@@ -270,7 +282,7 @@ export class ProductsService {
   }
 
   async toggleActive(id: string) {
-    const product = await this.prisma.product.findUnique({ where: { id } });
+    const product = await this.prisma.product.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!product || product.deletedAt) {
       throw new NotFoundException('Product not found');
     }
@@ -285,7 +297,7 @@ export class ProductsService {
   }
 
   async delete(id: string) {
-    const product = await this.prisma.product.findUnique({ where: { id } });
+    const product = await this.prisma.product.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!product) {
       throw new NotFoundException('Product not found');
     }
@@ -298,7 +310,7 @@ export class ProductsService {
   }
 
   async restore(id: string) {
-    const product = await this.prisma.product.findUnique({ where: { id } });
+    const product = await this.prisma.product.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!product || !product.deletedAt) {
       throw new NotFoundException('Deleted product not found');
     }
@@ -311,7 +323,7 @@ export class ProductsService {
 
   async findDeleted() {
     return this.prisma.product.findMany({
-      where: { deletedAt: { not: null } },
+      where: { tenantId: this.tenantContext.requireId, deletedAt: { not: null } },
       include: {
         category: { select: { id: true, name: true, slug: true } },
       },
@@ -320,7 +332,7 @@ export class ProductsService {
   }
 
   async permanentDelete(id: string) {
-    const product = await this.prisma.product.findUnique({ where: { id } });
+    const product = await this.prisma.product.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!product) {
       throw new NotFoundException('Product not found');
     }

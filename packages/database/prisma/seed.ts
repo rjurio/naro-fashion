@@ -515,6 +515,26 @@ async function main() {
   });
   console.log('Created hero slides');
 
+  // Seed default payment methods
+  const defaultPaymentMethods = [
+    { name: 'Visa', code: 'VISA', description: 'Pay with Visa credit/debit card', sortOrder: 1 },
+    { name: 'Mastercard', code: 'MASTERCARD', description: 'Pay with Mastercard credit/debit card', sortOrder: 2 },
+    { name: 'M-Pesa', code: 'MPESA', description: 'Pay with Vodacom M-Pesa mobile money', sortOrder: 3 },
+    { name: 'Tigo Pesa', code: 'TIGOPESA', description: 'Pay with Tigo Pesa mobile money', sortOrder: 4 },
+    { name: 'Airtel Money', code: 'AIRTEL', description: 'Pay with Airtel Money', sortOrder: 5 },
+    { name: 'Selcom Pesa', code: 'SELCOM', description: 'Pay with Selcom Pesa', sortOrder: 6 },
+    { name: 'Halopesa', code: 'HALOTEL', description: 'Pay with Halotel Halopesa', sortOrder: 7 },
+  ];
+
+  for (const pm of defaultPaymentMethods) {
+    await prisma.paymentMethod.upsert({
+      where: { code: pm.code },
+      update: {},
+      create: pm,
+    });
+  }
+  console.log('Seeded default payment methods');
+
   console.log('Seeding completed successfully!');
 }
 

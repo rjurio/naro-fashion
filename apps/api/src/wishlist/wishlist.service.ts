@@ -1,9 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 
 @Injectable()
 export class WishlistService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   private readonly wishlistItemInclude = {
     product: {
@@ -31,12 +35,10 @@ export class WishlistService {
   }
 
   async addItem(userId: string, productId: string) {
-    const existing = await this.prisma.wishlistItem.findUnique({
+    const existing = await this.prisma.wishlistItem.findFirst({
       where: {
-        userId_productId: {
-          userId,
-          productId,
-        },
+        userId,
+        productId,
       },
     });
 
@@ -53,12 +55,10 @@ export class WishlistService {
   }
 
   async removeItem(userId: string, productId: string) {
-    const existing = await this.prisma.wishlistItem.findUnique({
+    const existing = await this.prisma.wishlistItem.findFirst({
       where: {
-        userId_productId: {
-          userId,
-          productId,
-        },
+        userId,
+        productId,
       },
     });
 
@@ -70,12 +70,10 @@ export class WishlistService {
   }
 
   async isInWishlist(userId: string, productId: string) {
-    const item = await this.prisma.wishlistItem.findUnique({
+    const item = await this.prisma.wishlistItem.findFirst({
       where: {
-        userId_productId: {
-          userId,
-          productId,
-        },
+        userId,
+        productId,
       },
     });
 

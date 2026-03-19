@@ -9,6 +9,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
@@ -24,8 +25,9 @@ export class AuthController {
 
   @Public()
   @Post('register')
-  async register(@Body() dto: RegisterDto) {
-    const user = await this.authService.register(dto);
+  async register(@Body() dto: RegisterDto, @Req() req: Request) {
+    const tenantId = req.headers['x-tenant-id'] as string | undefined;
+    const user = await this.authService.register(dto, tenantId);
     return { message: 'Registration successful', user };
   }
 
@@ -37,7 +39,14 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const user = req.user as { id: string; email: string; isAdmin?: boolean; role?: string };
+    const user = req.user as {
+      id: string;
+      email: string;
+      tenantId?: string;
+      isAdmin?: boolean;
+      isPlatformAdmin?: boolean;
+      role?: string;
+    };
     const tokens = this.authService.generateTokens(user);
 
     res.cookie('access_token', tokens.accessToken, {
@@ -94,10 +103,41 @@ export class AuthController {
     return { message: 'Logged out' };
   }
 
+  @Public()
+  @Post('platform-login')
+  @HttpCode(HttpStatus.OK)
+  async platformLogin(
+    @Body() body: { email: string; password: string },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const admin = await this.authService.validatePlatformAdmin(body.email, body.password);
+    if (!admin) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    const tokens = this.authService.generateTokens(admin);
+
+    res.cookie('access_token', tokens.accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 15 * 60 * 1000,
+    });
+
+    res.cookie('refresh_token', tokens.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/api/v1/auth/refresh',
+    });
+
+    return { message: 'Login successful', user: admin, accessToken: tokens.accessToken };
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  async me(@CurrentUser() user: { id: string; isAdmin?: boolean }) {
-    return this.authService.getProfile(user.id, user.isAdmin);
+  async me(@CurrentUser() user: { id: string; isAdmin?: boolean; isPlatformAdmin?: boolean }) {
+    return this.authService.getProfile(user.id, user.isAdmin, user.isPlatformAdmin);
   }
 
   @UseGuards(JwtAuthGuard)

@@ -24,6 +24,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Auto-detect device theme on first visit. Runs before React hydration to prevent flash. */}
+        <script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';localStorage.setItem('theme',t);}document.documentElement.classList.remove('light','dark','luxury');document.documentElement.classList.add(t);}catch(e){}})();` }} />
+      </head>
       <body className={`${inter.variable} font-sans antialiased`}>
         <Providers>{children}</Providers>
       </body>

@@ -1,9 +1,12 @@
 import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
 import { ReportsService } from './reports.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard } from '../auth/guards/module.guard';
+import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
 @Controller('reports')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ModuleGuard)
+@RequiresModule('reports')
 export class ReportsController {
   constructor(private readonly service: ReportsService) {}
 

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import adminApi from '../../../../lib/api';
+import { useToast } from '@/contexts/ToastContext';
 
 interface Props {
   sessionId: string;
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export default function CloseShiftModal({ sessionId, onClose, onShiftClosed }: Props) {
+  const toast = useToast();
   const [closingCash, setClosingCash] = useState<number>(0);
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
@@ -26,7 +28,7 @@ export default function CloseShiftModal({ sessionId, onClose, onShiftClosed }: P
       await adminApi.posCloseSession({ closingCash, notes: notes || undefined });
       onShiftClosed();
     } catch (err: any) {
-      alert(err.message || 'Failed to close shift');
+      toast.error(err.message || 'Failed to close shift');
     } finally {
       setLoading(false);
     }

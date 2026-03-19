@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { randomBytes } from 'crypto';
 
 export class ApplyReferralDto {
@@ -12,11 +13,14 @@ export class ApplyReferralDto {
 
 @Injectable()
 export class ReferralsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async getMyCode(userId: string) {
-    const referralCode = await this.prisma.referralCode.findUnique({
-      where: { userId },
+    const referralCode = await this.prisma.referralCode.findFirst({
+      where: { userId, tenantId: this.tenantContext.requireId },
       include: { referrals: true },
     });
 
@@ -32,8 +36,9 @@ export class ReferralsService {
   }
 
   async generateCode(userId: string) {
-    const existing = await this.prisma.referralCode.findUnique({
-      where: { userId },
+    const tenantId = this.tenantContext.requireId;
+    const existing = await this.prisma.referralCode.findFirst({
+      where: { userId, tenantId },
     });
 
     if (existing) {
@@ -43,15 +48,16 @@ export class ReferralsService {
     const code = 'NARO-' + randomBytes(4).toString('hex').toUpperCase();
 
     const referralCode = await this.prisma.referralCode.create({
-      data: { userId, code },
+      data: { tenantId, userId, code },
     });
 
     return { code: referralCode.code, message: 'Referral code generated successfully.' };
   }
 
   async applyCode(userId: string, dto: ApplyReferralDto) {
-    const referralCode = await this.prisma.referralCode.findUnique({
-      where: { code: dto.code },
+    const tenantId = this.tenantContext.requireId;
+    const referralCode = await this.prisma.referralCode.findFirst({
+      where: { code: dto.code, tenantId },
     });
 
     if (!referralCode) {
@@ -63,7 +69,7 @@ export class ReferralsService {
     }
 
     // Check if user already used a referral code
-    const alreadyUsed = await this.prisma.referral.findUnique({
+    const alreadyUsed = await this.prisma.referral.findFirst({
       where: { referredUserId: userId },
     });
 
@@ -85,6 +91,7 @@ export class ReferralsService {
 
   async getStats() {
     const referralCodes = await this.prisma.referralCode.findMany({
+      where: { tenantId: this.tenantContext.requireId },
       include: {
         user: { select: { id: true, firstName: true, lastName: true, email: true } },
         referrals: {

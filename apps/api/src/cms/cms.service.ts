@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { IsString, IsOptional } from 'class-validator';
+import { IsString, IsOptional, IsEmail } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmailService } from '../notifications/email.service';
+import { TenantContext } from '../tenant/tenant.context';
 
 export class CreateBannerDto {
   title: string;
@@ -75,6 +77,39 @@ export class CreateInstagramPostDto {
   isPinned?: boolean;
 }
 
+export class SubmitContactDto {
+  @IsString()
+  name: string;
+
+  @IsEmail()
+  email: string;
+
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  subject?: string;
+
+  @IsString()
+  message: string;
+}
+
+export class UpdateContactStatusDto {
+  @IsString()
+  status: string; // PENDING, IN_PROGRESS, CLOSED, UNATTENDED
+}
+
+export class ReplyContactDto {
+  @IsString()
+  reply: string;
+
+  @IsOptional()
+  @IsString()
+  adminId?: string;
+}
+
 export class UpdateInstagramPostDto {
   caption?: string;
   imageUrl?: string;
@@ -87,36 +122,40 @@ export class UpdateInstagramPostDto {
 
 @Injectable()
 export class CmsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly emailService: EmailService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   // --- Banners ---
 
   async findAllBanners() {
     return this.prisma.banner.findMany({
-      where: { isActive: true, deletedAt: null },
+      where: { tenantId: this.tenantContext.requireId, isActive: true, deletedAt: null },
       orderBy: { sortOrder: 'asc' },
     });
   }
 
   async findAllBannersAdmin() {
     return this.prisma.banner.findMany({
-      where: { deletedAt: null },
+      where: { tenantId: this.tenantContext.requireId, deletedAt: null },
       orderBy: { sortOrder: 'asc' },
     });
   }
 
   async createBanner(dto: CreateBannerDto) {
-    return this.prisma.banner.create({ data: dto as any });
+    return this.prisma.banner.create({ data: { ...dto, tenantId: this.tenantContext.requireId } as any });
   }
 
   async updateBanner(id: string, dto: UpdateBannerDto) {
-    const banner = await this.prisma.banner.findUnique({ where: { id } });
+    const banner = await this.prisma.banner.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!banner || banner.deletedAt) throw new NotFoundException('Banner not found');
     return this.prisma.banner.update({ where: { id }, data: dto });
   }
 
   async deleteBanner(id: string) {
-    const banner = await this.prisma.banner.findUnique({ where: { id } });
+    const banner = await this.prisma.banner.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!banner) throw new NotFoundException('Banner not found');
     await this.prisma.banner.update({
       where: { id },
@@ -126,7 +165,7 @@ export class CmsService {
   }
 
   async restoreBanner(id: string) {
-    const banner = await this.prisma.banner.findUnique({ where: { id } });
+    const banner = await this.prisma.banner.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!banner || !banner.deletedAt) throw new NotFoundException('Deleted banner not found');
     return this.prisma.banner.update({
       where: { id },
@@ -136,7 +175,7 @@ export class CmsService {
 
   async findDeletedBanners() {
     return this.prisma.banner.findMany({
-      where: { deletedAt: { not: null } },
+      where: { tenantId: this.tenantContext.requireId, deletedAt: { not: null } },
       orderBy: { deletedAt: 'desc' },
     });
   }
@@ -145,29 +184,29 @@ export class CmsService {
 
   async findAllPages() {
     return this.prisma.page.findMany({
-      where: { deletedAt: null },
+      where: { tenantId: this.tenantContext.requireId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
     });
   }
 
   async findPageBySlug(slug: string) {
-    const page = await this.prisma.page.findUnique({ where: { slug } });
+    const page = await this.prisma.page.findFirst({ where: { slug, tenantId: this.tenantContext.requireId } });
     if (!page || page.deletedAt) throw new NotFoundException('Page not found');
     return page;
   }
 
   async createPage(dto: CreatePageDto) {
-    return this.prisma.page.create({ data: dto });
+    return this.prisma.page.create({ data: { ...dto, tenantId: this.tenantContext.requireId } });
   }
 
   async updatePage(id: string, dto: UpdatePageDto) {
-    const page = await this.prisma.page.findUnique({ where: { id } });
+    const page = await this.prisma.page.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!page || page.deletedAt) throw new NotFoundException('Page not found');
     return this.prisma.page.update({ where: { id }, data: dto });
   }
 
   async deletePage(id: string) {
-    const page = await this.prisma.page.findUnique({ where: { id } });
+    const page = await this.prisma.page.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!page) throw new NotFoundException('Page not found');
     await this.prisma.page.update({
       where: { id },
@@ -177,7 +216,7 @@ export class CmsService {
   }
 
   async restorePage(id: string) {
-    const page = await this.prisma.page.findUnique({ where: { id } });
+    const page = await this.prisma.page.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!page || !page.deletedAt) throw new NotFoundException('Deleted page not found');
     return this.prisma.page.update({
       where: { id },
@@ -187,7 +226,7 @@ export class CmsService {
 
   async findDeletedPages() {
     return this.prisma.page.findMany({
-      where: { deletedAt: { not: null } },
+      where: { tenantId: this.tenantContext.requireId, deletedAt: { not: null } },
       orderBy: { deletedAt: 'desc' },
     });
   }
@@ -195,19 +234,32 @@ export class CmsService {
   // --- Settings ---
 
   async findAllSettings() {
-    return this.prisma.siteSetting.findMany();
+    return this.prisma.siteSetting.findMany({
+      where: { tenantId: this.tenantContext.requireId },
+    });
   }
 
   async updateSetting(key: string, dto: UpdateSettingDto) {
-    return this.prisma.siteSetting.upsert({
-      where: { key },
-      update: { value: dto.value },
-      create: { key, value: dto.value },
+    const tenantId = this.tenantContext.requireId;
+    // Use findFirst + create/update since composite unique requires tenantId
+    const existing = await this.prisma.siteSetting.findFirst({
+      where: { tenantId, key },
+    });
+    if (existing) {
+      return this.prisma.siteSetting.update({
+        where: { id: existing.id },
+        data: { value: dto.value },
+      });
+    }
+    return this.prisma.siteSetting.create({
+      data: { key, value: dto.value, tenantId },
     });
   }
 
   async getBusinessProfile() {
-    const settings = await this.prisma.siteSetting.findMany();
+    const settings = await this.prisma.siteSetting.findMany({
+      where: { tenantId: this.tenantContext.requireId },
+    });
     const map = new Map(settings.map((s) => [s.key, s.value]));
     return {
       businessName: map.get('site_name') || 'Naro Fashion',
@@ -229,6 +281,7 @@ export class CmsService {
       faviconUrl: map.get('company_favicon_url') || '/favicon.jpg',
       domain: map.get('business_domain') || 'narofashion.co.tz',
       currency: map.get('currency') || 'TZS',
+      acceptedPaymentMethods: (map.get('accepted_payment_methods') || 'VISA,MASTERCARD,MPESA,TIGOPESA').split(',').map((s) => s.trim()).filter(Boolean),
     };
   }
 
@@ -236,30 +289,30 @@ export class CmsService {
 
   async findActiveHeroSlides() {
     return this.prisma.heroSlide.findMany({
-      where: { isActive: true, deletedAt: null },
+      where: { tenantId: this.tenantContext.requireId, isActive: true, deletedAt: null },
       orderBy: { sortOrder: 'asc' },
     });
   }
 
   async findAllHeroSlidesAdmin() {
     return this.prisma.heroSlide.findMany({
-      where: { deletedAt: null },
+      where: { tenantId: this.tenantContext.requireId, deletedAt: null },
       orderBy: { sortOrder: 'asc' },
     });
   }
 
   async createHeroSlide(dto: CreateHeroSlideDto) {
-    return this.prisma.heroSlide.create({ data: dto as any });
+    return this.prisma.heroSlide.create({ data: { ...dto, tenantId: this.tenantContext.requireId } as any });
   }
 
   async updateHeroSlide(id: string, dto: UpdateHeroSlideDto) {
-    const slide = await this.prisma.heroSlide.findUnique({ where: { id } });
+    const slide = await this.prisma.heroSlide.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!slide || slide.deletedAt) throw new NotFoundException('Hero slide not found');
     return this.prisma.heroSlide.update({ where: { id }, data: dto });
   }
 
   async deleteHeroSlide(id: string) {
-    const slide = await this.prisma.heroSlide.findUnique({ where: { id } });
+    const slide = await this.prisma.heroSlide.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!slide) throw new NotFoundException('Hero slide not found');
     await this.prisma.heroSlide.update({
       where: { id },
@@ -269,7 +322,7 @@ export class CmsService {
   }
 
   async restoreHeroSlide(id: string) {
-    const slide = await this.prisma.heroSlide.findUnique({ where: { id } });
+    const slide = await this.prisma.heroSlide.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!slide || !slide.deletedAt) throw new NotFoundException('Deleted hero slide not found');
     return this.prisma.heroSlide.update({
       where: { id },
@@ -279,7 +332,7 @@ export class CmsService {
 
   async findDeletedHeroSlides() {
     return this.prisma.heroSlide.findMany({
-      where: { deletedAt: { not: null } },
+      where: { tenantId: this.tenantContext.requireId, deletedAt: { not: null } },
       orderBy: { deletedAt: 'desc' },
     });
   }
@@ -289,7 +342,7 @@ export class CmsService {
   async findActiveInstagramPosts() {
     // Ordered: API posts (latest first) → Pinned → Manual (by sortOrder)
     const posts = await this.prisma.instagramPost.findMany({
-      where: { isActive: true, deletedAt: null },
+      where: { tenantId: this.tenantContext.requireId, isActive: true, deletedAt: null },
     });
 
     return posts.sort((a, b) => {
@@ -309,7 +362,7 @@ export class CmsService {
 
   async findAllInstagramPostsAdmin() {
     const posts = await this.prisma.instagramPost.findMany({
-      where: { deletedAt: null },
+      where: { tenantId: this.tenantContext.requireId, deletedAt: null },
     });
 
     return posts.sort((a, b) => {
@@ -326,17 +379,17 @@ export class CmsService {
   }
 
   async createInstagramPost(dto: CreateInstagramPostDto) {
-    return this.prisma.instagramPost.create({ data: dto as any });
+    return this.prisma.instagramPost.create({ data: { ...dto, tenantId: this.tenantContext.requireId } as any });
   }
 
   async updateInstagramPost(id: string, dto: UpdateInstagramPostDto) {
-    const post = await this.prisma.instagramPost.findUnique({ where: { id } });
+    const post = await this.prisma.instagramPost.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!post || post.deletedAt) throw new NotFoundException('Instagram post not found');
     return this.prisma.instagramPost.update({ where: { id }, data: dto });
   }
 
   async deleteInstagramPost(id: string) {
-    const post = await this.prisma.instagramPost.findUnique({ where: { id } });
+    const post = await this.prisma.instagramPost.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!post) throw new NotFoundException('Instagram post not found');
     await this.prisma.instagramPost.update({
       where: { id },
@@ -346,7 +399,7 @@ export class CmsService {
   }
 
   async restoreInstagramPost(id: string) {
-    const post = await this.prisma.instagramPost.findUnique({ where: { id } });
+    const post = await this.prisma.instagramPost.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!post || !post.deletedAt) throw new NotFoundException('Deleted Instagram post not found');
     return this.prisma.instagramPost.update({
       where: { id },
@@ -356,17 +409,127 @@ export class CmsService {
 
   async findDeletedInstagramPosts() {
     return this.prisma.instagramPost.findMany({
-      where: { deletedAt: { not: null } },
+      where: { tenantId: this.tenantContext.requireId, deletedAt: { not: null } },
       orderBy: { deletedAt: 'desc' },
     });
   }
 
   async togglePinInstagramPost(id: string) {
-    const post = await this.prisma.instagramPost.findUnique({ where: { id } });
+    const post = await this.prisma.instagramPost.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!post || post.deletedAt) throw new NotFoundException('Instagram post not found');
     return this.prisma.instagramPost.update({
       where: { id },
       data: { isPinned: !post.isPinned },
     });
+  }
+
+  // --- Contact Submissions ---
+
+  async submitContact(dto: SubmitContactDto) {
+    const db = this.prisma as any;
+    const submission = await db.contactSubmission.create({
+      data: {
+        tenantId: this.tenantContext.requireId,
+        name: dto.name,
+        email: dto.email,
+        phone: dto.phone,
+        subject: dto.subject || 'General Inquiry',
+        message: dto.message,
+        status: 'PENDING',
+      },
+    });
+
+    // Send acknowledgement email (non-blocking)
+    this.emailService
+      .send({
+        to: dto.email,
+        subject: `We received your message — ${submission.subject}`,
+        template: 'contact-acknowledgement',
+        context: {
+          customerName: dto.name,
+          subject: submission.subject,
+          message: dto.message,
+        },
+      })
+      .catch(() => {/* swallow — email is best-effort */});
+
+    return { success: true, id: submission.id };
+  }
+
+  async findAllContactSubmissions(status?: string) {
+    const db = this.prisma as any;
+    const where: any = { tenantId: this.tenantContext.requireId };
+    if (status) where.status = status;
+    return db.contactSubmission.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findContactSubmission(id: string) {
+    const db = this.prisma as any;
+    const sub = await db.contactSubmission.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
+    if (!sub) throw new NotFoundException('Contact submission not found');
+    return sub;
+  }
+
+  async updateContactStatus(id: string, dto: UpdateContactStatusDto) {
+    await this.findContactSubmission(id);
+    const db = this.prisma as any;
+    return db.contactSubmission.update({
+      where: { id },
+      data: { status: dto.status },
+    });
+  }
+
+  async replyToContact(id: string, dto: ReplyContactDto) {
+    const sub = await this.findContactSubmission(id);
+    const db = this.prisma as any;
+    const updated = await db.contactSubmission.update({
+      where: { id },
+      data: {
+        adminReply: dto.reply,
+        repliedAt: new Date(),
+        repliedById: dto.adminId,
+        status: 'CLOSED',
+      },
+    });
+
+    // Send reply email (non-blocking)
+    this.emailService
+      .send({
+        to: sub.email,
+        subject: `Re: ${sub.subject || 'Your inquiry'} — Reply from our team`,
+        template: 'contact-reply',
+        context: {
+          customerName: sub.name,
+          subject: sub.subject,
+          originalMessage: sub.message,
+          reply: dto.reply,
+        },
+      })
+      .catch(() => {/* swallow */});
+
+    return updated;
+  }
+
+  async deleteContactSubmission(id: string) {
+    await this.findContactSubmission(id);
+    const db = this.prisma as any;
+    await db.contactSubmission.delete({ where: { id } });
+    return { message: 'Contact submission deleted' };
+  }
+
+  async getContactSubmissionStats() {
+    const db = this.prisma as any;
+    const tenantId = this.tenantContext.requireId;
+    const [total, pending, inProgress, closed, unattended] = await Promise.all([
+      db.contactSubmission.count({ where: { tenantId } }),
+      db.contactSubmission.count({ where: { tenantId, status: 'PENDING' } }),
+      db.contactSubmission.count({ where: { tenantId, status: 'IN_PROGRESS' } }),
+      db.contactSubmission.count({ where: { tenantId, status: 'CLOSED' } }),
+      db.contactSubmission.count({ where: { tenantId, status: 'UNATTENDED' } }),
+    ]);
+    return { total, pending, inProgress, closed, unattended };
   }
 }

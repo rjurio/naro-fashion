@@ -34,6 +34,8 @@ export default function CategoriesPage() {
   const [formSlug, setFormSlug] = useState('');
   const [formParent, setFormParent] = useState('');
   const [formImage, setFormImage] = useState('');
+  const [formSizeGuideId, setFormSizeGuideId] = useState('');
+  const [sizeGuides, setSizeGuides] = useState<{ id: string; name: string }[]>([]);
 
   const toast = useToast();
   const confirm = useConfirm();
@@ -52,6 +54,12 @@ export default function CategoriesPage() {
 
   useEffect(() => { fetchCategories(); }, [fetchCategories]);
 
+  useEffect(() => {
+    adminApi.getSizeGuides().then((guides) => {
+      setSizeGuides((Array.isArray(guides) ? guides : []).filter((g: any) => g.isActive));
+    }).catch(() => {});
+  }, []);
+
   const toggleExpand = (id: string) => {
     const next = new Set(expanded);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -59,7 +67,7 @@ export default function CategoriesPage() {
   };
 
   const resetForm = () => {
-    setFormNameEn(''); setFormNameSw(''); setFormSlug(''); setFormParent(''); setFormImage('');
+    setFormNameEn(''); setFormNameSw(''); setFormSlug(''); setFormParent(''); setFormImage(''); setFormSizeGuideId('');
     setShowForm(false); setEditingId(null);
   };
 
@@ -69,6 +77,7 @@ export default function CategoriesPage() {
     setFormSlug(cat.slug);
     setFormParent(cat.parentId || '');
     setFormImage(cat.imageUrl || '');
+    setFormSizeGuideId((cat as any).sizeGuideId || '');
     setEditingId(cat.id);
     setShowForm(true);
   };
@@ -89,6 +98,7 @@ export default function CategoriesPage() {
     const payload: any = {
       nameEn: formNameEn, nameSw: formNameSw, slug,
       parentId: formParent || null, imageUrl: formImage || null,
+      sizeGuideId: formSizeGuideId || null,
     };
     setSaving(true);
     try {
@@ -189,6 +199,13 @@ export default function CategoriesPage() {
             <div>
               <label className="block text-xs font-medium text-[hsl(var(--foreground))] mb-1">Image URL</label>
               <input type="text" value={formImage} onChange={(e) => setFormImage(e.target.value)} placeholder="/uploads/categories/..." className={inputClass} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-[hsl(var(--foreground))] mb-1">Size Guide</label>
+              <select value={formSizeGuideId} onChange={(e) => setFormSizeGuideId(e.target.value)} className={inputClass} title="Size Guide">
+                <option value="">None</option>
+                {sizeGuides.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
             </div>
           </div>
           <div className="flex items-center gap-3 pt-2">

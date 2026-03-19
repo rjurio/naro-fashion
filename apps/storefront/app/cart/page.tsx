@@ -17,8 +17,17 @@ import Button from "@/components/ui/Button";
 import { formatPrice } from "@/lib/utils";
 import { cartApi, promoCodesApi } from "@/lib/api";
 
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
+
+function resolveImg(url?: string): string {
+  if (!url) return '';
+  if (url.startsWith('/uploads')) return `${API_ORIGIN}${url}`;
+  return url;
+}
+
 interface CartItem {
   id: string;
+  slug: string;
   name: string;
   price: number;
   image: string;
@@ -41,16 +50,21 @@ export default function CartPage() {
     const fetchCart = async () => {
       try {
         const data = await cartApi.get();
-        const items: CartItem[] = (data?.items ?? []).map((item: any) => ({
-          id: item.id,
-          name: item.product?.name ?? item.name ?? "Unknown Product",
-          price: item.price ?? item.product?.price ?? 0,
-          image: item.product?.image ?? item.image ?? "/images/placeholder.jpg",
-          size: item.variant?.size ?? item.size ?? "One Size",
-          color: item.variant?.color ?? item.color ?? "",
-          quantity: item.quantity ?? 1,
-          maxQuantity: item.product?.stock ?? item.maxQuantity ?? 10,
-        }));
+        const items: CartItem[] = (data?.items ?? []).map((item: any) => {
+          const imgRaw = item.product?.images?.[0];
+          const imgUrl = typeof imgRaw === 'string' ? imgRaw : imgRaw?.url;
+          return {
+            id: item.id,
+            slug: item.product?.slug ?? item.id,
+            name: item.product?.name ?? item.name ?? "Unknown Product",
+            price: Number(item.price ?? item.product?.basePrice ?? item.product?.price ?? 0),
+            image: resolveImg(imgUrl),
+            size: item.variant?.size ?? item.size ?? "One Size",
+            color: item.variant?.color ?? item.color ?? "",
+            quantity: item.quantity ?? 1,
+            maxQuantity: item.product?.stockQuantity ?? item.product?.stock ?? item.maxQuantity ?? 10,
+          };
+        });
         setCartItems(items);
       } catch {
         setCartItems([]);
@@ -186,7 +200,7 @@ export default function CartPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <Link
-                        href={`/products/${item.id}`}
+                        href={`/products/${item.slug}`}
                         className="text-sm sm:text-base font-medium text-foreground hover:text-gold-500 transition-colors line-clamp-2"
                       >
                         {item.name}
@@ -300,7 +314,7 @@ export default function CartPage() {
                 </div>
                 {discount > 0 && (
                   <div className="flex justify-between text-green-600">
-                    <span>Discount (10%)</span>
+                    <span>Discount</span>
                     <span className="font-medium">-{formatPrice(discount)}</span>
                   </div>
                 )}
@@ -313,9 +327,11 @@ export default function CartPage() {
               </div>
 
               {/* Checkout Button */}
-              <Button size="lg" className="w-full mt-6 gap-2">
-                Proceed to Checkout <ArrowRight className="h-5 w-5" />
-              </Button>
+              <Link href="/checkout" className="block mt-6">
+                <Button size="lg" className="w-full gap-2">
+                  Proceed to Checkout <ArrowRight className="h-5 w-5" />
+                </Button>
+              </Link>
 
               {/* Trust badges */}
               <div className="mt-6 flex items-center justify-center gap-4 text-xs text-muted-foreground">

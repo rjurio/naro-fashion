@@ -3,7 +3,10 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ServeStaticModule } from '@nestjs/serve-static';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { join } from 'path';
+import { TenantModule } from './tenant/tenant.module';
+import { TenantInterceptor } from './tenant/tenant.interceptor';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { ProductsModule } from './products/products.module';
@@ -37,6 +40,9 @@ import { EventsModule } from './events/events.module';
 import { PosModule } from './pos/pos.module';
 import { PromoCodesModule } from './promo-codes/promo-codes.module';
 import { NewsletterModule } from './newsletter/newsletter.module';
+import { SizeGuidesModule } from './size-guides/size-guides.module';
+import { PaymentMethodsModule } from './payment-methods/payment-methods.module';
+import { TenantsModule } from './tenants/tenants.module';
 
 @Module({
   imports: [
@@ -49,6 +55,7 @@ import { NewsletterModule } from './newsletter/newsletter.module';
       serveStaticOptions: { index: false },
     }),
     PrismaModule,
+    TenantModule,
     AuthModule,
     UsersModule,
     ProductsModule,
@@ -81,6 +88,15 @@ import { NewsletterModule } from './newsletter/newsletter.module';
     PosModule,
     PromoCodesModule,
     NewsletterModule,
+    SizeGuidesModule,
+    PaymentMethodsModule,
+    TenantsModule,
+  ],
+  providers: [
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: TenantInterceptor,
+    },
   ],
 })
 export class AppModule {}

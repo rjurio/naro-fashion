@@ -5,6 +5,7 @@ import { ThemeProvider } from "next-themes";
 import { I18nProvider } from "@/lib/i18n";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { SiteSettingsProvider } from "@/contexts/SiteSettingsContext";
+import { ToastProvider } from "@/contexts/ToastContext";
 import { getBusinessProfile } from "@/lib/settings-server";
 import Header from "@/components/layout/Header";
 import Footer from "@/components/layout/Footer";
@@ -75,6 +76,10 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${inter.variable} ${playfair.variable}`}
     >
+      <head>
+        {/* Auto-detect device theme on first visit. Runs before React hydration to prevent flash. */}
+        <script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'standard';localStorage.setItem('theme',t);}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();` }} />
+      </head>
       <body className="font-sans min-h-screen flex flex-col">
         <ThemeProvider
           attribute="data-theme"
@@ -83,6 +88,7 @@ export default function RootLayout({
           enableSystem={false}
         >
           <I18nProvider>
+            <ToastProvider>
             <SiteSettingsProvider>
             <AuthProvider>
               <Suspense fallback={null}>
@@ -94,6 +100,7 @@ export default function RootLayout({
               <WhatsAppButton />
             </AuthProvider>
             </SiteSettingsProvider>
+            </ToastProvider>
           </I18nProvider>
         </ThemeProvider>
       </body>

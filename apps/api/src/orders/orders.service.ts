@@ -4,13 +4,17 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { QueryOrdersDto, AdminQueryOrdersDto } from './dto/query-orders.dto';
 import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   private generateOrderNumber(): string {
     const random = Math.floor(1000 + Math.random() * 9000);
@@ -54,6 +58,7 @@ export class OrdersService {
     const order = await this.prisma.$transaction(async (tx) => {
       const newOrder = await tx.order.create({
         data: {
+          tenantId: this.tenantContext.requireId,
           orderNumber: this.generateOrderNumber(),
           userId,
           addressId: dto.addressId,
@@ -102,7 +107,7 @@ export class OrdersService {
   async findAll(userId: string, query: QueryOrdersDto) {
     const { status, page = 1, limit = 20 } = query;
 
-    const where: any = { userId };
+    const where: any = { tenantId: this.tenantContext.requireId, userId };
     if (status) {
       where.status = status;
     }
@@ -145,7 +150,7 @@ export class OrdersService {
   async findAllAdmin(query: AdminQueryOrdersDto) {
     const { search, status, startDate, endDate, page = 1, limit = 20 } = query;
 
-    const where: any = {};
+    const where: any = { tenantId: this.tenantContext.requireId };
 
     if (status) {
       where.status = status;
@@ -213,8 +218,8 @@ export class OrdersService {
   }
 
   async findOne(id: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id },
+    const order = await this.prisma.order.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
       include: {
         user: {
           select: {
@@ -255,7 +260,7 @@ export class OrdersService {
   }
 
   async updateStatus(id: string, status: string) {
-    const order = await this.prisma.order.findUnique({ where: { id } });
+    const order = await this.prisma.order.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
 
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -296,13 +301,15 @@ export class OrdersService {
   }
 
   async getStats() {
+    const tenantId = this.tenantContext.requireId;
     const [statusCounts, revenueResult] = await Promise.all([
       this.prisma.order.groupBy({
         by: ['status'],
+        where: { tenantId },
         _count: { id: true },
       }),
       this.prisma.order.aggregate({
-        where: { status: { not: 'CANCELLED' } },
+        where: { tenantId, status: { not: 'CANCELLED' } },
         _sum: { total: true },
         _count: { id: true },
       }),

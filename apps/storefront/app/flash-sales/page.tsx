@@ -3,12 +3,21 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Zap, ShoppingCart, Star, Clock, Loader2 } from "lucide-react";
+
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
+
+function resolveImg(url?: string): string {
+  if (!url) return '';
+  if (url.startsWith('/uploads')) return `${API_ORIGIN}${url}`;
+  return url;
+}
 import Button from "@/components/ui/Button";
 import { formatPrice, formatCountdown } from "@/lib/utils";
 import { flashSalesApi } from "@/lib/api";
 
 interface FlashSaleProduct {
   id: string;
+  slug: string;
   name: string;
   originalPrice: number;
   salePrice: number;
@@ -84,27 +93,31 @@ export default function FlashSalesPage() {
         const data = await flashSalesApi.getActive();
         const sales = Array.isArray(data) ? data : [];
 
-        // Use the first sale's end time, or fallback
-        if (sales.length > 0 && sales[0].endTime) {
-          setSaleEndTime(new Date(sales[0].endTime).getTime());
-        } else if (sales.length > 0 && sales[0].end_time) {
-          setSaleEndTime(new Date(sales[0].end_time).getTime());
+        // Use the first sale's end date
+        if (sales.length > 0 && sales[0].endDate) {
+          setSaleEndTime(new Date(sales[0].endDate).getTime());
         }
 
         // Flatten products from all active sales
         const allProducts: FlashSaleProduct[] = sales.flatMap((sale: any) => {
-          const items = sale.products ?? sale.items ?? [];
-          return items.map((item: any) => ({
-            id: item.id ?? item.productId ?? item.product_id,
-            name: item.name ?? item.product?.name ?? "Unknown",
-            originalPrice: item.originalPrice ?? item.original_price ?? item.product?.price ?? 0,
-            salePrice: item.salePrice ?? item.sale_price ?? item.price ?? 0,
-            image: item.image ?? item.product?.image ?? "/images/placeholder.jpg",
-            rating: item.rating ?? item.product?.rating ?? 0,
-            reviewCount: item.reviewCount ?? item.review_count ?? item.product?.reviewCount ?? 0,
-            soldCount: item.soldCount ?? item.sold_count ?? 0,
-            totalStock: item.totalStock ?? item.total_stock ?? item.stock ?? 1,
-          }));
+          const items = sale.items ?? sale.products ?? [];
+          return items.map((item: any) => {
+            const product = item.product ?? {};
+            const imgRaw = product.images?.[0];
+            const imgUrl = resolveImg(typeof imgRaw === 'string' ? imgRaw : imgRaw?.url);
+            return {
+              id: product.id ?? item.productId,
+              name: product.name ?? "Unknown",
+              originalPrice: Number(product.basePrice ?? product.compareAtPrice ?? product.price ?? 0),
+              salePrice: Number(item.salePrice ?? 0),
+              image: imgUrl,
+              slug: product.slug ?? item.productId,
+              rating: product.avgRating ?? product.rating ?? 0,
+              reviewCount: product.reviewCount ?? 0,
+              soldCount: 0,
+              totalStock: product.stockQuantity ?? 1,
+            };
+          });
         });
 
         setProducts(allProducts);
@@ -175,11 +188,16 @@ export default function FlashSalesPage() {
               return (
                 <div key={product.id} className="group rounded-xl border border-border bg-card overflow-hidden">
                   <div className="relative">
-                    <Link href={`/products/${product.id}`}>
-                      <div
-                        className="aspect-[3/4] bg-muted"
-                        style={{ backgroundImage: `url(${product.image})`, backgroundSize: "cover", backgroundPosition: "center" }}
-                      />
+                    <Link href={`/products/${product.slug || product.id}`}>
+                      <div className="aspect-[3/4] bg-muted relative overflow-hidden">
+                        {product.image && (
+                          <img
+                            src={product.image}
+                            alt={product.name}
+                            className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                        )}
+                      </div>
                     </Link>
                     {discountPct > 0 && (
                       <span className="absolute top-2 left-2 bg-gold-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
@@ -188,7 +206,7 @@ export default function FlashSalesPage() {
                     )}
                   </div>
                   <div className="p-3 sm:p-4">
-                    <Link href={`/products/${product.id}`}>
+                    <Link href={`/products/${product.slug || product.id}`}>
                       <h3 className="text-sm font-medium text-foreground line-clamp-2 hover:text-gold-500 transition-colors">
                         {product.name}
                       </h3>

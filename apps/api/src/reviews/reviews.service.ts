@@ -5,24 +5,29 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreateReviewDto } from './dto/create-review.dto';
 import { UpdateReviewDto } from './dto/update-review.dto';
 import { QueryReviewsDto } from './dto/query-reviews.dto';
 
 @Injectable()
 export class ReviewsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async create(userId: string, productId: string, dto: CreateReviewDto) {
+    const tenantId = this.tenantContext.requireId;
     const product = await this.prisma.product.findUnique({
-      where: { id: productId },
+      where: { id: productId, tenantId },
     });
     if (!product) {
       throw new NotFoundException('Product not found');
     }
 
-    const existing = await this.prisma.review.findUnique({
-      where: { userId_productId: { userId, productId } },
+    const existing = await this.prisma.review.findFirst({
+      where: { userId, productId, tenantId },
     });
     if (existing) {
       throw new ConflictException(
@@ -40,6 +45,7 @@ export class ReviewsService {
 
     const review = await this.prisma.review.create({
       data: {
+        tenantId,
         userId,
         productId,
         rating: dto.rating,
@@ -64,7 +70,7 @@ export class ReviewsService {
 
   async findByProduct(productId: string, query: QueryReviewsDto) {
     const { sort, page = 1, limit = 10 } = query;
-    const where = { productId, isApproved: true };
+    const where = { productId, isApproved: true, tenantId: this.tenantContext.requireId };
 
     let orderBy: any = { createdAt: 'desc' };
     switch (sort) {
@@ -104,8 +110,8 @@ export class ReviewsService {
   }
 
   async findOne(id: string) {
-    const review = await this.prisma.review.findUnique({
-      where: { id },
+    const review = await this.prisma.review.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
       include: {
         user: {
           select: { firstName: true, lastName: true, avatarUrl: true },
@@ -120,7 +126,7 @@ export class ReviewsService {
   }
 
   async update(userId: string, id: string, dto: UpdateReviewDto) {
-    const review = await this.prisma.review.findUnique({ where: { id } });
+    const review = await this.prisma.review.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!review) {
       throw new NotFoundException('Review not found');
     }
@@ -148,7 +154,7 @@ export class ReviewsService {
   }
 
   async delete(userId: string, id: string) {
-    const review = await this.prisma.review.findUnique({ where: { id } });
+    const review = await this.prisma.review.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!review) {
       throw new NotFoundException('Review not found');
     }
@@ -162,7 +168,7 @@ export class ReviewsService {
   }
 
   async approve(id: string) {
-    const review = await this.prisma.review.findUnique({ where: { id } });
+    const review = await this.prisma.review.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!review) {
       throw new NotFoundException('Review not found');
     }
@@ -177,7 +183,7 @@ export class ReviewsService {
   }
 
   async reject(id: string) {
-    const review = await this.prisma.review.findUnique({ where: { id } });
+    const review = await this.prisma.review.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!review) {
       throw new NotFoundException('Review not found');
     }
@@ -188,8 +194,9 @@ export class ReviewsService {
   }
 
   async getStats(productId: string) {
+    const tenantId = this.tenantContext.requireId;
     const product = await this.prisma.product.findUnique({
-      where: { id: productId },
+      where: { id: productId, tenantId },
     });
     if (!product) {
       throw new NotFoundException('Product not found');
@@ -199,7 +206,7 @@ export class ReviewsService {
       [1, 2, 3, 4, 5].map(async (rating) => ({
         rating,
         count: await this.prisma.review.count({
-          where: { productId, rating, isApproved: true },
+          where: { productId, rating, isApproved: true, tenantId },
         }),
       })),
     );
@@ -214,7 +221,7 @@ export class ReviewsService {
 
   private async updateProductRatingStats(productId: string) {
     const stats = await this.prisma.review.aggregate({
-      where: { productId, isApproved: true },
+      where: { productId, isApproved: true, tenantId: this.tenantContext.requireId },
       _avg: { rating: true },
       _count: { rating: true },
     });

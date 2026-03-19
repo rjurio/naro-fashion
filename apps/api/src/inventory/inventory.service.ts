@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { UpdateInventorySettingsDto } from './dto/update-inventory-settings.dto';
 
@@ -11,12 +12,16 @@ function stockStatus(total: number, minimum: number): string {
 
 @Injectable()
 export class InventoryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async getInventoryList(params: { status?: string; search?: string }) {
     const { status, search } = params;
     const products = await this.prisma.product.findMany({
       where: {
+        tenantId: this.tenantContext.requireId,
         deletedAt: null,
         ...(search ? { name: { contains: search, mode: 'insensitive' } } : {}),
       },
@@ -49,7 +54,7 @@ export class InventoryService {
 
   async getValuation() {
     const products = await this.prisma.product.findMany({
-      where: { deletedAt: null },
+      where: { tenantId: this.tenantContext.requireId, deletedAt: null },
       select: {
         id: true, name: true, basePrice: true, purchasePrice: true,
         variants: { select: { stock: true } },
@@ -75,7 +80,7 @@ export class InventoryService {
 
   async getTransactions(productId: string, params: { page?: number; limit?: number; type?: string }) {
     const { page = 1, limit = 50, type } = params;
-    const where: any = { productId, ...(type ? { type } : {}) };
+    const where: any = { tenantId: this.tenantContext.requireId, productId, ...(type ? { type } : {}) };
     const [data, total] = await Promise.all([
       this.prisma.inventoryTransaction.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * limit, take: limit }),
       this.prisma.inventoryTransaction.count({ where }),
@@ -84,7 +89,7 @@ export class InventoryService {
   }
 
   async updateSettings(productId: string, dto: UpdateInventorySettingsDto) {
-    const product = await this.prisma.product.findUnique({ where: { id: productId } });
+    const product = await this.prisma.product.findFirst({ where: { id: productId, tenantId: this.tenantContext.requireId } });
     if (!product) throw new NotFoundException('Product not found');
     return this.prisma.product.update({
       where: { id: productId },
@@ -94,6 +99,7 @@ export class InventoryService {
   }
 
   async adjustStock(dto: AdjustStockDto, performedBy?: string) {
+    const tenantId = this.tenantContext.requireId;
     const OUTBOUND = ['DAMAGE', 'SALE', 'RENTAL_OUT'];
     const sign = OUTBOUND.includes(dto.type) ? -1 : 1;
     const quantityChange = sign * dto.quantity;
@@ -101,19 +107,19 @@ export class InventoryService {
     // Get current stock
     let quantityBefore = 0;
     if (dto.variantId) {
-      const variant = await this.prisma.productVariant.findUnique({ where: { id: dto.variantId } });
+      const variant = await this.prisma.productVariant.findFirst({ where: { id: dto.variantId, tenantId } });
       if (!variant) throw new NotFoundException('Variant not found');
       quantityBefore = variant.stock;
     } else {
       const agg = await this.prisma.productVariant.aggregate({
-        where: { productId: dto.productId },
+        where: { productId: dto.productId, tenantId },
         _sum: { stock: true },
       });
       quantityBefore = agg._sum.stock ?? 0;
     }
 
     const quantityAfter = quantityBefore + quantityChange;
-    const product = await this.prisma.product.findUnique({ where: { id: dto.productId } });
+    const product = await this.prisma.product.findFirst({ where: { id: dto.productId, tenantId } });
     if (!product) throw new NotFoundException('Product not found');
     const unitCost = Number(product.purchasePrice ?? 0);
 
@@ -134,6 +140,7 @@ export class InventoryService {
       // Create transaction record
       return tx.inventoryTransaction.create({
         data: {
+          tenantId,
           productId: dto.productId,
           variantId: dto.variantId,
           type: dto.type,

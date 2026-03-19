@@ -4,6 +4,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreateZoneDto } from './dto/create-zone.dto';
 import { UpdateZoneDto } from './dto/update-zone.dto';
 import { CreateShipmentDto } from './dto/create-shipment.dto';
@@ -11,18 +12,22 @@ import { UpdateShipmentDto } from './dto/update-shipment.dto';
 
 @Injectable()
 export class ShippingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async getZones() {
     return this.prisma.shippingZone.findMany({
+      where: { tenantId: this.tenantContext.requireId },
       include: { rates: true },
       orderBy: { name: 'asc' },
     });
   }
 
   async getZone(id: string) {
-    const zone = await this.prisma.shippingZone.findUnique({
-      where: { id },
+    const zone = await this.prisma.shippingZone.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
       include: { rates: true },
     });
     if (!zone) {
@@ -34,6 +39,7 @@ export class ShippingService {
   async createZone(dto: CreateZoneDto) {
     return this.prisma.shippingZone.create({
       data: {
+        tenantId: this.tenantContext.requireId,
         name: dto.name,
         description: dto.description,
         regions: dto.regions,
@@ -58,8 +64,8 @@ export class ShippingService {
   }
 
   async updateZone(id: string, dto: UpdateZoneDto) {
-    const zone = await this.prisma.shippingZone.findUnique({
-      where: { id },
+    const zone = await this.prisma.shippingZone.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
     });
     if (!zone) {
       throw new NotFoundException('Shipping zone not found');
@@ -98,8 +104,8 @@ export class ShippingService {
   }
 
   async deleteZone(id: string) {
-    const zone = await this.prisma.shippingZone.findUnique({
-      where: { id },
+    const zone = await this.prisma.shippingZone.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
     });
     if (!zone) {
       throw new NotFoundException('Shipping zone not found');
@@ -110,8 +116,8 @@ export class ShippingService {
   }
 
   async calculateRate(zoneId: string, orderAmount: number) {
-    const zone = await this.prisma.shippingZone.findUnique({
-      where: { id: zoneId },
+    const zone = await this.prisma.shippingZone.findFirst({
+      where: { id: zoneId, tenantId: this.tenantContext.requireId },
       include: { rates: { where: { isActive: true } } },
     });
     if (!zone) {
@@ -149,15 +155,16 @@ export class ShippingService {
   }
 
   async createShipment(dto: CreateShipmentDto) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: dto.orderId },
+    const tenantId = this.tenantContext.requireId;
+    const order = await this.prisma.order.findFirst({
+      where: { id: dto.orderId, tenantId },
     });
     if (!order) {
       throw new NotFoundException('Order not found');
     }
 
-    const existingShipment = await this.prisma.shipment.findUnique({
-      where: { orderId: dto.orderId },
+    const existingShipment = await this.prisma.shipment.findFirst({
+      where: { orderId: dto.orderId, tenantId },
     });
     if (existingShipment) {
       throw new ConflictException('Shipment already exists for this order');
@@ -165,6 +172,7 @@ export class ShippingService {
 
     return this.prisma.shipment.create({
       data: {
+        tenantId,
         orderId: dto.orderId,
         carrier: dto.carrier,
         trackingCode: dto.trackingCode,
@@ -184,8 +192,8 @@ export class ShippingService {
   }
 
   async updateShipment(id: string, dto: UpdateShipmentDto) {
-    const shipment = await this.prisma.shipment.findUnique({
-      where: { id },
+    const shipment = await this.prisma.shipment.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
     });
     if (!shipment) {
       throw new NotFoundException('Shipment not found');
@@ -222,8 +230,8 @@ export class ShippingService {
   }
 
   async getShipment(orderId: string) {
-    const shipment = await this.prisma.shipment.findUnique({
-      where: { orderId },
+    const shipment = await this.prisma.shipment.findFirst({
+      where: { orderId, tenantId: this.tenantContext.requireId },
       include: {
         order: {
           select: { id: true, orderNumber: true, status: true },

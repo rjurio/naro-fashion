@@ -6,6 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreatePaymentDto, UpdatePaymentDto } from './dto/create-payment.dto';
 import { InitiatePaymentDto } from './dto/initiate-payment.dto';
 import { SelcomProvider } from './selcom.provider';
@@ -17,6 +18,7 @@ export class PaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly selcom: SelcomProvider,
+    private readonly tenantContext: TenantContext,
   ) {}
 
   // ─── Payment record creation (existing) ───────────────────────────────
@@ -28,10 +30,12 @@ export class PaymentsService {
       );
     }
 
+    const tenantId = this.tenantContext.requireId;
+
     // Verify order/rental exists
     if (dto.orderId) {
-      const order = await this.prisma.order.findUnique({
-        where: { id: dto.orderId },
+      const order = await this.prisma.order.findFirst({
+        where: { id: dto.orderId, tenantId },
       });
       if (!order) {
         throw new NotFoundException('Order not found');
@@ -39,8 +43,8 @@ export class PaymentsService {
     }
 
     if (dto.rentalOrderId) {
-      const rental = await this.prisma.rentalOrder.findUnique({
-        where: { id: dto.rentalOrderId },
+      const rental = await this.prisma.rentalOrder.findFirst({
+        where: { id: dto.rentalOrderId, tenantId },
       });
       if (!rental) {
         throw new NotFoundException('Rental order not found');
@@ -53,6 +57,7 @@ export class PaymentsService {
 
     return this.prisma.payment.create({
       data: {
+        tenantId,
         orderId: dto.orderId,
         rentalOrderId: dto.rentalOrderId,
         amount: dto.amount,
@@ -93,13 +98,15 @@ export class PaymentsService {
       );
     }
 
+    const tenantId = this.tenantContext.requireId;
+
     // Verify order/rental exists and get details
     let orderTotal = 0;
     let orderNumber = '';
 
     if (dto.orderId) {
-      const order = await this.prisma.order.findUnique({
-        where: { id: dto.orderId },
+      const order = await this.prisma.order.findFirst({
+        where: { id: dto.orderId, tenantId },
       });
       if (!order) {
         throw new NotFoundException('Order not found');
@@ -109,8 +116,8 @@ export class PaymentsService {
     }
 
     if (dto.rentalOrderId) {
-      const rental = await this.prisma.rentalOrder.findUnique({
-        where: { id: dto.rentalOrderId },
+      const rental = await this.prisma.rentalOrder.findFirst({
+        where: { id: dto.rentalOrderId, tenantId },
       });
       if (!rental) {
         throw new NotFoundException('Rental order not found');
@@ -132,6 +139,7 @@ export class PaymentsService {
     // Create payment record
     const payment = await this.prisma.payment.create({
       data: {
+        tenantId,
         orderId: dto.orderId,
         rentalOrderId: dto.rentalOrderId,
         amount: dto.amount,
@@ -206,8 +214,10 @@ export class PaymentsService {
    * for a real-time status update and syncs it to the database.
    */
   async pollPaymentStatus(transactionRef: string) {
-    const payment = await this.prisma.payment.findUnique({
-      where: { transactionRef },
+    const tenantId = this.tenantContext.requireId;
+
+    const payment = await this.prisma.payment.findFirst({
+      where: { transactionRef, tenantId },
       include: {
         order: { select: { id: true, orderNumber: true } },
         rentalOrder: { select: { id: true, rentalNumber: true } },
@@ -326,8 +336,10 @@ export class PaymentsService {
       );
     }
 
-    const payment = await this.prisma.payment.findUnique({
-      where: { transactionRef: txnRef },
+    const tenantId = this.tenantContext.requireId;
+
+    const payment = await this.prisma.payment.findFirst({
+      where: { transactionRef: txnRef, tenantId },
     });
 
     if (!payment) {
@@ -373,36 +385,42 @@ export class PaymentsService {
   // ─── Existing query methods ───────────────────────────────────────────
 
   async findByOrder(orderId: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
+    const tenantId = this.tenantContext.requireId;
+
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, tenantId },
     });
     if (!order) {
       throw new NotFoundException('Order not found');
     }
 
     return this.prisma.payment.findMany({
-      where: { orderId },
+      where: { orderId, tenantId },
       orderBy: { createdAt: 'desc' },
     });
   }
 
   async findByRental(rentalOrderId: string) {
-    const rental = await this.prisma.rentalOrder.findUnique({
-      where: { id: rentalOrderId },
+    const tenantId = this.tenantContext.requireId;
+
+    const rental = await this.prisma.rentalOrder.findFirst({
+      where: { id: rentalOrderId, tenantId },
     });
     if (!rental) {
       throw new NotFoundException('Rental order not found');
     }
 
     return this.prisma.payment.findMany({
-      where: { rentalOrderId },
+      where: { rentalOrderId, tenantId },
       orderBy: { createdAt: 'desc' },
     });
   }
 
   async updateStatus(id: string, dto: UpdatePaymentDto) {
-    const payment = await this.prisma.payment.findUnique({
-      where: { id },
+    const tenantId = this.tenantContext.requireId;
+
+    const payment = await this.prisma.payment.findFirst({
+      where: { id, tenantId },
     });
 
     if (!payment) {
@@ -433,8 +451,10 @@ export class PaymentsService {
   }
 
   async getPaymentSummary(orderId: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
+    const tenantId = this.tenantContext.requireId;
+
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, tenantId },
     });
 
     if (!order) {
@@ -442,7 +462,7 @@ export class PaymentsService {
     }
 
     const payments = await this.prisma.payment.findMany({
-      where: { orderId, status: 'COMPLETED' },
+      where: { orderId, tenantId, status: 'COMPLETED' },
     });
 
     const totalPaid = payments.reduce(
@@ -487,13 +507,15 @@ export class PaymentsService {
   }
 
   private async updateOrderPaymentStatus(orderId: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
+    const tenantId = this.tenantContext.requireId;
+
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, tenantId },
     });
     if (!order) return;
 
     const completedPayments = await this.prisma.payment.findMany({
-      where: { orderId, status: 'COMPLETED' },
+      where: { orderId, tenantId, status: 'COMPLETED' },
     });
 
     const totalPaid = completedPayments.reduce(
@@ -523,13 +545,15 @@ export class PaymentsService {
    * When the down payment is received, move from pending statuses to CONFIRMED.
    */
   private async updateRentalPaymentStatus(rentalOrderId: string) {
-    const rental = await this.prisma.rentalOrder.findUnique({
-      where: { id: rentalOrderId },
+    const tenantId = this.tenantContext.requireId;
+
+    const rental = await this.prisma.rentalOrder.findFirst({
+      where: { id: rentalOrderId, tenantId },
     });
     if (!rental) return;
 
     const completedPayments = await this.prisma.payment.findMany({
-      where: { rentalOrderId, status: 'COMPLETED' },
+      where: { rentalOrderId, tenantId, status: 'COMPLETED' },
     });
 
     const totalPaid = completedPayments.reduce(

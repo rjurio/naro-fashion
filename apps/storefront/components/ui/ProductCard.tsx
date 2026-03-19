@@ -13,6 +13,7 @@ interface ProductCardProps {
   id: string;
   name: string;
   slug?: string;
+  href?: string;
   price: number;
   originalPrice?: number;
   image?: string;
@@ -30,6 +31,7 @@ export default function ProductCard({
   id,
   name,
   slug,
+  href,
   price,
   originalPrice,
   image = "/uploads/products/placeholder.jpg",
@@ -52,7 +54,7 @@ export default function ProductCard({
     ? Math.round(((Number(originalPrice) - Number(price)) / Number(originalPrice)) * 100)
     : 0;
 
-  const productHref = slug ? `/products/${slug}` : `/products/${id}`;
+  const productHref = href ?? (slug ? `/products/${slug}` : `/products/${id}`);
 
   const handleWishlistToggle = async (e: React.MouseEvent) => {
     e.preventDefault();

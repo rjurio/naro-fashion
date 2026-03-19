@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import {
   CreatePosSaleDto,
   OpenSessionDto,
@@ -18,16 +19,21 @@ import {
 
 @Injectable()
 export class PosService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   // ============================================================
   // SESSION MANAGEMENT
   // ============================================================
 
   async openSession(adminUserId: string, dto: OpenSessionDto) {
+    const tenantId = this.tenantContext.requireId;
+
     // Check for existing open session
     const existing = await this.prisma.posSession.findFirst({
-      where: { adminUserId, status: 'OPEN' },
+      where: { adminUserId, status: 'OPEN', tenantId },
     });
     if (existing) {
       throw new BadRequestException(
@@ -40,13 +46,15 @@ export class PosService {
         adminUserId,
         openingCash: dto.openingCash,
         notes: dto.notes as any,
+        tenantId,
       },
     });
   }
 
   async closeSession(adminUserId: string, dto: CloseSessionDto) {
+    const tenantId = this.tenantContext.requireId;
     const session = await this.prisma.posSession.findFirst({
-      where: { adminUserId, status: 'OPEN' },
+      where: { adminUserId, status: 'OPEN', tenantId },
     });
     if (!session) {
       throw new NotFoundException('No open session found.');
@@ -81,29 +89,32 @@ export class PosService {
 
   async getCurrentSession(adminUserId: string) {
     return this.prisma.posSession.findFirst({
-      where: { adminUserId, status: 'OPEN' },
+      where: { adminUserId, status: 'OPEN', tenantId: this.tenantContext.requireId },
     });
   }
 
   async getSessions(page = 1, limit = 20) {
     const skip = (page - 1) * limit;
+    const tenantId = this.tenantContext.requireId;
     const [data, total] = await Promise.all([
       this.prisma.posSession.findMany({
+        where: { tenantId },
         orderBy: { openedAt: 'desc' },
         skip,
         take: limit,
       }),
-      this.prisma.posSession.count(),
+      this.prisma.posSession.count({ where: { tenantId } }),
     ]);
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
   async getSessionSummary(id: string) {
-    const session = await this.prisma.posSession.findUnique({ where: { id } });
+    const tenantId = this.tenantContext.requireId;
+    const session = await this.prisma.posSession.findUnique({ where: { id, tenantId } });
     if (!session) throw new NotFoundException('Session not found.');
 
     const orders = await this.prisma.order.findMany({
-      where: { posSessionId: id, channel: 'POS' },
+      where: { posSessionId: id, channel: 'POS', tenantId },
       include: { payments: true, items: true },
     });
 
@@ -145,6 +156,7 @@ export class PosService {
 
     return this.prisma.product.findMany({
       where: {
+        tenantId: this.tenantContext.requireId,
         isActive: true,
         deletedAt: null,
         OR: [
@@ -189,7 +201,7 @@ export class PosService {
   }
 
   async lookupBarcode(barcode: string) {
-    const variant = await this.prisma.productVariant.findUnique({
+    const variant = await this.prisma.productVariant.findFirst({
       where: { barcode },
       include: {
         product: {
@@ -220,6 +232,7 @@ export class PosService {
 
     return this.prisma.user.findMany({
       where: {
+        tenantId: this.tenantContext.requireId,
         isActive: true,
         OR: [
           { firstName: { contains: query, mode: 'insensitive' } },
@@ -240,9 +253,11 @@ export class PosService {
   }
 
   async quickCreateCustomer(data: { firstName: string; phone: string; lastName?: string; email?: string }) {
+    const tenantId = this.tenantContext.requireId;
+
     // Check if phone already exists
     if (data.phone) {
-      const existing = await this.prisma.user.findUnique({ where: { phone: data.phone } });
+      const existing = await this.prisma.user.findFirst({ where: { phone: data.phone, tenantId } });
       if (existing) {
         throw new BadRequestException('A customer with this phone number already exists.');
       }
@@ -255,6 +270,7 @@ export class PosService {
         phone: data.phone,
         email: data.email,
         isVerified: false,
+        tenantId,
       },
       select: {
         id: true,
@@ -271,9 +287,11 @@ export class PosService {
   // ============================================================
 
   async createSale(dto: CreatePosSaleDto, cashierId: string) {
+    const tenantId = this.tenantContext.requireId;
+
     // 1. Validate open session
     const session = await this.prisma.posSession.findFirst({
-      where: { adminUserId: cashierId, status: 'OPEN' },
+      where: { adminUserId: cashierId, status: 'OPEN', tenantId },
     });
     if (!session) {
       throw new BadRequestException('No open session. Please open a shift first.');
@@ -339,6 +357,7 @@ export class PosService {
       // Create order
       const newOrder = await tx.order.create({
         data: {
+          tenantId,
           orderNumber,
           userId: dto.customerId ?? null,
           status: 'DELIVERED',
@@ -377,6 +396,7 @@ export class PosService {
       for (const payment of dto.payments) {
         await tx.payment.create({
           data: {
+            tenantId,
             orderId: newOrder.id,
             amount: payment.amount,
             method: payment.method,
@@ -398,6 +418,7 @@ export class PosService {
 
         await tx.inventoryTransaction.create({
           data: {
+            tenantId,
             productId: item.productId,
             variantId: item.variantId,
             type: 'SALE',
@@ -433,7 +454,7 @@ export class PosService {
     const limit = query.limit ?? 20;
     const skip = (page - 1) * limit;
 
-    const where: any = { channel: 'POS' };
+    const where: any = { channel: 'POS', tenantId: this.tenantContext.requireId };
 
     if (query.search) {
       where.OR = [
@@ -476,7 +497,7 @@ export class PosService {
 
   async getSale(id: string) {
     const order = await this.prisma.order.findUnique({
-      where: { id },
+      where: { id, tenantId: this.tenantContext.requireId },
       include: {
         items: {
           include: {
@@ -534,6 +555,7 @@ export class PosService {
   async holdSale(adminUserId: string, dto: HoldSaleDto) {
     return this.prisma.heldSale.create({
       data: {
+        tenantId: this.tenantContext.requireId,
         adminUserId,
         customerId: dto.customerId,
         customerName: dto.customerName,
@@ -548,14 +570,14 @@ export class PosService {
 
   async getHeldSales(adminUserId: string) {
     return this.prisma.heldSale.findMany({
-      where: { adminUserId },
+      where: { adminUserId, tenantId: this.tenantContext.requireId },
       orderBy: { createdAt: 'desc' },
     });
   }
 
   async resumeHeldSale(id: string, adminUserId: string) {
     const held = await this.prisma.heldSale.findFirst({
-      where: { id, adminUserId },
+      where: { id, adminUserId, tenantId: this.tenantContext.requireId },
     });
     if (!held) throw new NotFoundException('Held sale not found.');
 
@@ -565,7 +587,7 @@ export class PosService {
 
   async discardHeldSale(id: string, adminUserId: string) {
     const held = await this.prisma.heldSale.findFirst({
-      where: { id, adminUserId },
+      where: { id, adminUserId, tenantId: this.tenantContext.requireId },
     });
     if (!held) throw new NotFoundException('Held sale not found.');
     return this.prisma.heldSale.delete({ where: { id } });
@@ -576,8 +598,9 @@ export class PosService {
   // ============================================================
 
   async refundSale(orderId: string, dto: PosRefundDto, cashierId: string) {
+    const tenantId = this.tenantContext.requireId;
     const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
+      where: { id: orderId, tenantId },
       include: { items: { include: { variant: true } }, payments: true },
     });
     if (!order) throw new NotFoundException('Sale not found.');
@@ -605,6 +628,7 @@ export class PosService {
           });
           await tx.inventoryTransaction.create({
             data: {
+              tenantId,
               productId: item.productId,
               variantId: item.variantId,
               type: 'ADJUSTMENT',
@@ -640,6 +664,7 @@ export class PosService {
           });
           await tx.inventoryTransaction.create({
             data: {
+              tenantId,
               productId: orderItem.productId,
               variantId: orderItem.variantId,
               type: 'ADJUSTMENT',
@@ -657,6 +682,7 @@ export class PosService {
       // Create refund payment record
       await tx.payment.create({
         data: {
+          tenantId,
           orderId: order.id,
           amount: refundAmount,
           method: dto.refundMethod,
@@ -682,8 +708,9 @@ export class PosService {
   // ============================================================
 
   async createLayaway(dto: CreateLayawayDto, cashierId: string) {
+    const tenantId = this.tenantContext.requireId;
     const session = await this.prisma.posSession.findFirst({
-      where: { adminUserId: cashierId, status: 'OPEN' },
+      where: { adminUserId: cashierId, status: 'OPEN', tenantId },
     });
 
     // Calculate totals
@@ -711,6 +738,7 @@ export class PosService {
     return this.prisma.$transaction(async (tx) => {
       const layaway = await tx.layaway.create({
         data: {
+          tenantId,
           layawayNumber,
           customerId: dto.customerId,
           cashierId,
@@ -732,6 +760,7 @@ export class PosService {
       if (dto.depositAmount > 0) {
         await tx.payment.create({
           data: {
+            tenantId,
             layawayId: layaway.id,
             amount: dto.depositAmount,
             method: dto.depositMethod,
@@ -747,7 +776,7 @@ export class PosService {
 
   async getLayaways(status?: string, page = 1, limit = 20) {
     const skip = (page - 1) * limit;
-    const where: any = {};
+    const where: any = { tenantId: this.tenantContext.requireId };
     if (status) where.status = status;
 
     const [data, total] = await Promise.all([
@@ -771,7 +800,7 @@ export class PosService {
 
   async getLayaway(id: string) {
     const layaway = await this.prisma.layaway.findUnique({
-      where: { id },
+      where: { id, tenantId: this.tenantContext.requireId },
       include: {
         customer: {
           select: { id: true, firstName: true, lastName: true, phone: true, email: true },
@@ -784,7 +813,8 @@ export class PosService {
   }
 
   async layawayPayment(id: string, dto: LayawayPaymentDto, cashierId: string) {
-    const layaway = await this.prisma.layaway.findUnique({ where: { id } });
+    const tenantId = this.tenantContext.requireId;
+    const layaway = await this.prisma.layaway.findUnique({ where: { id, tenantId } });
     if (!layaway) throw new NotFoundException('Layaway not found.');
     if (layaway.status !== 'ACTIVE') {
       throw new BadRequestException('This layaway is no longer active.');
@@ -796,6 +826,7 @@ export class PosService {
     return this.prisma.$transaction(async (tx) => {
       await tx.payment.create({
         data: {
+          tenantId,
           layawayId: id,
           amount: dto.amount,
           method: dto.method,
@@ -819,8 +850,9 @@ export class PosService {
   }
 
   async completeLayaway(id: string, cashierId: string) {
+    const tenantId = this.tenantContext.requireId;
     const layaway = await this.prisma.layaway.findUnique({
-      where: { id },
+      where: { id, tenantId },
       include: { payments: true },
     });
     if (!layaway) throw new NotFoundException('Layaway not found.');
@@ -834,7 +866,7 @@ export class PosService {
     }
 
     const session = await this.prisma.posSession.findFirst({
-      where: { adminUserId: cashierId, status: 'OPEN' },
+      where: { adminUserId: cashierId, status: 'OPEN', tenantId },
     });
 
     const items = layaway.items as any[];
@@ -857,6 +889,7 @@ export class PosService {
       // Create order from layaway
       const order = await tx.order.create({
         data: {
+          tenantId,
           orderNumber,
           userId: layaway.customerId,
           status: 'DELIVERED',
@@ -893,6 +926,7 @@ export class PosService {
         });
         await tx.inventoryTransaction.create({
           data: {
+            tenantId,
             productId: item.productId,
             variantId: item.variantId,
             type: 'SALE',
@@ -928,7 +962,7 @@ export class PosService {
   }
 
   async cancelLayaway(id: string) {
-    const layaway = await this.prisma.layaway.findUnique({ where: { id } });
+    const layaway = await this.prisma.layaway.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!layaway) throw new NotFoundException('Layaway not found.');
     if (layaway.status !== 'ACTIVE') {
       throw new BadRequestException('This layaway is no longer active.');
@@ -945,14 +979,15 @@ export class PosService {
   // ============================================================
 
   async createExchange(dto: CreateExchangeDto, cashierId: string) {
+    const tenantId = this.tenantContext.requireId;
     const originalOrder = await this.prisma.order.findUnique({
-      where: { id: dto.originalOrderId },
+      where: { id: dto.originalOrderId, tenantId },
       include: { items: { include: { variant: true, product: true } } },
     });
     if (!originalOrder) throw new NotFoundException('Original order not found.');
 
     const session = await this.prisma.posSession.findFirst({
-      where: { adminUserId: cashierId, status: 'OPEN' },
+      where: { adminUserId: cashierId, status: 'OPEN', tenantId },
     });
 
     // Calculate return total
@@ -1008,6 +1043,7 @@ export class PosService {
         });
         await tx.inventoryTransaction.create({
           data: {
+            tenantId,
             productId: ri.productId,
             variantId: ri.variantId,
             type: 'ADJUSTMENT',
@@ -1027,6 +1063,7 @@ export class PosService {
         const orderNumber = `POS-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
         const newOrder = await tx.order.create({
           data: {
+            tenantId,
             orderNumber,
             userId: originalOrder.userId,
             status: 'DELIVERED',
@@ -1062,6 +1099,7 @@ export class PosService {
           });
           await tx.inventoryTransaction.create({
             data: {
+              tenantId,
               productId: ni.productId,
               variantId: ni.variantId,
               type: 'SALE',
@@ -1079,6 +1117,7 @@ export class PosService {
       // Create exchange record
       const exchange = await tx.posExchange.create({
         data: {
+          tenantId,
           exchangeNumber,
           originalOrderId: dto.originalOrderId,
           newOrderId,
@@ -1103,19 +1142,21 @@ export class PosService {
 
   async getExchanges(page = 1, limit = 20) {
     const skip = (page - 1) * limit;
+    const tenantId = this.tenantContext.requireId;
     const [data, total] = await Promise.all([
       this.prisma.posExchange.findMany({
+        where: { tenantId },
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
       }),
-      this.prisma.posExchange.count(),
+      this.prisma.posExchange.count({ where: { tenantId } }),
     ]);
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
   async getExchange(id: string) {
-    const exchange = await this.prisma.posExchange.findUnique({ where: { id } });
+    const exchange = await this.prisma.posExchange.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!exchange) throw new NotFoundException('Exchange not found.');
     return exchange;
   }
@@ -1133,6 +1174,7 @@ export class PosService {
 
     const orders = await this.prisma.order.findMany({
       where: {
+        tenantId: this.tenantContext.requireId,
         channel: 'POS',
         createdAt: { gte: startOfDay, lte: endOfDay },
       },

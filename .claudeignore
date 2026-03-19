@@ -11,6 +11,8 @@ coverage/
 .nyc_output/
 *.log
 *.tsbuildinfo
+
+# Binary/media files
 *.jpg
 *.jpeg
 *.png
@@ -24,3 +26,27 @@ coverage/
 *.mp4
 *.webm
 *.pdf
+*.webp
+*.glb
+*.gltf
+
+# Uploads directory (user-uploaded content)
+apps/api/uploads/
+
+# Build artifacts
+apps/api/dist/
+
+# Generated files
+packages/database/prisma/migrations/
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docs (optional, can be large)
+docs/

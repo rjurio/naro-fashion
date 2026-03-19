@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { CreateExpenseCategoryDto } from './dto/create-expense-category.dto';
 import { UpdateExpenseCategoryDto } from './dto/update-expense-category.dto';
 
@@ -21,21 +22,28 @@ const DEFAULT_CATEGORIES = [
 
 @Injectable()
 export class ExpenseCategoriesService implements OnModuleInit {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   async onModuleInit() {
+    // Default categories are seeded without tenantId (global defaults).
+    // Tenant-specific seeding should be handled during tenant provisioning.
     for (const cat of DEFAULT_CATEGORIES) {
-      await this.prisma.expenseCategory.upsert({
-        where: { name: cat.name },
-        create: cat,
-        update: {},
+      const existing = await this.prisma.expenseCategory.findFirst({
+        where: { name: cat.name, tenantId: null },
       });
+      if (!existing) {
+        await this.prisma.expenseCategory.create({ data: cat });
+      }
     }
   }
 
   async findAll(params: { isActive?: boolean; includeDeleted?: boolean }) {
     return this.prisma.expenseCategory.findMany({
       where: {
+        tenantId: this.tenantContext.requireId,
         ...(params.includeDeleted ? {} : { deletedAt: null }),
         ...(params.isActive !== undefined ? { isActive: params.isActive } : {}),
       },
@@ -45,14 +53,14 @@ export class ExpenseCategoriesService implements OnModuleInit {
   }
 
   async findOne(id: string) {
-    const cat = await this.prisma.expenseCategory.findUnique({ where: { id } });
+    const cat = await this.prisma.expenseCategory.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!cat) throw new NotFoundException('Expense category not found');
     return cat;
   }
 
   async create(dto: CreateExpenseCategoryDto) {
     try {
-      return await this.prisma.expenseCategory.create({ data: dto });
+      return await this.prisma.expenseCategory.create({ data: { ...dto, tenantId: this.tenantContext.requireId } });
     } catch (e: any) {
       if (e.code === 'P2002') throw new ConflictException('A category with this name already exists');
       throw e;
@@ -80,6 +88,7 @@ export class ExpenseCategoriesService implements OnModuleInit {
   }
 
   async restore(id: string) {
+    await this.findOne(id);
     return this.prisma.expenseCategory.update({ where: { id }, data: { deletedAt: null, isActive: true } });
   }
 }

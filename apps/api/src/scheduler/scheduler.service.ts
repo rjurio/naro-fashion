@@ -336,6 +336,110 @@ export class SchedulerService {
     }
   }
 
+  // ============================================================
+  // SUBSCRIPTION LIFECYCLE
+  // ============================================================
+
+  /**
+   * Daily at 6:00 AM — Check expiring subscriptions and send reminders.
+   * Also transitions EXPIRED → GRACE → SUSPENDED.
+   */
+  @Cron('0 6 * * *', { name: 'subscription-lifecycle' })
+  async handleSubscriptionLifecycle() {
+    this.logger.log('Running subscription lifecycle check...');
+
+    try {
+      const now = new Date();
+      const sevenDays = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const threeDays = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+      // 1. Send reminders for subscriptions expiring within 7 days
+      const expiringSoon = await this.prisma.tenantSubscription.findMany({
+        where: {
+          status: 'ACTIVE',
+          endDate: { lte: sevenDays, gt: now },
+        },
+        include: {
+          tenant: {
+            include: {
+              adminUsers: { where: { role: 'SUPER_ADMIN' }, take: 1, select: { email: true } },
+            },
+          },
+          plan: { select: { name: true } },
+        },
+      });
+
+      for (const sub of expiringSoon) {
+        const daysLeft = Math.ceil((sub.endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        const adminEmail = sub.tenant.adminUsers[0]?.email;
+        if (adminEmail && (daysLeft === 7 || daysLeft === 3 || daysLeft === 1)) {
+          this.logger.warn(
+            `[SUBSCRIPTION] ${sub.tenant.name} (${sub.plan.name}) expires in ${daysLeft} days. Admin: ${adminEmail}`,
+          );
+          // TODO: Send email reminder via notifications service
+        }
+      }
+
+      // 2. Transition ACTIVE → GRACE for expired subscriptions
+      const expiredActive = await this.prisma.tenantSubscription.findMany({
+        where: { status: 'ACTIVE', endDate: { lt: now } },
+        include: { tenant: true },
+      });
+
+      for (const sub of expiredActive) {
+        const graceEndDate = new Date(sub.endDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+        await this.prisma.tenantSubscription.update({
+          where: { id: sub.id },
+          data: { status: 'GRACE', graceEndDate },
+        });
+        this.logger.warn(`[SUBSCRIPTION] ${sub.tenant.name} entered grace period until ${graceEndDate.toISOString()}`);
+      }
+
+      // 3. Transition GRACE → EXPIRED and suspend tenant
+      const expiredGrace = await this.prisma.tenantSubscription.findMany({
+        where: {
+          status: 'GRACE',
+          graceEndDate: { lt: now },
+        },
+        include: { tenant: true },
+      });
+
+      for (const sub of expiredGrace) {
+        await this.prisma.tenantSubscription.update({
+          where: { id: sub.id },
+          data: { status: 'EXPIRED' },
+        });
+        await this.prisma.tenant.update({
+          where: { id: sub.tenantId },
+          data: { status: 'SUSPENDED' },
+        });
+        this.logger.warn(`[SUBSCRIPTION] ${sub.tenant.name} SUSPENDED — grace period ended`);
+      }
+
+      // 4. Handle trial expirations
+      const expiredTrials = await this.prisma.tenant.findMany({
+        where: {
+          status: 'TRIAL',
+          trialEndsAt: { lt: now },
+        },
+      });
+
+      for (const tenant of expiredTrials) {
+        await this.prisma.tenant.update({
+          where: { id: tenant.id },
+          data: { status: 'SUSPENDED' },
+        });
+        this.logger.warn(`[TRIAL] ${tenant.name} trial expired — SUSPENDED`);
+      }
+
+      this.logger.log(
+        `Subscription lifecycle: ${expiringSoon.length} expiring soon, ${expiredActive.length} → grace, ${expiredGrace.length} → suspended, ${expiredTrials.length} trials expired`,
+      );
+    } catch (error) {
+      this.logger.error('Error in subscription lifecycle cron:', error);
+    }
+  }
+
   // --- Instagram sync: every 6 hours ---
   @Cron('0 */6 * * *', { name: 'instagram-sync' })
   async handleInstagramSync() {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useToast } from '@/contexts/ToastContext';
 import dynamic from 'next/dynamic';
 import {
   DollarSign,
@@ -107,6 +108,7 @@ const orderColumns: Column<RecentOrder>[] = [
 ];
 
 export default function DashboardPage() {
+  const toast = useToast();
   const { settings } = useSiteSettings();
   const [loading, setLoading] = useState(true);
   const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([]);
@@ -208,7 +210,7 @@ export default function DashboardPage() {
                 a.click();
                 URL.revokeObjectURL(url);
               } catch {
-                alert('Failed to generate report. Please try again.');
+                toast.error('Failed to generate report. Please try again.');
               }
             }}
           >

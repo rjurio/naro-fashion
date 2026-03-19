@@ -1,12 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContext } from '../tenant/tenant.context';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
 import { MergeCartItemDto } from './dto/merge-cart.dto';
 
 @Injectable()
 export class CartService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContext,
+  ) {}
 
   private readonly cartItemInclude = {
     product: {
@@ -42,12 +46,10 @@ export class CartService {
   }
 
   async addItem(userId: string, dto: AddCartItemDto) {
-    const existing = await this.prisma.cartItem.findUnique({
+    const existing = await this.prisma.cartItem.findFirst({
       where: {
-        userId_variantId: {
-          userId,
-          variantId: dto.variantId,
-        },
+        userId,
+        variantId: dto.variantId,
       },
     });
 
@@ -119,12 +121,10 @@ export class CartService {
 
   async mergeGuestCart(userId: string, items: MergeCartItemDto[]) {
     for (const item of items) {
-      const existing = await this.prisma.cartItem.findUnique({
+      const existing = await this.prisma.cartItem.findFirst({
         where: {
-          userId_variantId: {
-            userId,
-            variantId: item.variantId,
-          },
+          userId,
+          variantId: item.variantId,
         },
       });
 

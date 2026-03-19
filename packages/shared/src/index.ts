@@ -78,6 +78,42 @@ export enum AdminRole {
   STAFF = 'STAFF',
 }
 
+export enum PlatformRole {
+  PLATFORM_ADMIN = 'PLATFORM_ADMIN',
+  PLATFORM_SUPPORT = 'PLATFORM_SUPPORT',
+}
+
+export enum TenantStatus {
+  ACTIVE = 'ACTIVE',
+  TRIAL = 'TRIAL',
+  SUSPENDED = 'SUSPENDED',
+  DEACTIVATED = 'DEACTIVATED',
+}
+
+export enum SubscriptionStatus {
+  ACTIVE = 'ACTIVE',
+  EXPIRED = 'EXPIRED',
+  CANCELLED = 'CANCELLED',
+  GRACE = 'GRACE',
+}
+
+export enum BillingCycle {
+  MONTHLY = 'MONTHLY',
+  YEARLY = 'YEARLY',
+}
+
+export enum TenantPaymentMethod {
+  MOBILE_MONEY = 'MOBILE_MONEY',
+  BANK_TRANSFER = 'BANK_TRANSFER',
+  MANUAL = 'MANUAL',
+}
+
+export enum TenantPaymentStatus {
+  PENDING = 'PENDING',
+  COMPLETED = 'COMPLETED',
+  FAILED = 'FAILED',
+}
+
 export enum Theme {
   LIGHT = 'light',
   DARK = 'dark',
@@ -150,6 +186,41 @@ export const DEFAULT_RENTAL_POLICIES = {
   maxRentalDurationDays: 30,
   advancePreparationReminderDays: 2,
 } as const;
+
+// Platform module definitions — used for tenant module management
+export const PLATFORM_MODULES = {
+  products: { name: 'Products', description: 'Product catalog management' },
+  categories: { name: 'Categories', description: 'Product categories' },
+  orders: { name: 'Orders', description: 'Order management' },
+  cart: { name: 'Cart', description: 'Shopping cart' },
+  wishlist: { name: 'Wishlist', description: 'Product wishlist' },
+  cms: { name: 'CMS', description: 'Content management (banners, pages, settings)' },
+  auth: { name: 'Auth', description: 'Authentication & authorization' },
+  users: { name: 'Users', description: 'Customer management' },
+  shipping: { name: 'Shipping', description: 'Shipping zones & rates' },
+  reviews: { name: 'Reviews', description: 'Product review moderation' },
+  rentals: { name: 'Rentals', description: 'Gown/fashion rental system' },
+  'rental-checklists': { name: 'Rental Checklists', description: 'Dispatch/return checklists' },
+  'rental-policies': { name: 'Rental Policies', description: 'Rental terms & policies' },
+  pos: { name: 'Point of Sale', description: 'In-store POS system' },
+  analytics: { name: 'Analytics', description: 'Dashboard analytics & metrics' },
+  inventory: { name: 'Inventory', description: 'Inventory tracking & management' },
+  expenses: { name: 'Expenses', description: 'Business expense tracking' },
+  reports: { name: 'Reports', description: 'Financial & rental reports' },
+  'flash-sales': { name: 'Flash Sales', description: 'Time-limited promotions' },
+  referrals: { name: 'Referrals', description: 'Referral program' },
+  events: { name: 'Events', description: 'Customer events/gallery' },
+  'promo-codes': { name: 'Promo Codes', description: 'Coupon management' },
+  'id-verification': { name: 'ID Verification', description: 'National ID verification for rentals' },
+  notifications: { name: 'Notifications', description: 'Alert system' },
+} as const;
+
+export type ModuleCode = keyof typeof PLATFORM_MODULES;
+
+// Core modules that cannot be disabled — every tenant gets these
+export const CORE_MODULES: ModuleCode[] = [
+  'products', 'categories', 'orders', 'cart', 'wishlist', 'cms', 'auth', 'users', 'shipping',
+];
 
 export const SUPPORTED_LOCALES = ['en', 'sw'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
