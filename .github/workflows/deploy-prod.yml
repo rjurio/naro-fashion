@@ -21,4 +21,5 @@ jobs:
           script_stop: true
           script: |
             cd /var/www/naro-fashion
-            ./deploy.sh
+            chmod +x deploy.sh
+            bash deploy.sh
