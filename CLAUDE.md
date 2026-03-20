@@ -114,7 +114,9 @@ analytics, auth, cart, categories, cms, events, flash-sales, id-verification, ne
 - **Next.js output**: `standalone` mode — apps run from `.next/standalone/apps/<name>/server.js`
 - **Static assets**: Must be copied to standalone dir after each build (`cp -r .next/static .../.next/static` + `cp -r public .../public`)
 - **Deploy command**: `./deploy.sh` or `git pull && pnpm install && pnpm build && pm2 restart all`
-- **Build notes**: Both Next.js apps use `typescript: { ignoreBuildErrors: true }`, `eslint: { ignoreDuringBuilds: true }`, `output: 'standalone'`, and root layout has `export const dynamic = "force-dynamic"` to prevent prerender errors
+- **TypeScript**: Both Next.js apps build with `typescript: { ignoreBuildErrors: false }` — strict type checking enforced in production. All TS errors have been fixed.
+- **Build notes**: Both Next.js apps use `eslint: { ignoreDuringBuilds: true }`, `output: 'standalone'`, and root layout has `export const dynamic = "force-dynamic"` to prevent prerender errors
+- **CI/CD**: Push to `prod` branch triggers automatic deployment via GitHub Actions (`.github/workflows/deploy-prod.yml`). Secrets: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`
 - **Multer**: Must be explicitly installed (`pnpm add multer @types/multer --filter api`) — not auto-resolved from pnpm hoisting
 - **Deployment guide**: `docs/DEPLOYMENT_GUIDE.md` (with PDF)
 

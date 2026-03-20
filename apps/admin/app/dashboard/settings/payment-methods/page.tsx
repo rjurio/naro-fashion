@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Plus, Pencil, Trash2, Power, Image as ImageIcon, Loader2, GripVertical, Key, Code } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
-import Modal from '@/components/ui/Modal';
+import { Modal } from '@/components/ui/Modal';
 import { FormField } from '@/components/ui/FormField';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
@@ -35,7 +35,7 @@ const emptyForm = {
 };
 
 export default function PaymentMethodsPage() {
-  const { showToast } = useToast();
+  const { toast: showToast } = useToast();
   const confirm = useConfirm();
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
@@ -153,7 +153,7 @@ export default function PaymentMethodsPage() {
     <div className="p-6 space-y-6">
       <PageHeader
         title="Payment Methods"
-        description="Manage accepted payment methods and their integration settings"
+        subtitle="Manage accepted payment methods and their integration settings"
         breadcrumbs={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Settings' }, { label: 'Payment Methods' }]}
         actions={
           <button type="button" onClick={openNew} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">

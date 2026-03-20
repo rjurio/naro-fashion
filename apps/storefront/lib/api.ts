@@ -97,7 +97,7 @@ export const api = {
 
 export const productsApi = {
   getAll: (params?: Record<string, string | number>) =>
-    api.get<{ data: any[]; total: number; page: number; limit: number }>(`/products${toQuery(params)}`),
+    api.get<{ data: any[]; total: number; page: number; limit: number; meta?: { total: number; page: number; limit: number; totalPages: number } }>(`/products${toQuery(params)}`),
   getBySlug: (slug: string) => api.get<any>(`/products/${slug}`),
 };
 

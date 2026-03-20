@@ -38,6 +38,7 @@ export interface ProductFormData {
   maxRentalDays: number | null;
   bufferDaysOverride: number | null;
   images: string[];
+  sizeGuideId?: string;
   model3dUrl: string | null;
   model3dPosterUrl: string | null;
   variants: VariantRow[];

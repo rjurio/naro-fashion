@@ -140,8 +140,8 @@ export default function DashboardPage() {
           setStats(statsRes.value || {});
         }
         if (revenueRes.status === 'fulfilled') {
-          const data = revenueRes.value;
-          setRevenueChartData(Array.isArray(data) ? data : data?.data || []);
+          const revData = revenueRes.value as any;
+          setRevenueChartData(Array.isArray(revData) ? revData : revData?.data || []);
         }
         if (salesRes.status === 'fulfilled') {
           setSalesData(salesRes.value || {});

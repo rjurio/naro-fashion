@@ -36,7 +36,7 @@ interface Submission {
 }
 
 export default function ContactSubmissionsPage() {
-  const { showToast } = useToast();
+  const { toast: showToast } = useToast();
   const confirm = useConfirm();
 
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -127,7 +127,7 @@ export default function ContactSubmissionsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Contact Submissions"
-        description="Manage messages submitted through the contact form"
+        subtitle="Manage messages submitted through the contact form"
         breadcrumbs={[{ label: 'CMS' }, { label: 'Contact Submissions' }]}
       />
 

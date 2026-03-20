@@ -60,6 +60,7 @@ interface Category {
   name: string;
   slug: string;
   image?: string;
+  imageUrl?: string;
   _count?: { products: number };
   badge?: string;
 }

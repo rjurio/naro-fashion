@@ -1,8 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  typescript: { ignoreBuildErrors: true },
+  typescript: { ignoreBuildErrors: false },
   eslint: { ignoreDuringBuilds: true },
-  output: 'standalone',
+  output: 'standalone', // Note: may cause EPERM symlink errors on OneDrive-synced directories
 
   transpilePackages: ['@naro/shared'],
   reactStrictMode: true,

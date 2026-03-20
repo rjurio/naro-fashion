@@ -31,6 +31,7 @@ interface Rental {
   shippingAddress?: string;
   transportMode?: string;
   transportReceiptUrl?: string;
+  notes?: string;
   [key: string]: unknown;
 }
 
@@ -231,7 +232,7 @@ function RentalDetailsSection({ rental, onUpdate }: { rental: Rental; onUpdate: 
     shippingDate: rental.shippingDate ? new Date(rental.shippingDate as string).toISOString().split('T')[0] : '',
     shippingAddress: rental.shippingAddress || '',
     transportMode: rental.transportMode || '',
-    notes: (rental.notes as string) || '',
+    notes: rental.notes || '',
   });
   const [uploading, setUploading] = useState(false);
 
@@ -297,7 +298,7 @@ function RentalDetailsSection({ rental, onUpdate }: { rental: Rental; onUpdate: 
               className="text-xs text-brand-gold hover:underline">View Transport Receipt</a>
           </div>
         )}
-        {rental.notes && <div><p className={labelClass}>Notes</p><p className={`${valueClass} italic`}>{rental.notes as string}</p></div>}
+        {rental.notes && <div><p className={labelClass}>Notes</p><p className={`${valueClass} italic`}>{rental.notes}</p></div>}
       </div>
     );
   }

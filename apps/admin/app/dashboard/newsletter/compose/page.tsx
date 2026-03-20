@@ -181,7 +181,7 @@ export default function ComposeNewsletterPage() {
         });
       }
 
-      const result = await adminApi.sendNewsletter(newsletterId);
+      const result = await adminApi.sendNewsletter(newsletterId!);
       toast.success(result?.message || 'Newsletter sent successfully');
       router.push(`/dashboard/newsletter/${newsletterId}`);
     } catch (err) {

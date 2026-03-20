@@ -545,7 +545,156 @@ pm2 set pm2-logrotate:retain 7
 
 ---
 
-## Step 16: Add Swap Space (Recommended for 2GB RAM)
+## Step 16: Set Up CI/CD (Auto-Deploy on Push to prod)
+
+### 16a. Create prod branch
+
+```bash
+# On your local machine
+cd /path/to/naro-fashion
+git branch prod
+git push origin prod
+```
+
+### 16b. Generate SSH key on the server
+
+```bash
+# On the VPS
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N '' -C 'deploy@naro-fashion-prod'
+cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+```
+
+### 16c. Create GitHub Actions workflow
+
+Create `.github/workflows/deploy-prod.yml`:
+
+```yaml
+name: Deploy to Production
+
+on:
+  push:
+    branches: [prod]
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            cd /var/www/naro-fashion
+            chmod +x deploy.sh
+            bash deploy.sh
+```
+
+### 16d. Set GitHub Secrets
+
+Using GitHub CLI (requires `gh` authenticated):
+
+```bash
+echo "80.240.30.107" | gh secret set VPS_HOST
+echo "root" | gh secret set VPS_USER
+
+# Get the private key from the server and set it:
+ssh root@80.240.30.107 "cat ~/.ssh/id_ed25519" | gh secret set VPS_SSH_KEY
+
+# Verify:
+gh secret list
+```
+
+Or set manually: GitHub repo → Settings → Secrets and variables → Actions → New repository secret.
+
+### 16e. Deploy Script on Server
+
+The deploy script at `/var/www/naro-fashion/deploy.sh` backs up env files before `git reset --hard`:
+
+```bash
+#!/bin/bash
+set -e
+
+echo "🚀 Deploying Naro Fashion..."
+cd /var/www/naro-fashion
+
+# Backup env files (git reset --hard will delete them)
+cp apps/storefront/.env.local /tmp/storefront.env.local 2>/dev/null || true
+cp apps/admin/.env.local /tmp/admin.env.local 2>/dev/null || true
+cp .env /tmp/naro.env 2>/dev/null || true
+cp apps/api/.env /tmp/api.env 2>/dev/null || true
+
+# Pull latest from prod branch
+git fetch origin prod
+git reset --hard origin/prod
+
+# Restore env files
+cp /tmp/storefront.env.local apps/storefront/.env.local 2>/dev/null || true
+cp /tmp/admin.env.local apps/admin/.env.local 2>/dev/null || true
+cp /tmp/naro.env .env 2>/dev/null || true
+cp /tmp/api.env apps/api/.env 2>/dev/null || true
+cp .env packages/database/.env 2>/dev/null || true
+
+# Install dependencies
+pnpm install
+
+# Generate Prisma client & push schema
+cd packages/database
+npx prisma generate
+npx prisma db push --accept-data-loss
+cd ../..
+
+# Build all apps
+pnpm build
+
+# Copy static files for standalone Next.js
+cp -r apps/storefront/.next/static apps/storefront/.next/standalone/apps/storefront/.next/static 2>/dev/null || true
+cp -r apps/storefront/public apps/storefront/.next/standalone/apps/storefront/public 2>/dev/null || true
+cp -r apps/admin/.next/static apps/admin/.next/standalone/apps/admin/.next/static 2>/dev/null || true
+cp -r apps/admin/public apps/admin/.next/standalone/apps/admin/public 2>/dev/null || true
+
+# Restart PM2 processes
+pm2 restart ecosystem.config.js
+pm2 save
+
+echo "✅ Deployment complete! $(date)"
+```
+
+### 16f. How to Deploy
+
+```bash
+# 1. Work on master branch normally
+git add . && git commit -m "your changes"
+git push origin master
+
+# 2. When ready to deploy to production:
+git checkout prod
+git merge master --no-edit
+git push origin prod    # ← Triggers automatic deployment via GitHub Actions
+git checkout master
+
+# 3. Monitor deployment:
+gh run list --limit 1
+gh run view <run-id> --log   # If failed, check logs
+```
+
+### 16g. Key CI/CD Notes
+
+- `.env.local` files are NOT in git — the deploy script backs them up before `git reset --hard` and restores after
+- `multer` must be in `apps/api/package.json` dependencies (not just devDependencies) — `pnpm install` doesn't auto-resolve hoisted packages
+- Both Next.js apps need `output: 'standalone'`, `typescript: { ignoreBuildErrors: true }` in `next.config.js`
+- Root `app/layout.tsx` in both apps needs `export const dynamic = "force-dynamic"` to prevent prerender errors
+- Static files must be copied to standalone directory after each build
+
+---
+
+## Step 17: Add Swap Space (Recommended for 2GB RAM)
 
 ```bash
 fallocate -l 2G /swapfile

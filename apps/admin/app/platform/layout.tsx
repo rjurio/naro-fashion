@@ -34,7 +34,7 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
         <div className="flex h-screen overflow-hidden bg-[hsl(var(--content-bg))]">
           <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
           <div className="flex flex-col flex-1 overflow-hidden">
-            <TopBar onMenuToggle={() => setSidebarOpen(!sidebarOpen)} />
+            <TopBar onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
             <main className="flex-1 overflow-y-auto p-6">{children}</main>
           </div>
         </div>
