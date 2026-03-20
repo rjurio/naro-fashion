@@ -105,6 +105,19 @@ analytics, auth, cart, categories, cms, events, flash-sales, id-verification, ne
 - Prefer open-source and free-tier solutions
 - When importing `Image` from both `next/image` and `lucide-react`, alias lucide's as `ImageIcon`
 
+## Production Deployment
+- **VPS**: Vultr vhf-1c-2gb (1 vCPU, 2GB RAM, 64GB NVMe) in Frankfurt, DE — $12/mo
+- **Server IP**: `80.240.30.107`
+- **Domain**: `narofashion.co.tz` (storefront), `admin.narofashion.co.tz` (admin), `api.narofashion.co.tz` (API)
+- **Stack**: Ubuntu 24.04, Node.js 22, PM2, Nginx, PostgreSQL 16, Let's Encrypt SSL
+- **Process manager**: PM2 with `ecosystem.config.js` (standalone Next.js + NestJS dist)
+- **Next.js output**: `standalone` mode — apps run from `.next/standalone/apps/<name>/server.js`
+- **Static assets**: Must be copied to standalone dir after each build (`cp -r .next/static .../.next/static` + `cp -r public .../public`)
+- **Deploy command**: `./deploy.sh` or `git pull && pnpm install && pnpm build && pm2 restart all`
+- **Build notes**: Both Next.js apps use `typescript: { ignoreBuildErrors: true }`, `eslint: { ignoreDuringBuilds: true }`, `output: 'standalone'`, and root layout has `export const dynamic = "force-dynamic"` to prevent prerender errors
+- **Multer**: Must be explicitly installed (`pnpm add multer @types/multer --filter api`) — not auto-resolved from pnpm hoisting
+- **Deployment guide**: `docs/DEPLOYMENT_GUIDE.md` (with PDF)
+
 ## Known Issues
 - Global Prisma CLI is v7.4.2 which has breaking changes — always use local Prisma v6.19.2 via `pnpm prisma` from `packages/database/`
 - OneDrive sync can cause EPERM errors during `prisma generate` — retry usually works, or use `prisma db push` which also triggers generate

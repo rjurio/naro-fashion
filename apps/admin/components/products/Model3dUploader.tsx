@@ -4,7 +4,6 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Upload, Box, Trash2, Loader2 } from 'lucide-react';
 import { useToast } from '@/contexts/ToastContext';
 import adminApi from '@/lib/api';
-import '@/types/model-viewer';
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
