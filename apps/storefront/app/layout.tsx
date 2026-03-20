@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { Inter, Playfair_Display } from "next/font/google";
