@@ -694,7 +694,118 @@ gh run view <run-id> --log   # If failed, check logs
 
 ---
 
-## Step 17: Add Swap Space (Recommended for 2GB RAM)
+## Step 17: Set Up Email Service (Brevo)
+
+### 17a. Create Brevo Account
+
+1. Go to **https://www.brevo.com** and sign up (Google OAuth works)
+2. Choose the **Free plan** (300 emails/day — scroll down past paid plans to find it)
+3. After login, go to **Settings** (gear icon) → **SMTP & API** → **SMTP**
+
+### 17b. Generate SMTP Key
+
+1. Click **"Generate a new SMTP key"**
+2. Name it `naro-fashion`, keep **Standard** variant
+3. Click **Generate** and copy the key
+
+You'll have these credentials:
+```
+SMTP Server:  smtp-relay.brevo.com
+Port:         587
+Login:        <your-brevo-login>@smtp-brevo.com
+Password:     xsmtpsib-<your-generated-key>
+```
+
+### 17c. Configure SMTP on VPS
+
+```bash
+ssh root@80.240.30.107
+
+# Edit the .env file
+cd /var/www/naro-fashion
+nano .env
+
+# Update these lines:
+# SMTP_HOST="smtp-relay.brevo.com"
+# SMTP_PORT="587"
+# SMTP_USER="<your-login>@smtp-brevo.com"
+# SMTP_PASS="xsmtpsib-<your-key>"
+# SMTP_FROM="noreply@narofashion.co.tz"
+
+# Copy env to API
+cp .env apps/api/.env
+
+# Restart API to pick up new config
+pm2 restart naro-api
+```
+
+### 17d. Add Sender in Brevo
+
+1. Go to Brevo → **Settings** → **Senders, domains, IPs** → **Add a sender**
+2. **From Name**: `Naro Fashion`
+3. **From Email**: `noreply@narofashion.co.tz`
+4. Click **Add sender**
+5. Choose **"Authenticate the domain yourself"** → **Continue**
+
+### 17e. Authenticate Domain (DNS Records)
+
+Brevo will show DNS records to add. Go to **Vultr DNS** (https://my.vultr.com/dns/ → `narofashion.co.tz`) and add:
+
+**Record 1 — Brevo verification code:**
+| Type | Name | Data | TTL |
+|------|------|------|-----|
+| TXT | *(blank)* | `brevo-code:<your-code>` | 3600 |
+
+**Record 2 — DKIM 1:**
+| Type | Name | Data | TTL |
+|------|------|------|-----|
+| CNAME | `brevo1._domainkey` | `b1.narofashion-co-tz.dkim.brevo.com` | 3600 |
+
+**Record 3 — DKIM 2:**
+| Type | Name | Data | TTL |
+|------|------|------|-----|
+| CNAME | `brevo2._domainkey` | `b2.narofashion-co-tz.dkim.brevo.com` | 3600 |
+
+**Record 4 — DMARC:**
+| Type | Name | Data | TTL |
+|------|------|------|-----|
+| TXT | `_dmarc` | `v=DMARC1; p=none; rua=mailto:rua@dmarc.brevo.com` | 3600 |
+
+### 17f. Verify in Brevo
+
+1. Go back to Brevo and click **Authenticate** / **Verify**
+2. Wait a few minutes for DNS to propagate
+3. Once verified, your domain shows a green checkmark
+4. All emails from `noreply@narofashion.co.tz` will now be properly authenticated (no spam)
+
+### 17g. What Emails Are Sent
+
+| Email Type | When | Template |
+|-----------|------|----------|
+| Order confirmation | Customer places order | `order-confirmation.hbs` |
+| Password reset | User clicks "Forgot Password" | `password-reset.hbs` |
+| Rental reminder | Upcoming pickup (daily cron) | `rental-reminder.hbs` |
+| Overdue rental alert | Return date passed (daily cron) | `overdue-rental.hbs` |
+| Admin prep reminder | Item needs preparation | `admin-prep-reminder.hbs` |
+| ID verification | Status change (approved/rejected) | `id-verification.hbs` |
+| Newsletter | Admin sends campaign | `newsletter.hbs` |
+| Contact acknowledgement | Customer submits contact form | `contact-acknowledgement.hbs` |
+| Contact reply | Admin replies to submission | `contact-reply.hbs` |
+
+### Current Email Configuration (Production)
+
+| Variable | Value |
+|----------|-------|
+| `SMTP_HOST` | `smtp-relay.brevo.com` |
+| `SMTP_PORT` | `587` |
+| `SMTP_USER` | `a58aa0001@smtp-brevo.com` |
+| `SMTP_FROM` | `noreply@narofashion.co.tz` |
+| Domain auth | SPF + DKIM + DMARC verified |
+| Free tier | 300 emails/day |
+
+---
+
+## Step 18: Add Swap Space (Recommended for 2GB RAM)
 
 ```bash
 fallocate -l 2G /swapfile
