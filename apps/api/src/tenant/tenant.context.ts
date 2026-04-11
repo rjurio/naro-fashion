@@ -1,6 +1,8 @@
 import { Injectable, Scope, Inject } from '@nestjs/common';
 import { REQUEST } from '@nestjs/core';
 import { Request } from 'express';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 
 /**
  * TenantContext is a request-scoped injectable that provides the current tenantId.
@@ -9,6 +11,7 @@ import { Request } from 'express';
  * 1. The authenticated user's JWT payload (user.tenantId)
  * 2. The X-Tenant-Id header (for unauthenticated storefront requests)
  * 3. The TenantGuard sets request.tenantId
+ * 4. Fallback: decodes JWT from Authorization header (for @Public() endpoints called with a token)
  *
  * Usage in services:
  *   constructor(private readonly tenantContext: TenantContext) {}
@@ -16,14 +19,37 @@ import { Request } from 'express';
  */
 @Injectable({ scope: Scope.REQUEST })
 export class TenantContext {
-  constructor(@Inject(REQUEST) private readonly request: Request) {}
+  constructor(
+    @Inject(REQUEST) private readonly request: Request,
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+  ) {}
 
   /**
    * Returns the current tenantId, or null for platform admins.
    */
   get id(): string | null {
     const req = this.request as any;
-    return req.tenantId || req.user?.tenantId || req.headers?.['x-tenant-id'] || null;
+    const id = req.tenantId || req.user?.tenantId || req.headers?.['x-tenant-id'] || null;
+    if (id) return id;
+
+    // Fallback: decode JWT from Authorization header for @Public() endpoints
+    const authHeader = req.headers?.authorization;
+    if (authHeader?.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.substring(7);
+        const payload = this.jwtService.verify(token, {
+          secret: this.configService.get<string>('JWT_SECRET', 'naro-secret-key'),
+        });
+        if (payload.tenantId) {
+          req.tenantId = payload.tenantId;
+          return payload.tenantId;
+        }
+      } catch {
+        // Invalid token — ignore
+      }
+    }
+    return null;
   }
 
   /**
