@@ -98,7 +98,7 @@ export default function RentalReportsPage() {
       <div className="bg-card border border-border rounded-xl overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h2 className="font-semibold text-foreground">Item Performance</h2>
-          <button className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors">
+          <button className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-lg hover:border-brand-gold hover:text-brand-gold transition-colors cursor-pointer">
             <Download className="w-4 h-4" /> Export
           </button>
         </div>

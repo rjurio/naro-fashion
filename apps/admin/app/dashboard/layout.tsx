@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import { RefreshCw } from 'lucide-react';
 import Sidebar from '@/components/layout/Sidebar';
 import TopBar from '@/components/layout/TopBar';
+import NavigationProgress from '@/components/ui/NavigationProgress';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { ConfirmDialogProvider } from '@/components/ui/ConfirmDialog';
 import { useAuth } from '@/contexts/AuthContext';
@@ -39,6 +40,9 @@ export default function DashboardLayout({
   return (
     <ToastProvider>
       <ConfirmDialogProvider>
+        <Suspense fallback={null}>
+          <NavigationProgress />
+        </Suspense>
         <div className="flex h-screen overflow-hidden bg-[hsl(var(--background))]">
           <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
           <div className="flex flex-1 flex-col overflow-hidden">

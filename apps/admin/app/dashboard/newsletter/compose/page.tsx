@@ -15,9 +15,12 @@ import {
   Lightbulb,
   FileText,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import Button from '@/components/ui/Button';
 import { adminApi } from '@/lib/api';
 import { useToast } from '@/contexts/ToastContext';
+
+const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), { ssr: false });
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 
 type TemplateType = 'NEW_ARRIVALS' | 'NEW_DEALS' | 'TIPS' | 'CUSTOM';
@@ -370,14 +373,14 @@ export default function ComposeNewsletterPage() {
           {/* Body */}
           <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
             <label className="block text-sm font-semibold text-[hsl(var(--foreground))] mb-2">
-              Body (HTML)
+              Body
             </label>
-            <textarea
+            <RichTextEditor
               value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder="<h1>Your newsletter content...</h1>"
-              rows={20}
-              className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-4 py-3 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold font-mono resize-y"
+              onChange={setBody}
+              placeholder="Start writing your newsletter content..."
+              minHeight="400px"
+              enableImageUpload
             />
           </div>
         </div>

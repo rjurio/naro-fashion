@@ -25,6 +25,7 @@ import {
   Star,
   Film,
   X,
+  Loader2,
 } from 'lucide-react';
 
 interface EventMedia {
@@ -116,6 +117,9 @@ export default function EventsPage() {
   const [editingEvent, setEditingEvent] = useState<EventItem | null>(null);
   const [form, setForm] = useState<EventFormData>(emptyForm);
   const [saving, setSaving] = useState(false);
+
+  // Approve loading
+  const [approvingId, setApprovingId] = useState<string | null>(null);
 
   // Reject modal
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -256,12 +260,15 @@ export default function EventsPage() {
 
   // Approve
   const handleApprove = async (id: string) => {
+    setApprovingId(id);
     try {
       await adminApi.approveEvent(id);
       toast.success('Event approved');
       fetchEvents();
     } catch {
       toast.error('Failed to approve event');
+    } finally {
+      setApprovingId(null);
     }
   };
 
@@ -499,10 +506,10 @@ export default function EventsPage() {
                   </Button>
                   {event.status === 'PENDING_APPROVAL' && (
                     <>
-                      <Button size="sm" variant="ghost" onClick={() => handleApprove(event.id)}>
-                        <CheckCircle className="w-3.5 h-3.5 mr-1 text-green-600" /> Approve
+                      <Button size="sm" variant="ghost" disabled={approvingId === event.id} onClick={() => handleApprove(event.id)}>
+                        {approvingId === event.id ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5 mr-1 text-green-600" />} Approve
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => openReject(event.id)}>
+                      <Button size="sm" variant="ghost" disabled={approvingId === event.id} onClick={() => openReject(event.id)}>
                         <XCircle className="w-3.5 h-3.5 mr-1 text-red-600" /> Reject
                       </Button>
                     </>

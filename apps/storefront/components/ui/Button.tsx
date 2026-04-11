@@ -14,13 +14,13 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variantStyles: Record<ButtonVariant, string> = {
   primary:
-    "bg-gold-500 text-white hover:bg-gold-600 active:bg-gold-700 shadow-sm",
+    "bg-gold-500 text-white hover:bg-gold-600 active:bg-gold-700 active:scale-[0.97] shadow-sm hover:shadow-md",
   secondary:
-    "bg-gold-500 text-dark-500 hover:bg-gold-600 active:bg-gold-700 shadow-sm",
+    "bg-gold-500 text-dark-500 hover:bg-gold-600 active:bg-gold-700 active:scale-[0.97] shadow-sm hover:shadow-md",
   outline:
-    "border-2 border-gold-500 text-gold-500 hover:bg-gold-500 hover:text-white",
+    "border-2 border-gold-500 text-gold-500 hover:bg-gold-500 hover:text-white active:scale-[0.97]",
   ghost:
-    "text-foreground hover:bg-muted",
+    "text-foreground hover:bg-muted active:scale-[0.97]",
 };
 
 const sizeStyles: Record<ButtonSize, string> = {
@@ -47,7 +47,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={disabled || loading}
         className={cn(
-          "inline-flex items-center justify-center rounded-lg font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+          "inline-flex items-center justify-center rounded-lg font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
           variantStyles[variant],
           sizeStyles[size],
           className,

@@ -458,7 +458,7 @@ export default function FinancialsPage() {
       <Modal isOpen={expModal.open} onClose={() => setExpModal({ open: false, expense: null })} title={expModal.expense ? 'Edit Expense' : 'Record Expense'} size="md"
         footer={
           <>
-            <button onClick={() => setExpModal({ open: false, expense: null })} className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors">Cancel</button>
+            <button onClick={() => setExpModal({ open: false, expense: null })} className="px-4 py-2 text-sm border border-border rounded-lg hover:border-foreground hover:text-foreground transition-colors cursor-pointer">Cancel</button>
             <button onClick={saveExpense} disabled={expSaving} className="px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors disabled:opacity-50">
               {expSaving ? 'Saving...' : 'Save Expense'}
             </button>
@@ -503,7 +503,7 @@ export default function FinancialsPage() {
       <Modal isOpen={catModal.open} onClose={() => setCatModal({ open: false, cat: null })} title={catModal.cat ? 'Edit Category' : 'Add Expense Category'} size="sm"
         footer={
           <>
-            <button onClick={() => setCatModal({ open: false, cat: null })} className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors">Cancel</button>
+            <button onClick={() => setCatModal({ open: false, cat: null })} className="px-4 py-2 text-sm border border-border rounded-lg hover:border-foreground hover:text-foreground transition-colors cursor-pointer">Cancel</button>
             <button onClick={saveCat} disabled={catSaving} className="px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors disabled:opacity-50">
               {catSaving ? 'Saving...' : catModal.cat ? 'Save Changes' : 'Create Category'}
             </button>

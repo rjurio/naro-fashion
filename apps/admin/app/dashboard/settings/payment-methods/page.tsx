@@ -156,7 +156,7 @@ export default function PaymentMethodsPage() {
         subtitle="Manage accepted payment methods and their integration settings"
         breadcrumbs={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Settings' }, { label: 'Payment Methods' }]}
         actions={
-          <button type="button" onClick={openNew} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+          <button type="button" onClick={openNew} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-gold text-white text-sm font-medium hover:bg-brand-gold-dark hover:shadow-md transition-all cursor-pointer">
             <Plus className="h-4 w-4" /> Add Method
           </button>
         }
@@ -167,7 +167,7 @@ export default function PaymentMethodsPage() {
       ) : methods.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-12 text-center">
           <p className="text-muted-foreground mb-4">No payment methods configured yet.</p>
-          <button type="button" onClick={openNew} className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium">Add First Method</button>
+          <button type="button" onClick={openNew} className="px-4 py-2 rounded-lg bg-brand-gold text-white text-sm font-medium hover:bg-brand-gold-dark hover:shadow-md transition-all cursor-pointer">Add First Method</button>
         </div>
       ) : (
         <div className="rounded-xl border border-border overflow-hidden">
@@ -242,7 +242,7 @@ export default function PaymentMethodsPage() {
               )}
               <div className="flex flex-col gap-1">
                 <button type="button" onClick={() => fileRef.current?.click()} disabled={uploadingIcon}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50">
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-xs font-medium hover:border-brand-gold hover:text-brand-gold cursor-pointer transition-colors disabled:opacity-50">
                   {uploadingIcon ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
                   {uploadingIcon ? 'Uploading...' : 'Upload Icon'}
                 </button>
@@ -294,11 +294,11 @@ export default function PaymentMethodsPage() {
           </label>
 
           <div className="flex gap-3 pt-2 border-t border-border">
-            <button type="submit" disabled={saving} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
+            <button type="submit" disabled={saving} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-gold text-white text-sm font-medium hover:bg-brand-gold-dark hover:shadow-md disabled:opacity-50 transition-all cursor-pointer">
               {saving && <Loader2 className="h-4 w-4 animate-spin" />}
               {saving ? 'Saving...' : editing ? 'Save Changes' : 'Create Method'}
             </button>
-            <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:bg-muted transition-colors">Cancel</button>
+            <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:border-foreground hover:text-foreground transition-colors cursor-pointer">Cancel</button>
           </div>
         </form>
       </Modal>

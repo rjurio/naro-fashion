@@ -8,7 +8,10 @@ import {
   Param,
   Query,
   UseGuards,
+  BadRequestException,
 } from '@nestjs/common';
+import { SchedulerRegistry } from '@nestjs/schedule';
+import { CronJob } from 'cron';
 import {
   CmsService,
   CreateBannerDto,
@@ -27,12 +30,14 @@ import {
 import { InstagramService } from './instagram.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../auth/decorators/public.decorator';
+import { INSTAGRAM_SYNC_INTERVALS } from '../scheduler/scheduler.service';
 
 @Controller('cms')
 export class CmsController {
   constructor(
     private readonly cmsService: CmsService,
     private readonly instagramService: InstagramService,
+    private readonly schedulerRegistry: SchedulerRegistry,
   ) {}
 
   // --- Banners ---
@@ -241,6 +246,38 @@ export class CmsController {
   @Post('instagram-posts/sync')
   syncInstagramPosts() {
     return this.instagramService.syncFromInstagram();
+  }
+
+  // --- Instagram Sync Config ---
+
+  @UseGuards(JwtAuthGuard)
+  @Get('instagram-sync-config')
+  getInstagramSyncConfig() {
+    return this.cmsService.getInstagramSyncConfig();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('instagram-sync-config')
+  async updateInstagramSyncConfig(@Body() body: { interval: string }) {
+    const interval = body.interval;
+    if (!INSTAGRAM_SYNC_INTERVALS.hasOwnProperty(interval)) {
+      throw new BadRequestException(
+        `Invalid interval. Valid options: ${Object.keys(INSTAGRAM_SYNC_INTERVALS).join(', ')}`,
+      );
+    }
+    const result = await this.cmsService.updateInstagramSyncConfig(interval);
+
+    // Re-register the dynamic cron job
+    const cronExpr = INSTAGRAM_SYNC_INTERVALS[interval];
+    const jobName = 'instagram-sync-dynamic';
+    try { this.schedulerRegistry.deleteCronJob(jobName); } catch { /* didn't exist */ }
+    if (cronExpr) {
+      const job = new CronJob(cronExpr, async () => { await this.instagramService.syncFromInstagram(); });
+      this.schedulerRegistry.addCronJob(jobName, job);
+      job.start();
+    }
+
+    return result;
   }
 
   // --- Contact Submissions ---

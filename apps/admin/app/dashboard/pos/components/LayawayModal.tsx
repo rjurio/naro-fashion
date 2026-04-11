@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { X, Clock, Plus, CreditCard, Check } from 'lucide-react';
 import adminApi from '../../../../lib/api';
 import { useToast } from '@/contexts/ToastContext';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { PAYMENT_METHOD_LABELS } from '@naro/shared';
 
 interface Props {
@@ -14,6 +15,7 @@ const PAYMENT_METHODS = ['CASH', 'MPESA', 'TIGO_PESA', 'AIRTEL_MONEY', 'MIX_BY_Y
 
 export default function LayawayModal({ onClose }: Props) {
   const toast = useToast();
+  const confirm = useConfirm();
   const [tab, setTab] = useState<'list' | 'create'>('list');
   const [layaways, setLayaways] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,9 +63,11 @@ export default function LayawayModal({ onClose }: Props) {
   };
 
   const handleComplete = async (id: string) => {
-    if (!confirm('Complete this layaway? This will create an order and deduct stock.')) return;
+    const ok = await confirm({ title: 'Complete Layaway', message: 'This will create an order and deduct stock. Continue?', confirmLabel: 'Complete', variant: 'warning' });
+    if (!ok) return;
     try {
       await adminApi.posCompleteLayaway(id);
+      toast.success('Layaway completed');
       loadLayaways();
     } catch (err: any) {
       toast.error(err.message || 'Failed to complete layaway');
@@ -71,9 +75,11 @@ export default function LayawayModal({ onClose }: Props) {
   };
 
   const handleCancel = async (id: string) => {
-    if (!confirm('Cancel this layaway?')) return;
+    const ok = await confirm({ title: 'Cancel Layaway', message: 'Are you sure you want to cancel this layaway?', confirmLabel: 'Cancel Layaway', variant: 'danger' });
+    if (!ok) return;
     try {
       await adminApi.posCancelLayaway(id);
+      toast.success('Layaway cancelled');
       loadLayaways();
     } catch (err: any) {
       toast.error(err.message || 'Failed to cancel');

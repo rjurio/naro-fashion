@@ -56,7 +56,7 @@ class AdminApiClient {
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
     };
-    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -140,6 +140,10 @@ class AdminApiClient {
     return this.get<any>('/auth/me');
   }
 
+  updateProfile(data: { firstName?: string; lastName?: string; phone?: string }) {
+    return this.patch<any>('/auth/me', data);
+  }
+
   forgotPassword(email: string) {
     return this.post<{ message: string }>('/auth/forgot-password', { email });
   }
@@ -184,7 +188,7 @@ class AdminApiClient {
   async uploadImage(file: File): Promise<{ url: string; filename: string }> {
     const formData = new FormData();
     formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
     const res = await fetch(`${this.baseUrl}/upload/image`, {
       method: 'POST',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -199,7 +203,7 @@ class AdminApiClient {
   async upload3dModel(file: File): Promise<{ url: string; filename: string }> {
     const formData = new FormData();
     formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
     const res = await fetch(`${this.baseUrl}/upload/3d-model`, {
       method: 'POST',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -298,7 +302,7 @@ class AdminApiClient {
   async uploadTransportReceipt(rentalId: string, file: File) {
     const formData = new FormData();
     formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
     const res = await fetch(`${this.baseUrl}/rentals/${rentalId}/transport-receipt`, {
       method: 'POST',
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -420,7 +424,7 @@ class AdminApiClient {
   async uploadPaymentIcon(file: File) {
     const formData = new FormData();
     formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
     const headers: Record<string, string> = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
     const res = await fetch(`${this.baseUrl}/upload/payment-icon`, { method: 'POST', headers, body: formData });
@@ -513,7 +517,7 @@ class AdminApiClient {
   async uploadBranding(file: File): Promise<{ url: string; filename: string }> {
     const formData = new FormData();
     formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
     const res = await fetch(`${this.baseUrl}/upload/branding`, {
       method: 'POST',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -548,7 +552,7 @@ class AdminApiClient {
   async uploadDocument(file: File): Promise<{ url: string; filename: string; format: string }> {
     const formData = new FormData();
     formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
     const res = await fetch(`${this.baseUrl}/upload/document`, {
       method: 'POST',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -563,7 +567,7 @@ class AdminApiClient {
   async uploadHeroSlide(file: File): Promise<{ url: string; filename: string }> {
     const formData = new FormData();
     formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
     const res = await fetch(`${this.baseUrl}/upload/hero-slide`, {
       method: 'POST',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -600,6 +604,12 @@ class AdminApiClient {
   }
   pinInstagramPost(id: string) {
     return this.patch<any>(`/cms/instagram-posts/${id}/pin`, {});
+  }
+  getInstagramSyncConfig() {
+    return this.get<{ interval: string; options: string[] }>('/cms/instagram-sync-config');
+  }
+  updateInstagramSyncConfig(interval: string) {
+    return this.patch<{ interval: string; message: string }>('/cms/instagram-sync-config', { interval });
   }
 
   // ===== Newsletter =====
@@ -1003,6 +1013,22 @@ class AdminApiClient {
   }
   getDeletedSizeGuides() {
     return this.get<any[]>('/size-guides/deleted');
+  }
+
+  // ===== Audit Log =====
+  getAuditLog(params?: Record<string, string>) {
+    return this.get<{ data: any[]; meta: { total: number; page: number; limit: number; totalPages: number } }>('/audit', { params });
+  }
+  getAuditFilters() {
+    return this.get<{ entities: string[]; actions: string[]; adminUsers: { id: string; firstName: string; lastName: string }[] }>('/audit/filters');
+  }
+  async exportAuditLog(params?: Record<string, string>): Promise<Blob> {
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
+    const url = new URL(`${this.baseUrl}/audit/export`);
+    if (params) Object.entries(params).forEach(([k, v]) => { if (v) url.searchParams.append(k, v); });
+    const res = await fetch(url.toString(), { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) throw new Error('Export failed');
+    return res.blob();
   }
 
   // ============================================================

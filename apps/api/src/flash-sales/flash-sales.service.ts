@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { AuditService } from '../audit/audit.service';
 
 export class CreateFlashSaleDto {
   title: string;
@@ -25,6 +26,7 @@ export class FlashSalesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
+    private readonly auditService: AuditService,
   ) {}
 
   async findAllActive() {
@@ -82,7 +84,7 @@ export class FlashSalesService {
   async create(dto: CreateFlashSaleDto) {
     const { productIds, startDate, endDate, salePrice, ...rest } = dto;
 
-    return this.prisma.flashSale.create({
+    const sale = await this.prisma.flashSale.create({
       data: {
         tenantId: this.tenantContext.requireId,
         ...rest,
@@ -97,6 +99,8 @@ export class FlashSalesService {
       },
       include: { items: true },
     });
+    await this.auditService.log('CREATE', 'FlashSale', sale.id, { title: dto.title });
+    return sale;
   }
 
   async update(id: string, dto: UpdateFlashSaleDto) {
@@ -120,11 +124,13 @@ export class FlashSalesService {
       };
     }
 
-    return this.prisma.flashSale.update({
+    const updated = await this.prisma.flashSale.update({
       where: { id },
       data,
       include: { items: true },
     });
+    await this.auditService.log('UPDATE', 'FlashSale', id);
+    return updated;
   }
 
   async delete(id: string) {
@@ -135,6 +141,7 @@ export class FlashSalesService {
       where: { id },
       data: { deletedAt: new Date(), isActive: false },
     });
+    await this.auditService.log('DELETE', 'FlashSale', id);
 
     return { message: 'Flash sale moved to recycle bin' };
   }
@@ -143,11 +150,13 @@ export class FlashSalesService {
     const sale = await this.prisma.flashSale.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!sale || !sale.deletedAt) throw new NotFoundException('Deleted flash sale not found');
 
-    return this.prisma.flashSale.update({
+    const restored = await this.prisma.flashSale.update({
       where: { id },
       data: { deletedAt: null, isActive: true },
       include: { items: true },
     });
+    await this.auditService.log('RESTORE', 'FlashSale', id);
+    return restored;
   }
 
   async findDeleted() {

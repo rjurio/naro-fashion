@@ -18,8 +18,10 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 - AuthContext in `contexts/AuthContext.tsx` provides `user`, `login`, `platformLogin`, `logout`, `refreshUser`, `isPlatformAdmin`, `enabledModules`, `isModuleEnabled()`
 - **Tenant admin login**: `/login` → `POST /auth/login` → tenant admin dashboard (`/dashboard/*`)
 - **Platform admin login**: `/platform-login` → `POST /auth/platform-login` → platform dashboard (`/platform/*`)
+- **Remember Me**: Login checkbox controls token storage — checked: `localStorage` (persists across sessions), unchecked: `sessionStorage` (cleared on browser close). Default: unchecked. `login()` in AuthContext accepts `rememberMe` param.
 - JWT validates against AdminUser (isAdmin) or PlatformAdmin (isPlatformAdmin)
-- `lib/api.ts` includes platform/tenant API methods (getTenants, createTenant, etc.)
+- `lib/api.ts` checks both `localStorage` and `sessionStorage` for token: `localStorage.getItem('token') || sessionStorage.getItem('token')` in all `getHeaders()` and upload methods
+- `logout()` clears both `localStorage` and `sessionStorage` token entries
 - Sidebar (`components/layout/Sidebar.tsx`) shows platform nav for platform admins, tenant nav (filtered by `enabledModules`) for tenant admins
 
 ## Pages
@@ -41,28 +43,30 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 - `/dashboard/products/[id]/edit` - Edit product (same form, pre-populated)
 - `/dashboard/pos` - Point of Sale (shift management, product search with barcode scan, split payments)
 - `/dashboard/orders` - Order management with status updates
-- `/dashboard/customers` - Customer list with search, status badges, suspend/reactivate actions
-- `/dashboard/rentals` - Active rentals with expandable details (wedding date/location/region, delivery modality, shipping/transport info, receipt upload) and checklist tracking (assign templates, check/uncheck dispatch & return items)
+- `/dashboard/customers` - Customer list with search, status badges, suspend/reactivate actions. Calls `GET /users` (admin endpoint with order/rental counts and total spent)
+- `/dashboard/rentals` - Active rentals with expandable details (wedding date/location/region, delivery modality, shipping/transport info, receipt upload), checklist tracking (assign templates, check/uncheck dispatch & return items), custom `RentalStatusDropdown` (color-coded icons per status, progress bar, forward-only transitions, past statuses disabled)
 - `/dashboard/rentals/checklists` - Checklist template CRUD with activate/deactivate toggle, proper form modal with multi-item support
 - `/dashboard/rentals/requests` - Pending rental requests
 - `/dashboard/flash-sales` - Flash sale CRUD
 - `/dashboard/analytics` - Recharts-based analytics (revenue bars, category/status/payment pies, growth line, daily orders area)
 - `/dashboard/referrals` - Referral program stats
 - `/dashboard/categories` - Category management
-- `/dashboard/cms` - Banners, pages, settings, Instagram posts (with IG API sync, pin/unpin, source badges)
+- `/dashboard/cms` - Banners, pages (RichTextEditor for EN/SW content), settings, Instagram posts (with IG API sync, configurable auto-sync interval, pin/unpin, source badges)
 - `/dashboard/shipping` - Shipping zones and rates
 - `/dashboard/reviews` - Review moderation
 - `/dashboard/recycle-bin` - Recycle bin with tabs: Products, Categories, Flash Sales, Checklists, Banners, Pages — restore soft-deleted items
 - `/dashboard/settings` - Profile edit, password change, 2FA toggle, appearance, notifications
 - `/dashboard/settings/payment-methods` - Payment Methods CRUD (name, code, uploaded+cropped icon, description, integration key/params, active toggle, sort order)
+- `/dashboard/settings/business-profile` - Business Profile with identity, branding, contact, **location** (map_latitude/map_longitude with validation + browser geolocation auto-detect + live map preview), social media, website settings
 - `/dashboard/profile` - Admin profile view/edit
 - `/dashboard/reports/rentals` - Rental reports (per-item rental count, cumulative income, rental history modal)
 - `/dashboard/inventory` - Inventory management (stock levels, low-stock alerts, transaction history, valuation, EditInventoryModal, AdjustStockModal)
 - `/dashboard/financials` - Financial management (Income Statement P&L, Expenses CRUD, Revenue vs Expenses chart, Expense Categories CRUD)
 - `/dashboard/users` - Admin users management (create, edit, toggle, unlock locked accounts, delete)
 - `/dashboard/users/roles` - Roles & Permissions management (RBAC — create custom roles, assign/remove permissions via matrix UI)
+- `/dashboard/audit-log` - Global audit trail log with filters (admin user, entity, action, date range, search), expandable JSON details, pagination, CSV export. 29 audit points across 8 services.
 - `/dashboard/newsletter` - Newsletter dashboard (stats cards, recent newsletters)
-- `/dashboard/newsletter/compose` - Compose newsletter (template type selector, HTML editor with preview, NEW_ARRIVALS auto-product fetch, save draft / send)
+- `/dashboard/newsletter/compose` - Compose newsletter (template type selector, RichTextEditor with Visual/HTML toggle + image upload + preview, NEW_ARRIVALS auto-product fetch, save draft / send)
 - `/dashboard/newsletter/sent` - Sent newsletters list with delivery stats
 - `/dashboard/newsletter/subscribers` - Subscriber list with search, pagination, stats bar
 - `/dashboard/newsletter/[id]` - Newsletter detail with delivery stats, failed deliveries table, resend button
@@ -78,6 +82,8 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 - `components/products/BarcodeLabel.tsx` - Barcode label preview (JsBarcode CODE128, product name, price in TZS)
 - `components/products/BarcodeModal.tsx` - Barcode PDF generation (jsPDF, 3×9 labels per A4, quantity selector, print dialog)
 - `components/products/Model3dUploader.tsx` - 3D model upload (drag-drop GLB/GLTF, max 25MB, live model-viewer preview, remove button)
+- `components/ui/RichTextEditor.tsx` - Rich text editor (react-quill-new) with Visual/HTML toggle, image upload, full formatting (headings, fonts, sizes, colors, lists, indent, alignment, links, images, video, blockquotes, code blocks). Used in: Newsletter compose, CMS Pages, Size Guides.
+- `components/ui/NavigationProgress.tsx` - YouTube-style gold progress bar at top of page during route changes. Added to dashboard and platform layouts via Suspense boundary.
 
 ## UI Foundation Components (all in `components/ui/`)
 - `Toast.tsx` / `contexts/ToastContext.tsx` - ToastProvider + useToast() hook (success/error/warning/info, top-right, auto-dismiss 4s)
@@ -93,7 +99,7 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 ## Data Flow
 - All pages fetch from NestJS API at `http://localhost:4000/api/v1`
 - API client in `lib/api.ts` (AdminApiClient class with methods for all modules)
-- Auth token from `localStorage('token')`, set via `adminApi.setToken(token)`
+- Auth token from `localStorage('token')` or `sessionStorage('token')` (depends on Remember Me), set via `adminApi.setToken(token)`
 - `.env.local` contains `NEXT_PUBLIC_API_URL=http://localhost:4000/api/v1`
 
 ## Assets
@@ -109,7 +115,9 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 - Always use `|| []` and `?? 0` fallbacks for API data that may be undefined
 - All delete actions are soft deletes (items go to recycle bin, can be restored)
 - Products fetched via `/products/admin` to include inactive items in admin view
-- NEVER use alert() or window.confirm() — always use useToast() and useConfirm()
+- NEVER use alert(), window.confirm(), or window.prompt() — always use useToast() for notifications, useConfirm() for destructive confirmations, and inline UI (select/input) for user input. All native browser dialogs have been eliminated project-wide.
+- **All action buttons** (toggle, approve, reject, suspend, delete, pin, sync) MUST have loading states: `disabled={loadingId === item.id}` + Loader2 spinner replacing the icon during API calls. Use a `useState<string | null>(null)` pattern per action type.
+- Navigation progress bar (gold #D4AF37) shows at top of page during route changes — added to both dashboard and platform layouts via `NavigationProgress` component
 - All forms use FormField wrapper for consistent label/error/hint layout
 - All modals use Modal component for consistent UX
 - All page headers use PageHeader component with breadcrumbs

@@ -44,6 +44,7 @@ import {
   Building2,
   MessageSquare,
   CreditCard,
+  ScrollText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -141,6 +142,7 @@ const navItems: NavItem[] = [
     children: [
       { label: 'Admin Users', href: '/dashboard/users', icon: UserCog },
       { label: 'Roles & Permissions', href: '/dashboard/users/roles', icon: Key },
+      { label: 'Audit Log', href: '/dashboard/audit-log', icon: ScrollText },
     ],
   },
   { label: 'Recycle Bin', href: '/dashboard/recycle-bin', icon: Trash2 },

@@ -231,12 +231,24 @@ function WhatsAppIcon({ className = '' }: { className?: string }) {
   );
 }
 
+function isValidCoordinate(lat: string, lng: string): boolean {
+  if (!lat || !lng) return false;
+  const latNum = Number(lat);
+  const lngNum = Number(lng);
+  if (isNaN(latNum) || isNaN(lngNum)) return false;
+  if (latNum < -90 || latNum > 90) return false;
+  if (lngNum < -180 || lngNum > 180) return false;
+  return true;
+}
+
 function ContactPage() {
   const { settings } = useSiteSettings();
   const [form, setForm] = useState({ name: '', email: '', phone: '', subject: '', message: '' });
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState('');
+
+  const hasMap = isValidCoordinate(settings.mapLatitude, settings.mapLongitude);
 
   const whatsappNumber = (settings.whatsappNumber || '').replace(/\D/g, '');
 
@@ -483,6 +495,24 @@ function ContactPage() {
             </div>
           </div>
         </div>
+
+        {/* Google Map — only shown when valid coordinates are configured */}
+        {hasMap && (
+          <div className="mt-12">
+            <h2 className="text-xl font-heading font-bold text-foreground mb-4 text-center">Find Us</h2>
+            <div className="rounded-2xl overflow-hidden border border-border">
+              <iframe
+                title="Business Location"
+                width="100%"
+                height="400"
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+                src={`https://www.google.com/maps?q=${settings.mapLatitude},${settings.mapLongitude}&z=15&output=embed`}
+                className="w-full border-0"
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

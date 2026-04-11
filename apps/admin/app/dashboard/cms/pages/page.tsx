@@ -1,12 +1,15 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import { Plus, Pencil, Trash2, Eye, EyeOff, X, FileText, Loader2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { adminApi } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+
+const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), { ssr: false });
 
 interface CMSPage {
   id: string;
@@ -132,17 +135,25 @@ export default function CMSPagesPage() {
             <input type="text" required value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })}
               className={`${inputClass} font-mono bg-[hsl(var(--muted))]`} />
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className={labelClass}>Content (English)</label>
-              <textarea rows={6} value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })}
-                className={`${inputClass} resize-y`} placeholder="Page content in English..." />
-            </div>
-            <div>
-              <label className={labelClass}>Content (Swahili)</label>
-              <textarea rows={6} value={form.contentSwahili} onChange={(e) => setForm({ ...form, contentSwahili: e.target.value })}
-                className={`${inputClass} resize-y`} placeholder="Maudhui ya ukurasa kwa Kiswahili..." />
-            </div>
+          <div>
+            <label className={labelClass}>Content (English)</label>
+            <RichTextEditor
+              value={form.content}
+              onChange={(val: string) => setForm({ ...form, content: val })}
+              placeholder="Page content in English..."
+              minHeight="250px"
+              enableImageUpload
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Content (Swahili)</label>
+            <RichTextEditor
+              value={form.contentSwahili}
+              onChange={(val: string) => setForm({ ...form, contentSwahili: val })}
+              placeholder="Maudhui ya ukurasa kwa Kiswahili..."
+              minHeight="250px"
+              enableImageUpload
+            />
           </div>
           <div className="flex items-center gap-3">
             <label className="relative inline-flex items-center cursor-pointer">

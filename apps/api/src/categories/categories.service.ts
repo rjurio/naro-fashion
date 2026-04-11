@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { AuditService } from '../audit/audit.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 
@@ -9,6 +10,7 @@ export class CategoriesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
+    private readonly auditService: AuditService,
   ) {}
 
   async findAll() {
@@ -50,13 +52,15 @@ export class CategoriesService {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '');
 
-    return this.prisma.category.create({
+    const cat = await this.prisma.category.create({
       data: {
         ...dto,
         slug,
         tenantId: this.tenantContext.requireId,
       },
     });
+    await this.auditService.log('CREATE', 'Category', cat.id, { name: dto.name });
+    return cat;
   }
 
   async update(id: string, dto: UpdateCategoryDto) {
@@ -76,10 +80,12 @@ export class CategoriesService {
       data.sizeGuideId = dto.sizeGuideId || null;
     }
 
-    return this.prisma.category.update({
+    const updated = await this.prisma.category.update({
       where: { id },
       data,
     });
+    await this.auditService.log('UPDATE', 'Category', id);
+    return updated;
   }
 
   async delete(id: string) {
@@ -92,6 +98,7 @@ export class CategoriesService {
       where: { id },
       data: { deletedAt: new Date(), isActive: false },
     });
+    await this.auditService.log('DELETE', 'Category', id);
     return { message: 'Category moved to recycle bin' };
   }
 
@@ -101,10 +108,12 @@ export class CategoriesService {
       throw new NotFoundException('Deleted category not found');
     }
 
-    return this.prisma.category.update({
+    const restored = await this.prisma.category.update({
       where: { id },
       data: { deletedAt: null, isActive: true },
     });
+    await this.auditService.log('RESTORE', 'Category', id);
+    return restored;
   }
 
   async findDeleted() {

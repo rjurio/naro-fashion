@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Building2, Palette, Phone, Share2, Globe, Save, Loader2, ArrowLeft } from 'lucide-react';
+import { Building2, Palette, Phone, Share2, Globe, Save, Loader2, ArrowLeft, MapPin, LocateFixed } from 'lucide-react';
 import Link from 'next/link';
 import Button from '@/components/ui/Button';
 import ImageUploadField from '@/components/ui/ImageUploadField';
@@ -49,6 +49,29 @@ const CONTACT_FIELDS: SettingField[] = [
   { key: 'contact_address_sw', label: 'Address (Swahili)', type: 'text', placeholder: '', swahili: true },
 ];
 
+const LOCATION_KEYS = ['map_latitude', 'map_longitude'];
+
+function validateLatitude(value: string): string | null {
+  if (!value.trim()) return null; // empty is allowed
+  const num = Number(value);
+  if (isNaN(num)) return 'Must be a valid number (e.g. -6.8000)';
+  if (num < -90 || num > 90) return 'Latitude must be between -90 and 90';
+  // Check reasonable precision (at least 2 decimal places for useful mapping)
+  const parts = value.split('.');
+  if (parts.length < 2 || parts[1].length < 2) return 'Enter at least 2 decimal places for accuracy (e.g. -6.80)';
+  return null;
+}
+
+function validateLongitude(value: string): string | null {
+  if (!value.trim()) return null;
+  const num = Number(value);
+  if (isNaN(num)) return 'Must be a valid number (e.g. 39.2833)';
+  if (num < -180 || num > 180) return 'Longitude must be between -180 and 180';
+  const parts = value.split('.');
+  if (parts.length < 2 || parts[1].length < 2) return 'Enter at least 2 decimal places for accuracy (e.g. 39.28)';
+  return null;
+}
+
 const SOCIAL_FIELDS: SettingField[] = [
   { key: 'instagram_url', label: 'Instagram URL', type: 'url', placeholder: 'https://www.instagram.com/youraccount/' },
   { key: 'facebook_url', label: 'Facebook URL', type: 'url', placeholder: 'https://www.facebook.com/yourpage' },
@@ -74,6 +97,44 @@ export default function BusinessProfilePage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'success' | 'error'>('success');
+  const [coordErrors, setCoordErrors] = useState<{ lat?: string; lng?: string }>({});
+  const [detectingLocation, setDetectingLocation] = useState(false);
+
+  const handleDetectLocation = () => {
+    if (!navigator.geolocation) {
+      setCoordErrors({ lat: 'Geolocation is not supported by your browser' });
+      return;
+    }
+    setDetectingLocation(true);
+    setCoordErrors({});
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = position.coords.latitude.toFixed(6);
+        const lng = position.coords.longitude.toFixed(6);
+        handleChange('map_latitude', lat);
+        handleChange('map_longitude', lng);
+        setDetectingLocation(false);
+        showMsg('Location detected successfully!', 'success');
+      },
+      (error) => {
+        setDetectingLocation(false);
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            setCoordErrors({ lat: 'Location access denied. Please enable location services in your browser/device settings and try again.' });
+            break;
+          case error.POSITION_UNAVAILABLE:
+            setCoordErrors({ lat: 'Location information is unavailable. Please enter coordinates manually.' });
+            break;
+          case error.TIMEOUT:
+            setCoordErrors({ lat: 'Location request timed out. Please try again or enter coordinates manually.' });
+            break;
+          default:
+            setCoordErrors({ lat: 'Unable to detect location. Please enter coordinates manually.' });
+        }
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -121,12 +182,36 @@ export default function BusinessProfilePage() {
   };
 
   const handleSave = async () => {
+    // Validate coordinates before saving
+    const latVal = values['map_latitude'] || '';
+    const lngVal = values['map_longitude'] || '';
+    const latErr = validateLatitude(latVal);
+    const lngErr = validateLongitude(lngVal);
+
+    if (latVal && !lngVal) {
+      setCoordErrors({ lng: 'Longitude is required when latitude is provided' });
+      showMsg('Please fix the location errors before saving.', 'error');
+      return;
+    }
+    if (!latVal && lngVal) {
+      setCoordErrors({ lat: 'Latitude is required when longitude is provided' });
+      showMsg('Please fix the location errors before saving.', 'error');
+      return;
+    }
+    if (latErr || lngErr) {
+      setCoordErrors({ lat: latErr || undefined, lng: lngErr || undefined });
+      showMsg('Please fix the location errors before saving.', 'error');
+      return;
+    }
+    setCoordErrors({});
+
     setSaving(true);
     try {
       const allKeys = [
         ...IDENTITY_FIELDS, ...CONTACT_FIELDS, ...SOCIAL_FIELDS, ...WEBSITE_FIELDS,
       ].map((f) => f.key);
       IMAGE_SETTINGS.forEach((img) => allKeys.push(img.key));
+      LOCATION_KEYS.forEach((k) => allKeys.push(k));
 
       const changedKeys = allKeys.filter((key) => {
         const val = values[key];
@@ -287,6 +372,94 @@ export default function BusinessProfilePage() {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* Business Location */}
+      <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+          <MapPin className="w-5 h-5 text-brand-gold" />
+          <h2 className="font-semibold text-[hsl(var(--foreground))]">Business Location</h2>
+        </div>
+        <div className="p-6 space-y-4">
+          <p className="text-sm text-[hsl(var(--muted-foreground))]">
+            Enter your business GPS coordinates to display a map on your Contact Us page.
+            You can find your coordinates from{' '}
+            <a href="https://www.google.com/maps" target="_blank" rel="noopener noreferrer" className="text-brand-gold underline hover:no-underline">
+              Google Maps
+            </a>{' '}
+            (right-click on your location &rarr; copy coordinates) or use{' '}
+            <a href="https://www.latlong.net/" target="_blank" rel="noopener noreferrer" className="text-brand-gold underline hover:no-underline">
+              latlong.net
+            </a>.
+          </p>
+          <button
+            type="button"
+            onClick={handleDetectLocation}
+            disabled={detectingLocation}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-gold text-brand-gold text-sm font-medium hover:bg-brand-gold hover:text-white transition-colors disabled:opacity-50"
+          >
+            {detectingLocation ? <Loader2 className="w-4 h-4 animate-spin" /> : <LocateFixed className="w-4 h-4" />}
+            {detectingLocation ? 'Detecting...' : 'Use My Current Location'}
+          </button>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">
+                Latitude
+              </label>
+              <input
+                type="text"
+                value={values['map_latitude'] || ''}
+                onChange={(e) => {
+                  handleChange('map_latitude', e.target.value);
+                  setCoordErrors((prev) => ({ ...prev, lat: undefined }));
+                }}
+                placeholder="-6.8000 (e.g. Dar es Salaam)"
+                className={`w-full rounded-lg border ${coordErrors.lat ? 'border-red-500' : 'border-[hsl(var(--border))]'} bg-[hsl(var(--card))] px-3 py-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold`}
+              />
+              {coordErrors.lat && (
+                <p className="text-xs text-red-500 mt-1">{coordErrors.lat}</p>
+              )}
+              <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">Range: -90 to 90. Negative = South, Positive = North</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">
+                Longitude
+              </label>
+              <input
+                type="text"
+                value={values['map_longitude'] || ''}
+                onChange={(e) => {
+                  handleChange('map_longitude', e.target.value);
+                  setCoordErrors((prev) => ({ ...prev, lng: undefined }));
+                }}
+                placeholder="39.2833 (e.g. Dar es Salaam)"
+                className={`w-full rounded-lg border ${coordErrors.lng ? 'border-red-500' : 'border-[hsl(var(--border))]'} bg-[hsl(var(--card))] px-3 py-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold`}
+              />
+              {coordErrors.lng && (
+                <p className="text-xs text-red-500 mt-1">{coordErrors.lng}</p>
+              )}
+              <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">Range: -180 to 180. Negative = West, Positive = East</p>
+            </div>
+          </div>
+          {/* Live map preview */}
+          {values['map_latitude'] && values['map_longitude'] &&
+           !validateLatitude(values['map_latitude']) && !validateLongitude(values['map_longitude']) && (
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-2">Map Preview</label>
+              <div className="rounded-lg overflow-hidden border border-[hsl(var(--border))]">
+                <iframe
+                  title="Business Location Preview"
+                  width="100%"
+                  height="250"
+                  style={{ border: 0 }}
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                  src={`https://www.google.com/maps?q=${values['map_latitude']},${values['map_longitude']}&z=15&output=embed`}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

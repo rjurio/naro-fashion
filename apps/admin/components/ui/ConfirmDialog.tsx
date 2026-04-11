@@ -61,7 +61,7 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
               </button>
             </div>
             <div className="flex gap-3 justify-end mt-6">
-              <button onClick={handleCancel} className="px-4 py-2 text-sm rounded-lg border border-border bg-background hover:bg-muted transition-colors">
+              <button onClick={handleCancel} className="px-4 py-2 text-sm rounded-lg border border-border bg-background hover:border-foreground hover:text-foreground transition-colors cursor-pointer">
                 Cancel
               </button>
               <button onClick={handleConfirm} className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${confirmBtnClass}`}>

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { AuditService } from '../audit/audit.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { QueryProductsDto, SortOrder } from './dto/query-products.dto';
@@ -21,6 +22,7 @@ export class ProductsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
+    private readonly auditService: AuditService,
   ) {}
 
   async findAll(query: QueryProductsDto) {
@@ -201,10 +203,12 @@ export class ProductsService {
       };
     }
 
-    return this.prisma.product.create({
+    const product = await this.prisma.product.create({
       data,
       include: productIncludes,
     });
+    await this.auditService.log('CREATE', 'Product', product.id, { name: dto.name });
+    return product;
   }
 
   async update(id: string, dto: UpdateProductDto) {
@@ -274,11 +278,13 @@ export class ProductsService {
       }
     }
 
-    return this.prisma.product.update({
+    const updated = await this.prisma.product.update({
       where: { id },
       data,
       include: productIncludes,
     });
+    await this.auditService.log('UPDATE', 'Product', id, { name: dto.name });
+    return updated;
   }
 
   async toggleActive(id: string) {
@@ -287,13 +293,15 @@ export class ProductsService {
       throw new NotFoundException('Product not found');
     }
 
-    return this.prisma.product.update({
+    const toggled = await this.prisma.product.update({
       where: { id },
       data: { isActive: !product.isActive },
       include: {
         category: { select: { id: true, name: true, slug: true } },
       },
     });
+    await this.auditService.log('TOGGLE_ACTIVE', 'Product', id);
+    return toggled;
   }
 
   async delete(id: string) {
@@ -306,6 +314,7 @@ export class ProductsService {
       where: { id },
       data: { deletedAt: new Date(), isActive: false },
     });
+    await this.auditService.log('DELETE', 'Product', id);
     return { message: 'Product moved to recycle bin' };
   }
 
@@ -315,10 +324,12 @@ export class ProductsService {
       throw new NotFoundException('Deleted product not found');
     }
 
-    return this.prisma.product.update({
+    const restored = await this.prisma.product.update({
       where: { id },
       data: { deletedAt: null },
     });
+    await this.auditService.log('RESTORE', 'Product', id);
+    return restored;
   }
 
   async findDeleted() {
@@ -338,6 +349,7 @@ export class ProductsService {
     }
 
     await this.prisma.product.delete({ where: { id } });
+    await this.auditService.log('PERMANENT_DELETE', 'Product', id);
     return { message: 'Product permanently deleted' };
   }
 

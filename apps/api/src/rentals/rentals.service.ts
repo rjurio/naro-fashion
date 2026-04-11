@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { AuditService } from '../audit/audit.service';
 import { CreateRentalDto } from './dto/create-rental.dto';
 import { UpdateRentalDto } from './dto/update-rental.dto';
 import { QueryRentalsDto } from './dto/query-rentals.dto';
@@ -16,6 +17,7 @@ export class RentalsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
+    private readonly auditService: AuditService,
   ) {}
 
   async create(userId: string, dto: CreateRentalDto) {
@@ -283,7 +285,7 @@ export class RentalsService {
       data.actualReturnDate = new Date();
     }
 
-    return this.prisma.rentalOrder.update({
+    const updated = await this.prisma.rentalOrder.update({
       where: { id },
       data,
       include: {
@@ -291,6 +293,8 @@ export class RentalsService {
         variant: { select: { id: true, name: true } },
       },
     });
+    await this.auditService.log('UPDATE_STATUS', 'Rental', id, { from: rental.status, to: status });
+    return updated;
   }
 
   async markReadyForPickup(id: string) {
@@ -301,10 +305,12 @@ export class RentalsService {
       throw new NotFoundException('Rental order not found');
     }
 
-    return this.prisma.rentalOrder.update({
+    const marked = await this.prisma.rentalOrder.update({
       where: { id },
       data: { isReadyForPickup: true },
     });
+    await this.auditService.log('MARK_READY', 'Rental', id);
+    return marked;
   }
 
   async getAvailability(

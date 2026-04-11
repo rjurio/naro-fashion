@@ -55,7 +55,7 @@ GitHub: https://github.com/rjurio/naro-fashion
   - `AdminUser` — tenant staff (SUPER_ADMIN, MANAGER, STAFF). Email globally unique. Login: `POST /auth/login`
   - `User` — customers, scoped per tenant. Email unique per tenant. Login: `POST /auth/login` with `X-Tenant-Id` header
 - JWT payload: `{ sub, email, tenantId?, isAdmin?, isPlatformAdmin?, role? }`
-- Token stored in `localStorage('token')`, auto-injected as Bearer header
+- Token storage depends on "Remember me" checkbox: checked → `localStorage` (persists), unchecked → `sessionStorage` (cleared on browser close). API client checks both.
 - Admin also supports cookies (httpOnly access_token + refresh_token)
 - Default credentials: Admin `admin@narofashion.co.tz` / `admin123`, Platform `platform@naro.co.tz` / `Admin123`
 
@@ -63,9 +63,10 @@ GitHub: https://github.com/rjurio/naro-fashion
 - `TenantContext` (request-scoped injectable in `apps/api/src/tenant/tenant.context.ts`) — provides `tenantId` to all services
 - `TenantInterceptor` (global) — extracts tenantId from JWT or `X-Tenant-Id` header, sets `request.tenantId`
 - All 26 tenant-scoped services use `this.tenantContext.requireId` in Prisma queries
+- **JWT fallback for @Public() endpoints**: Both `TenantContext` and `ModuleGuard` decode the JWT from the `Authorization` header when `req.user` is not populated (because `@Public()` skips `JwtAuthGuard`). This allows admin users to call public CMS/product/category endpoints with tenant scoping.
 - **Guards**:
   - `TenantGuard` — validates tenant is ACTIVE, attaches tenantId to request
-  - `ModuleGuard` — checks `@RequiresModule('moduleName')` decorator against TenantModule table (5-min cache)
+  - `ModuleGuard` — checks `@RequiresModule('moduleName')` decorator against TenantModule table (5-min cache). Decodes JWT payload directly from Authorization header for @Public() endpoints.
   - `PlatformAdminGuard` — restricts endpoints to platform admins only
 - **Core modules** (always enabled): products, categories, orders, cart, wishlist, cms, auth, users, shipping
 - **Optional modules** (gated): rentals, rental-checklists, rental-policies, pos, analytics, inventory, expenses, reports, flash-sales, referrals, events, promo-codes, id-verification
@@ -78,12 +79,13 @@ GitHub: https://github.com/rjurio/naro-fashion
 - **POS**: Point of Sale with shift management, barcode scan, split payments, layaway, exchanges
 - **Customer Events**: Wedding gallery showcases with media, approval workflow
 - **Soft Delete**: Major entities use `deletedAt` field → Recycle Bin in admin
-- **Instagram Feed**: Auto-syncs from Facebook Graph API. Cron every 6 hours
+- **Instagram Feed**: Auto-syncs from Facebook Graph API. Configurable sync interval via admin (OFF/hourly/3h/6h/12h/daily/weekly) stored in SiteSetting `instagram_sync_interval`. Dynamic cron via `SchedulerRegistry`. Default: every 6 hours
 - **Newsletter**: Full email campaign platform with subscriber management and delivery tracking
 - **Subscription Lifecycle**: Daily cron checks expiry → GRACE (7 days) → SUSPENDED. Reminders at 7, 3, 1 days before expiry
+- **Google Maps on Contact Page**: Configurable via Business Profile settings (`map_latitude`, `map_longitude` in SiteSetting). Admin can enter coordinates manually or auto-detect via browser geolocation. Storefront contact page shows embedded Google Map only when valid coordinates exist. Validation: lat -90..90, lng -180..180, minimum 2 decimal places, both required if either set.
 
 ## API Modules
-analytics, auth, cart, categories, cms, events, flash-sales, id-verification, newsletter, notifications, orders, payment-methods, payments, products, promo-codes, referrals, rental-checklists, rental-policies, rentals, reviews, scheduler, shipping, size-guides, upload, users, wishlist, permissions, roles, admin-users, expense-categories, expenses, inventory, reports, pos, tenants
+analytics, audit, auth, cart, categories, cms, events, flash-sales, id-verification, newsletter, notifications, orders, payment-methods, payments, products, promo-codes, referrals, rental-checklists, rental-policies, rentals, reviews, scheduler, shipping, size-guides, upload, users, wishlist, permissions, roles, admin-users, expense-categories, expenses, inventory, reports, pos, tenants
 
 ## Frontend Data Flow
 - Storefront: `apps/storefront/middleware.ts` resolves tenant by domain → sets `tenantId` cookie → API client reads cookie and injects `X-Tenant-Id` header
@@ -109,7 +111,10 @@ analytics, auth, cart, categories, cms, events, flash-sales, id-verification, ne
 - **VPS**: Vultr vhf-1c-2gb (1 vCPU, 2GB RAM, 64GB NVMe) in Frankfurt, DE — $12/mo
 - **Server IP**: `80.240.30.107`
 - **Domain**: `narofashion.co.tz` (storefront), `admin.narofashion.co.tz` (admin), `api.narofashion.co.tz` (API)
+- **Domain registrar**: Habari Node (habari.co.tz) — nameservers pointed to `ns1.vultr.com` / `ns2.vultr.com`
+- **DNS**: Managed via Vultr DNS (my.vultr.com/dns/) — A records for `@`, `www`, `admin`, `api` → `80.240.30.107`
 - **Stack**: Ubuntu 24.04, Node.js 22, PM2, Nginx, PostgreSQL 16, Let's Encrypt SSL
+- **Email**: Brevo SMTP (smtp-relay.brevo.com, 300/day free). Sender: `Naro Fashion <noreply@narofashion.co.tz>`. Domain authenticated with SPF, DKIM, DMARC.
 - **Process manager**: PM2 with `ecosystem.config.js` (standalone Next.js + NestJS dist)
 - **Next.js output**: `standalone` mode — apps run from `.next/standalone/apps/<name>/server.js`
 - **Static assets**: Must be copied to standalone dir after each build (`cp -r .next/static .../.next/static` + `cp -r public .../public`)
@@ -119,6 +124,23 @@ analytics, auth, cart, categories, cms, events, flash-sales, id-verification, ne
 - **CI/CD**: Push to `prod` branch triggers automatic deployment via GitHub Actions (`.github/workflows/deploy-prod.yml`). Secrets: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`
 - **Multer**: Must be explicitly installed (`pnpm add multer @types/multer --filter api`) — not auto-resolved from pnpm hoisting
 - **Deployment guide**: `docs/DEPLOYMENT_GUIDE.md` (with PDF)
+
+## Documentation
+All documentation lives in `docs/` with Markdown source and PDF/DOCX/PPTX exports:
+- `docs/SYSTEM_DESIGN.md` (.pdf, .docx) — Architecture, multi-tenancy, data flow, state machines, scalability
+- `docs/DATABASE_SCHEMA.md` (.pdf, .docx) — All 57+ models, 5 ER diagrams, indexes, unique constraints, enums
+- `docs/API_REFERENCE.md` (.pdf, .docx) — All 34 modules, 306 endpoints, curl examples, SDK samples
+- `docs/TECHNICAL_GUIDE.md` (.pdf, .docx) — Dev setup, coding patterns, recipes, troubleshooting
+- `docs/USER_GUIDE.md` (.pdf, .docx) — 3-part guide: customer, tenant admin, platform admin (with wireframes)
+- `docs/SECURITY.md` (.pdf, .docx) — Threat model, auth security, data isolation, compliance, incident response
+- `docs/OPERATIONS_RUNBOOK.md` (.pdf, .docx) — Health checks, deployment, incident response, backup/recovery
+- `docs/NARO_FASHION_PITCH_DECK.md` (.pdf, .pptx) — 30-slide marketing pitch deck (Marp format, Black+Gold theme)
+- `docs/DEPLOYMENT_GUIDE.md` (.pdf) — Production server setup and deployment procedures
+- `docs/INSTAGRAM_INTEGRATION_GUIDE.md` — Facebook Graph API integration
+- `docs/3d-product-view-plan.md` — Google model-viewer implementation plan
+- PDF conversion: `md-to-pdf <file>.md` (globally installed)
+- DOCX conversion: `pandoc <file>.md -o <file>.docx` (globally installed)
+- PPTX conversion: `marp <file>.md --pptx` (globally installed via @marp-team/marp-cli)
 
 ## Known Issues
 - Global Prisma CLI is v7.4.2 which has breaking changes — always use local Prisma v6.19.2 via `pnpm prisma` from `packages/database/`

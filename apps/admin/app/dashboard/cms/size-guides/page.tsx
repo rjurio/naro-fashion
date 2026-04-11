@@ -25,6 +25,7 @@ interface SizeGuide {
 export default function SizeGuidesPage() {
   const [guides, setGuides] = useState<SizeGuide[]>([]);
   const [loading, setLoading] = useState(true);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
 
@@ -50,19 +51,23 @@ export default function SizeGuidesPage() {
   };
 
   const handleSetDefault = async (g: SizeGuide) => {
+    setTogglingId(g.id);
     try {
       await adminApi.setDefaultSizeGuide(g.id);
       setGuides((prev) => prev.map((x) => ({ ...x, isDefault: x.id === g.id })));
       toast.success(`"${g.name}" set as default`);
     } catch { toast.error('Failed to set default'); }
+    finally { setTogglingId(null); }
   };
 
   const handleToggleActive = async (g: SizeGuide) => {
+    setTogglingId(g.id);
     try {
       const updated = await adminApi.toggleSizeGuideActive(g.id);
       setGuides((prev) => prev.map((x) => (x.id === g.id ? { ...x, isActive: updated.isActive } : x)));
       toast.success(updated.isActive ? 'Activated' : 'Deactivated');
     } catch { toast.error('Failed to toggle'); }
+    finally { setTogglingId(null); }
   };
 
   return (
@@ -119,18 +124,20 @@ export default function SizeGuidesPage() {
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={() => handleToggleActive(guide)}
-                  className="p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] transition-colors"
+                  disabled={togglingId === guide.id}
+                  className="p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   title={guide.isActive ? 'Deactivate' : 'Activate'}
                 >
-                  <Power className={`w-4 h-4 ${guide.isActive ? 'text-emerald-600' : 'text-[hsl(var(--muted-foreground))]'}`} />
+                  {togglingId === guide.id ? <Loader2 className="w-4 h-4 animate-spin text-brand-gold" /> : <Power className={`w-4 h-4 ${guide.isActive ? 'text-emerald-600' : 'text-[hsl(var(--muted-foreground))]'}`} />}
                 </button>
                 {!guide.isDefault && (
                   <button
                     onClick={() => handleSetDefault(guide)}
-                    className="p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] transition-colors"
+                    disabled={togglingId === guide.id}
+                    className="p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Set as default"
                   >
-                    <Star className="w-4 h-4 text-[hsl(var(--muted-foreground))] hover:text-brand-gold" />
+                    {togglingId === guide.id ? <Loader2 className="w-4 h-4 animate-spin text-brand-gold" /> : <Star className="w-4 h-4 text-[hsl(var(--muted-foreground))] hover:text-brand-gold" />}
                   </button>
                 )}
                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${

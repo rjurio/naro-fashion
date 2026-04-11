@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Plus, Pencil, Trash2, Eye, EyeOff,
-  Instagram, ExternalLink, Loader2, X, Heart, Pin, RefreshCw,
+  Instagram, ExternalLink, Loader2, X, Heart, Pin, RefreshCw, Settings, Clock,
 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { useToast } from '@/contexts/ToastContext';
@@ -46,8 +46,32 @@ export default function InstagramPostsPage() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [pinningId, setPinningId] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [syncInterval, setSyncInterval] = useState('EVERY_6_HOURS');
+  const [syncOptions, setSyncOptions] = useState<string[]>([]);
+  const [syncConfigSaving, setSyncConfigSaving] = useState(false);
   const toast = useToast();
   const confirm = useConfirm();
+
+  const INTERVAL_LABELS: Record<string, string> = {
+    OFF: 'Off (Manual only)',
+    EVERY_HOUR: 'Every hour',
+    EVERY_3_HOURS: 'Every 3 hours',
+    EVERY_6_HOURS: 'Every 6 hours',
+    EVERY_12_HOURS: 'Every 12 hours',
+    DAILY: 'Once a day',
+    WEEKLY: 'Once a week',
+  };
+
+  const fetchSyncConfig = useCallback(async () => {
+    try {
+      const config = await adminApi.getInstagramSyncConfig();
+      setSyncInterval(config.interval);
+      setSyncOptions(config.options);
+    } catch { /* ignore */ }
+  }, []);
 
   const fetchPosts = useCallback(async () => {
     try {
@@ -60,7 +84,7 @@ export default function InstagramPostsPage() {
     } finally { setLoading(false); }
   }, [toast]);
 
-  useEffect(() => { fetchPosts(); }, [fetchPosts]);
+  useEffect(() => { fetchPosts(); fetchSyncConfig(); }, [fetchPosts, fetchSyncConfig]);
 
   const openCreate = () => {
     setEditingId(null);
@@ -101,6 +125,19 @@ export default function InstagramPostsPage() {
     finally { setSaving(false); }
   };
 
+  const handleSyncIntervalChange = async (newInterval: string) => {
+    setSyncConfigSaving(true);
+    try {
+      await adminApi.updateInstagramSyncConfig(newInterval);
+      setSyncInterval(newInterval);
+      toast.success(`Auto-sync set to: ${INTERVAL_LABELS[newInterval] || newInterval}`);
+    } catch {
+      toast.error('Failed to update sync interval');
+    } finally {
+      setSyncConfigSaving(false);
+    }
+  };
+
   const handleSync = async () => {
     setSyncing(true);
     try {
@@ -115,21 +152,26 @@ export default function InstagramPostsPage() {
   };
 
   const handlePin = async (p: InstagramPost) => {
+    setPinningId(p.id);
     try {
       const updated = await adminApi.pinInstagramPost(p.id) as InstagramPost;
       setPosts((prev) => prev.map((x) => (x.id === p.id ? { ...x, ...updated } : x)));
       toast.success(updated.isPinned ? 'Post pinned' : 'Post unpinned');
     } catch {
       toast.error('Failed to toggle pin');
+    } finally {
+      setPinningId(null);
     }
   };
 
   const toggleActive = async (p: InstagramPost) => {
+    setTogglingId(p.id);
     try {
       const updated = await adminApi.updateInstagramPost(p.id, { isActive: !p.isActive });
       setPosts((prev) => prev.map((x) => (x.id === p.id ? { ...x, ...updated } : x)));
       toast.success(p.isActive ? 'Post deactivated' : 'Post activated');
     } catch { toast.error('Failed to toggle post'); }
+    finally { setTogglingId(null); }
   };
 
   const handleDelete = async (p: InstagramPost) => {
@@ -140,11 +182,13 @@ export default function InstagramPostsPage() {
       variant: 'danger',
     });
     if (!ok) return;
+    setDeletingId(p.id);
     try {
       await adminApi.deleteInstagramPost(p.id);
       setPosts((prev) => prev.filter((x) => x.id !== p.id));
       toast.success('Instagram post moved to recycle bin');
     } catch { toast.error('Failed to delete post'); }
+    finally { setDeletingId(null); }
   };
 
   const resolveImageUrl = (url: string) =>
@@ -172,6 +216,45 @@ export default function InstagramPostsPage() {
             <Plus className="w-4 h-4" />
             Add Post
           </Button>
+        </div>
+      </div>
+
+      {/* Auto-Sync Config */}
+      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-brand-gold/10">
+              <Clock className="w-5 h-5 text-brand-gold" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-[hsl(var(--card-foreground))]">Auto-Sync Schedule</h3>
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                Automatically refresh Instagram posts to keep images fresh
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <select
+              title="Instagram auto-sync interval"
+              value={syncInterval}
+              onChange={(e) => handleSyncIntervalChange(e.target.value)}
+              disabled={syncConfigSaving}
+              className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-sm text-[hsl(var(--foreground))] outline-none focus:ring-2 focus:ring-brand-gold/50 disabled:opacity-50"
+            >
+              {(syncOptions.length > 0 ? syncOptions : Object.keys(INTERVAL_LABELS)).map((opt) => (
+                <option key={opt} value={opt}>{INTERVAL_LABELS[opt] || opt}</option>
+              ))}
+            </select>
+            {syncConfigSaving && <Loader2 className="w-4 h-4 animate-spin text-brand-gold" />}
+            <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
+              syncInterval === 'OFF'
+                ? 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+                : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${syncInterval === 'OFF' ? 'bg-gray-400' : 'bg-emerald-500 animate-pulse'}`} />
+              {syncInterval === 'OFF' ? 'Disabled' : 'Active'}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -270,17 +353,17 @@ export default function InstagramPostsPage() {
                 )}
                 {/* Hover overlay with actions */}
                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-all duration-200 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-                  <button onClick={() => handlePin(post)} className="p-2 rounded-full bg-white/90 hover:bg-white transition-colors" title={post.isPinned ? 'Unpin' : 'Pin'}>
-                    <Pin className={`w-4 h-4 ${post.isPinned ? 'text-brand-gold fill-brand-gold' : 'text-gray-600'}`} />
+                  <button onClick={() => handlePin(post)} disabled={pinningId === post.id} className="p-2 rounded-full bg-white/90 hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed" title={post.isPinned ? 'Unpin' : 'Pin'}>
+                    {pinningId === post.id ? <Loader2 className="w-4 h-4 animate-spin text-brand-gold" /> : <Pin className={`w-4 h-4 ${post.isPinned ? 'text-brand-gold fill-brand-gold' : 'text-gray-600'}`} />}
                   </button>
-                  <button onClick={() => toggleActive(post)} className="p-2 rounded-full bg-white/90 hover:bg-white transition-colors" title={post.isActive ? 'Deactivate' : 'Activate'}>
-                    {post.isActive ? <Eye className="w-4 h-4 text-emerald-600" /> : <EyeOff className="w-4 h-4 text-gray-600" />}
+                  <button onClick={() => toggleActive(post)} disabled={togglingId === post.id} className="p-2 rounded-full bg-white/90 hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed" title={post.isActive ? 'Deactivate' : 'Activate'}>
+                    {togglingId === post.id ? <Loader2 className="w-4 h-4 animate-spin text-brand-gold" /> : post.isActive ? <Eye className="w-4 h-4 text-emerald-600" /> : <EyeOff className="w-4 h-4 text-gray-600" />}
                   </button>
                   <button onClick={() => openEdit(post)} className="p-2 rounded-full bg-white/90 hover:bg-white transition-colors" title="Edit">
                     <Pencil className="w-4 h-4 text-amber-600" />
                   </button>
-                  <button onClick={() => handleDelete(post)} className="p-2 rounded-full bg-white/90 hover:bg-white transition-colors" title="Delete">
-                    <Trash2 className="w-4 h-4 text-red-600" />
+                  <button onClick={() => handleDelete(post)} disabled={deletingId === post.id} className="p-2 rounded-full bg-white/90 hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed" title="Delete">
+                    {deletingId === post.id ? <Loader2 className="w-4 h-4 animate-spin text-red-600" /> : <Trash2 className="w-4 h-4 text-red-600" />}
                   </button>
                 </div>
                 {/* Top-left badges: status + source */}

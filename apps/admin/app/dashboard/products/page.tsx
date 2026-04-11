@@ -59,6 +59,7 @@ export default function ProductsPage() {
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [barcodeProduct, setBarcodeProduct] = useState<Product | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const fetchProducts = useCallback(async () => {
     const token = localStorage.getItem('token');
@@ -101,12 +102,15 @@ export default function ProductsPage() {
   };
 
   const handleToggleActive = async (id: string) => {
+    setTogglingId(id);
     try {
       const updated = await adminApi.toggleProduct(id);
       setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, ...updated, isActive: updated.isActive } : p)));
       toast(updated.isActive ? 'Product activated' : 'Product deactivated', 'success');
     } catch {
       toast('Failed to toggle product', 'error');
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -206,11 +210,12 @@ export default function ProductsPage() {
       render: (item) => (
         <div className="flex items-center gap-1">
           <button
-            className={`p-1.5 rounded-lg transition-colors ${item.isActive !== false ? 'text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+            className={`p-1.5 rounded-lg transition-colors disabled:opacity-50 ${item.isActive !== false ? 'text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
             title={item.isActive !== false ? 'Deactivate' : 'Activate'}
+            disabled={togglingId === item.id}
             onClick={() => handleToggleActive(item.id)}
           >
-            <Power className="w-4 h-4" />
+            {togglingId === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Power className="w-4 h-4" />}
           </button>
           <button
             className="p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] hover:text-brand-gold transition-colors"

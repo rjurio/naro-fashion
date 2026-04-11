@@ -3,6 +3,7 @@ import { IsString, IsOptional, IsEmail } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../notifications/email.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { AuditService } from '../audit/audit.service';
 
 export class CreateBannerDto {
   title: string;
@@ -126,6 +127,7 @@ export class CmsService {
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
     private readonly tenantContext: TenantContext,
+    private readonly auditService: AuditService,
   ) {}
 
   // --- Banners ---
@@ -145,13 +147,17 @@ export class CmsService {
   }
 
   async createBanner(dto: CreateBannerDto) {
-    return this.prisma.banner.create({ data: { ...dto, tenantId: this.tenantContext.requireId } as any });
+    const banner = await this.prisma.banner.create({ data: { ...dto, tenantId: this.tenantContext.requireId } as any });
+    await this.auditService.log('CREATE', 'Banner', banner.id, { title: dto.title });
+    return banner;
   }
 
   async updateBanner(id: string, dto: UpdateBannerDto) {
     const banner = await this.prisma.banner.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!banner || banner.deletedAt) throw new NotFoundException('Banner not found');
-    return this.prisma.banner.update({ where: { id }, data: dto });
+    const updated = await this.prisma.banner.update({ where: { id }, data: dto });
+    await this.auditService.log('UPDATE', 'Banner', id);
+    return updated;
   }
 
   async deleteBanner(id: string) {
@@ -161,6 +167,7 @@ export class CmsService {
       where: { id },
       data: { deletedAt: new Date(), isActive: false },
     });
+    await this.auditService.log('DELETE', 'Banner', id);
     return { message: 'Banner moved to recycle bin' };
   }
 
@@ -196,13 +203,17 @@ export class CmsService {
   }
 
   async createPage(dto: CreatePageDto) {
-    return this.prisma.page.create({ data: { ...dto, tenantId: this.tenantContext.requireId } });
+    const page = await this.prisma.page.create({ data: { ...dto, tenantId: this.tenantContext.requireId } });
+    await this.auditService.log('CREATE', 'Page', page.id, { title: dto.title });
+    return page;
   }
 
   async updatePage(id: string, dto: UpdatePageDto) {
     const page = await this.prisma.page.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!page || page.deletedAt) throw new NotFoundException('Page not found');
-    return this.prisma.page.update({ where: { id }, data: dto });
+    const updated = await this.prisma.page.update({ where: { id }, data: dto });
+    await this.auditService.log('UPDATE', 'Page', id);
+    return updated;
   }
 
   async deletePage(id: string) {
@@ -212,6 +223,7 @@ export class CmsService {
       where: { id },
       data: { deletedAt: new Date(), isPublished: false },
     });
+    await this.auditService.log('DELETE', 'Page', id);
     return { message: 'Page moved to recycle bin' };
   }
 
@@ -245,15 +257,19 @@ export class CmsService {
     const existing = await this.prisma.siteSetting.findFirst({
       where: { tenantId, key },
     });
+    let result;
     if (existing) {
-      return this.prisma.siteSetting.update({
+      result = await this.prisma.siteSetting.update({
         where: { id: existing.id },
         data: { value: dto.value },
       });
+    } else {
+      result = await this.prisma.siteSetting.create({
+        data: { key, value: dto.value, tenantId },
+      });
     }
-    return this.prisma.siteSetting.create({
-      data: { key, value: dto.value, tenantId },
-    });
+    await this.auditService.log('UPDATE', 'SiteSetting', undefined, { key });
+    return result;
   }
 
   async getBusinessProfile() {
@@ -282,7 +298,40 @@ export class CmsService {
       domain: map.get('business_domain') || 'narofashion.co.tz',
       currency: map.get('currency') || 'TZS',
       acceptedPaymentMethods: (map.get('accepted_payment_methods') || 'VISA,MASTERCARD,MPESA,TIGOPESA').split(',').map((s) => s.trim()).filter(Boolean),
+      mapLatitude: map.get('map_latitude') || '',
+      mapLongitude: map.get('map_longitude') || '',
     };
+  }
+
+  // --- Instagram Sync Config ---
+
+  async getInstagramSyncConfig() {
+    const tenantId = this.tenantContext.requireId;
+    const setting = await this.prisma.siteSetting.findFirst({
+      where: { tenantId, key: 'instagram_sync_interval' },
+    });
+    return {
+      interval: setting?.value || 'EVERY_6_HOURS',
+      options: ['OFF', 'EVERY_HOUR', 'EVERY_3_HOURS', 'EVERY_6_HOURS', 'EVERY_12_HOURS', 'DAILY', 'WEEKLY'],
+    };
+  }
+
+  async updateInstagramSyncConfig(interval: string) {
+    const tenantId = this.tenantContext.requireId;
+    const existing = await this.prisma.siteSetting.findFirst({
+      where: { tenantId, key: 'instagram_sync_interval' },
+    });
+    if (existing) {
+      await this.prisma.siteSetting.update({
+        where: { id: existing.id },
+        data: { value: interval },
+      });
+    } else {
+      await this.prisma.siteSetting.create({
+        data: { key: 'instagram_sync_interval', value: interval, type: 'string', tenantId },
+      });
+    }
+    return { interval, message: `Instagram sync interval set to ${interval}` };
   }
 
   // --- Hero Slides ---

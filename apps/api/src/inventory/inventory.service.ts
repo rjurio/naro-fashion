@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { AuditService } from '../audit/audit.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { UpdateInventorySettingsDto } from './dto/update-inventory-settings.dto';
 
@@ -15,6 +16,7 @@ export class InventoryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
+    private readonly auditService: AuditService,
   ) {}
 
   async getInventoryList(params: { status?: string; search?: string }) {
@@ -123,7 +125,7 @@ export class InventoryService {
     if (!product) throw new NotFoundException('Product not found');
     const unitCost = Number(product.purchasePrice ?? 0);
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // Update variant stock if specified, else update first variant
       if (dto.variantId) {
         await tx.productVariant.update({
@@ -155,5 +157,7 @@ export class InventoryService {
         },
       });
     });
+    await this.auditService.log('ADJUST_STOCK', 'Inventory', dto.productId, { type: dto.type, quantity: dto.quantity });
+    return result;
   }
 }

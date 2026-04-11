@@ -6,5 +6,6 @@ import { SchedulerService } from './scheduler.service';
 @Module({
   imports: [PrismaModule, CmsModule],
   providers: [SchedulerService],
+  exports: [SchedulerService],
 })
 export class SchedulerModule {}

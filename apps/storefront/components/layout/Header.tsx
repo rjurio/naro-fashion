@@ -176,7 +176,7 @@ export default function Header() {
                 ) : (
                   <button
                     onClick={() => setIsSearchOpen(true)}
-                    className="flex items-center justify-center h-10 w-10 rounded-lg hover:bg-muted transition-colors"
+                    className="flex items-center justify-center h-10 w-10 rounded-lg hover:bg-muted active:scale-95 transition-all"
                     aria-label="Search"
                   >
                     <Search className="h-5 w-5" />

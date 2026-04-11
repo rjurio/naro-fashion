@@ -19,7 +19,7 @@ interface User {
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, rememberMe?: boolean) => Promise<void>;
   platformLogin: (email: string, password: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
@@ -40,13 +40,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(profile);
     } catch {
       localStorage.removeItem('token');
+      sessionStorage.removeItem('token');
       adminApi.clearToken();
       setUser(null);
     }
   }, []);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
     if (token) {
       adminApi.setToken(token);
       fetchProfile().finally(() => setIsLoading(false));
@@ -55,11 +56,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [fetchProfile]);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string, rememberMe = false) => {
     const res = await adminApi.login(email, password);
     const token = res.access_token || res.accessToken || res.token;
     if (!token) throw new Error('No token received');
-    localStorage.setItem('token', token);
+    if (rememberMe) {
+      localStorage.setItem('token', token);
+    } else {
+      sessionStorage.setItem('token', token);
+    }
     adminApi.setToken(token);
     await fetchProfile();
   };
@@ -78,6 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     localStorage.removeItem('token');
+    sessionStorage.removeItem('token');
     adminApi.clearToken();
     setUser(null);
     if (user?.isPlatformAdmin) {

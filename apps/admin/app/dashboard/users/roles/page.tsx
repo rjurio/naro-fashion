@@ -216,7 +216,7 @@ export default function RolesPage() {
       <Modal isOpen={roleModal.open} onClose={() => setRoleModal({ open: false, role: null })} title={roleModal.role ? 'Edit Role' : 'Create Role'} size="sm"
         footer={
           <>
-            <button onClick={() => setRoleModal({ open: false, role: null })} className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors">Cancel</button>
+            <button onClick={() => setRoleModal({ open: false, role: null })} className="px-4 py-2 text-sm border border-border rounded-lg hover:border-foreground hover:text-foreground transition-colors cursor-pointer">Cancel</button>
             <button onClick={saveRole} disabled={roleSaving} className="px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors disabled:opacity-50">
               {roleSaving ? 'Saving...' : roleModal.role ? 'Save Changes' : 'Create Role'}
             </button>
@@ -242,7 +242,7 @@ export default function RolesPage() {
       <Modal isOpen={permModal.open} onClose={() => setPermModal({ open: false, role: null })} title={`Permissions: ${permModal.role?.name ?? ''}`} size="xl"
         footer={
           <>
-            <button onClick={() => setPermModal({ open: false, role: null })} className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors">Cancel</button>
+            <button onClick={() => setPermModal({ open: false, role: null })} className="px-4 py-2 text-sm border border-border rounded-lg hover:border-foreground hover:text-foreground transition-colors cursor-pointer">Cancel</button>
             <button onClick={savePermissions} disabled={permSaving} className="px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors disabled:opacity-50">
               {permSaving ? 'Saving...' : 'Save Permissions'}
             </button>

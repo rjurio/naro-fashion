@@ -80,12 +80,12 @@ export default function InstagramFeed() {
               href={post.postUrl || instagramUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="group relative aspect-square rounded-lg overflow-hidden bg-muted"
+              className="group relative aspect-square rounded-lg overflow-hidden bg-muted hover:shadow-lg transition-shadow duration-300"
             >
               <img
                 src={resolveImageUrl(post.imageUrl)}
                 alt={post.caption || 'Instagram post'}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
               />
 
               {/* Hover overlay */}
@@ -112,7 +112,7 @@ export default function InstagramFeed() {
             href={instagramUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-dark-800 to-dark-900 text-white px-6 py-3 text-sm font-medium hover:from-dark-700 hover:to-dark-800 transition-all shadow-md hover:shadow-lg"
+            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-dark-800 to-dark-900 text-white px-6 py-3 text-sm font-medium hover:from-dark-700 hover:to-dark-800 hover:scale-105 active:scale-[0.97] transition-all shadow-md hover:shadow-lg"
           >
             <Instagram className="h-5 w-5" />
             {t('home.followOnInstagram')}

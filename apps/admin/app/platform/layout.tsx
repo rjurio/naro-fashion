@@ -2,9 +2,10 @@
 
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { useEffect, Suspense } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import TopBar from '@/components/layout/TopBar';
+import NavigationProgress from '@/components/ui/NavigationProgress';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { ConfirmDialogProvider } from '@/components/ui/ConfirmDialog';
 import { useState } from 'react';
@@ -31,6 +32,9 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
   return (
     <ToastProvider>
       <ConfirmDialogProvider>
+        <Suspense fallback={null}>
+          <NavigationProgress />
+        </Suspense>
         <div className="flex h-screen overflow-hidden bg-[hsl(var(--content-bg))]">
           <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
           <div className="flex flex-col flex-1 overflow-hidden">

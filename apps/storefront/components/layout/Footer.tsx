@@ -201,7 +201,7 @@ export default function Footer() {
                   href={settings.facebookUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 transition-colors"
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 hover:scale-110 transition-all duration-200"
                   aria-label="Facebook"
                 >
                   <Facebook className="h-4 w-4" />
@@ -212,7 +212,7 @@ export default function Footer() {
                   href={settings.instagramUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 transition-colors"
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 hover:scale-110 transition-all duration-200"
                   aria-label="Instagram"
                 >
                   <Instagram className="h-4 w-4" />
@@ -223,7 +223,7 @@ export default function Footer() {
                   href={settings.twitterUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 transition-colors"
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-dark-400 hover:bg-gold-500 hover:scale-110 transition-all duration-200"
                   aria-label="Twitter"
                 >
                   <Twitter className="h-4 w-4" />
@@ -241,7 +241,7 @@ export default function Footer() {
               <ul className="space-y-2.5">
                 {shopLinks.map((link) => (
                   <li key={link.href}>
-                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 transition-colors">
+                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 hover:translate-x-1 transition-all inline-block">
                       {link.name}
                     </Link>
                   </li>
@@ -259,7 +259,7 @@ export default function Footer() {
               <ul className="space-y-2.5">
                 {categoryLinks.map((link) => (
                   <li key={link.href}>
-                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 transition-colors">
+                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 hover:translate-x-1 transition-all inline-block">
                       {link.name}
                     </Link>
                   </li>
@@ -277,7 +277,7 @@ export default function Footer() {
               <ul className="space-y-2.5">
                 {supportLinks.map((link) => (
                   <li key={link.href}>
-                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 transition-colors">
+                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 hover:translate-x-1 transition-all inline-block">
                       {link.name}
                     </Link>
                   </li>
@@ -295,7 +295,7 @@ export default function Footer() {
               <ul className="space-y-2.5">
                 {companyLinks.map((link) => (
                   <li key={link.href}>
-                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 transition-colors">
+                    <Link href={link.href} className="text-sm text-dark-200 hover:text-gold-500 hover:translate-x-1 transition-all inline-block">
                       {link.name}
                     </Link>
                   </li>

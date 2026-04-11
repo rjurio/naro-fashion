@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { AuditService } from '../audit/audit.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { QueryOrdersDto, AdminQueryOrdersDto } from './dto/query-orders.dto';
 import { Prisma } from '@prisma/client';
@@ -14,6 +15,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
+    private readonly auditService: AuditService,
   ) {}
 
   private generateOrderNumber(): string {
@@ -290,7 +292,7 @@ export class OrdersService {
       data.paymentStatus = 'CANCELLED';
     }
 
-    return this.prisma.order.update({
+    const updated = await this.prisma.order.update({
       where: { id },
       data,
       include: {
@@ -298,6 +300,8 @@ export class OrdersService {
         payments: true,
       },
     });
+    await this.auditService.log('UPDATE_STATUS', 'Order', id, { from: order.status, to: status });
+    return updated;
   }
 
   async getStats() {

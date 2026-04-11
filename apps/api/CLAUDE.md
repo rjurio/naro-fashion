@@ -10,14 +10,15 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - @nestjs/serve-static for serving uploaded files
 
 ## Multi-Tenancy
-- **TenantContext** (`src/tenant/tenant.context.ts`): Request-scoped injectable providing `tenantId`. Use `this.tenantContext.requireId` in all Prisma queries.
+- **TenantContext** (`src/tenant/tenant.context.ts`): Request-scoped injectable providing `tenantId`. Use `this.tenantContext.requireId` in all Prisma queries. Falls back to decoding JWT from `Authorization` header when `req.user` is not set (for `@Public()` endpoints).
 - **TenantInterceptor** (`src/tenant/tenant.interceptor.ts`): Global interceptor, extracts tenantId from JWT or `X-Tenant-Id` header.
 - **TenantGuard** (`src/auth/guards/tenant.guard.ts`): Validates tenant is ACTIVE.
-- **ModuleGuard** (`src/auth/guards/module.guard.ts`): Checks `@RequiresModule()` decorator against TenantModule table. 5-min cache per tenant.
+- **ModuleGuard** (`src/auth/guards/module.guard.ts`): Checks `@RequiresModule()` decorator against TenantModule table. 5-min cache per tenant. Decodes JWT payload from `Authorization` header for `@Public()` endpoints (uses Base64 decode, no external dependency).
 - **PlatformAdminGuard** (`src/auth/guards/platform-admin.guard.ts`): Restricts to platform admins.
 - **@RequiresModule()** (`src/auth/decorators/requires-module.decorator.ts`): Decorator for optional module controllers.
 - **TenantsModule** (`src/tenants/`): Full CRUD for tenants, subscriptions, billing, modules. Public resolve endpoint for storefront.
 - All 26 services inject TenantContext and scope queries with `tenantId`.
+- **IMPORTANT**: `@Public()` endpoints skip `JwtAuthGuard`, so `req.user` is never populated. Both `TenantContext` and `ModuleGuard` handle this by decoding the JWT from the Authorization header directly.
 - Do NOT import from `@naro/shared` in API services (ESM/CJS mismatch). Define constants locally.
 
 ## Authentication
@@ -33,7 +34,7 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 
 ## Modules (all fully implemented)
 - **auth** - Login, register, JWT access/refresh tokens, profile, password change, 2FA toggle, forgot/reset password, account lockout
-- **users** - User CRUD, addresses, suspend/activate
+- **users** - Customer-facing: profile CRUD, addresses CRUD. Admin: `GET /users?search=` (list all tenant customers with order/rental counts, total spent), `PATCH /users/:id/suspend`, `PATCH /users/:id/activate`
 - **products** - Full CRUD with variants, images, search, filtering, toggle active, soft delete/restore, admin listing (includes inactive), purchasePrice/minimumStock/supplier fields, `GET /products/by-id/:id` for edit page
 - **categories** - Nested category tree CRUD, soft delete/restore
 - **cart** - Add/update/remove items, merge guest cart, count
@@ -49,7 +50,7 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - **payment-methods** - DB-driven payment method CRUD (`PaymentMethod` model). 1 public endpoint (`GET /payment-methods` — active only), 7 admin endpoints (create, update, toggle-active, soft delete, restore, deleted list). Icon upload via `POST /upload/payment-icon` (2MB, JPEG/PNG/WebP/SVG → `uploads/payment-methods/`). Seeded: Visa, Mastercard, M-Pesa, Tigo Pesa, Airtel Money, Selcom Pesa, Halopesa.
 - **referrals** - Referral code tracking and stats
 - **id-verification** - National ID upload, admin approve/reject
-- **cms** - Banners (soft delete/restore), pages (soft delete/restore), site settings CRUD
+- **cms** - Banners (soft delete/restore), pages (soft delete/restore), site settings CRUD. `GET /cms/settings/business-profile` returns all business profile fields including `mapLatitude`, `mapLongitude` (from SiteSetting key-value store)
 - **analytics** - Dashboard stats, revenue charts (daily/weekly/monthly)
 - **notifications** - Email + SMS sending
 - **upload** - Local file upload. `POST /upload/product-image` → `uploads/products/` (JPEG/PNG/WebP, 5MB). `POST /upload/payment-icon` → `uploads/payment-methods/` (JPEG/PNG/WebP/SVG, 2MB). ServeStaticModule serves all `/uploads` paths.
@@ -58,6 +59,7 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - **permissions** - 40+ granular permissions, seeded on startup via OnModuleInit
 - **roles** - RBAC roles (SUPER_ADMIN, MANAGER, STAFF seeded as isSystem=true), custom roles CRUD, permission matrix
 - **admin-users** - Admin user CRUD, toggle active, unlock locked accounts, assign/remove roles, self-role protection
+- **audit** - Global audit trail system. `AuditService` (global, request-scoped, fire-and-forget) logs admin actions to `AdminActivityLog`. `AuditController`: `GET /audit` (paginated, filtered), `GET /audit/filters` (dropdown options), `GET /audit/export` (CSV download, max 10K rows). 29 log points across 8 services (products, categories, orders, rentals, CMS, flash-sales, roles, inventory). Usage: `await this.auditService.log('CREATE', 'Product', product.id, { name })`
 - **expense-categories** - DB-stored expense categories, CRUD, toggle, soft delete/restore; default categories seeded on startup
 - **expenses** - Business expense CRUD, period auto-computed from expenseDate as "YYYY-MM", summary by period
 - **inventory** - Products with stock levels, low-stock alerts, valuation, transaction history, stock adjustments (atomic via $transaction)

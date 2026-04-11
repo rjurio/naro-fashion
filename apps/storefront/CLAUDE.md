@@ -34,7 +34,7 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - `/account/wishlist` - Saved items
 - `/account/settings` - Profile settings
 - `/account/id-verification` - National ID upload for rentals
-- `/pages/[slug]` - CMS pages (about, contact, faq, terms, privacy, size-guide, shipping-info, returns-exchanges)
+- `/pages/[slug]` - CMS pages (about, contact, faq, terms, privacy, size-guide, shipping-info, returns-exchanges). Contact page includes embedded Google Map when valid coordinates are configured in Business Profile settings.
 - `/unsubscribe` - Token-based newsletter unsubscribe page
 
 ## Instagram Feed
@@ -71,7 +71,7 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - Copyright line renders dynamically: `© {new Date().getFullYear()} {settings.businessName}. All rights reserved.` — never hardcoded
 - Phone (`tel:`) and email (`mailto:`) links open native dialer/email app
 - Payment methods section fetches active methods from `GET /payment-methods` — shows uploaded icon image or text pill fallback
-- `SiteSettingsContext` provides `settings.businessName` (and all business profile fields) from CMS API
+- `SiteSettingsContext` provides `settings.businessName` (and all business profile fields including `mapLatitude`, `mapLongitude`) from CMS API
 
 ## Conventions
 - Use `@naro/shared` for types/enums, `@naro/ui` for shared components
@@ -80,5 +80,6 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - Brand colors: Black (#1A1A1A), Gold (#D4AF37)
 - Tailwind v4: No tailwind.config.ts — theme defined via @theme in globals.css, utilities via @utility
 - Mobile-first responsive design
+- **Interactive hover/press states**: Global `cursor: pointer` on `a`, `button`, `select`, `[role="button"]`. Buttons have `active:scale-[0.97]` press feedback. Cards have `hover:shadow-xl`. Footer links have `hover:translate-x-1`. Social icons have `hover:scale-110`. Header icon buttons have `active:scale-95`.
 - API product fields: use `basePrice` (not `price`), `compareAtPrice` (not `originalPrice`), `avgRating` (not `rating`), `images[0].url` (object, not string)
 - Image URL resolution: define `API_ORIGIN = NEXT_PUBLIC_API_URL.replace('/api/v1', '')` and prefix `/uploads/...` paths before use in `<img>` src — use a `resolveImg()` helper

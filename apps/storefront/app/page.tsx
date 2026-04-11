@@ -433,7 +433,7 @@ export default function HomePage() {
                 <Link
                   key={category.name}
                   href={category.href}
-                  className="group relative aspect-[3/4] rounded-2xl overflow-hidden bg-muted"
+                  className="group relative aspect-[3/4] rounded-2xl overflow-hidden bg-muted hover:shadow-xl transition-all duration-300"
                 >
                   <div className="absolute inset-0 bg-gradient-to-t from-[#1A1A1A]/80 via-[#1A1A1A]/20 to-transparent z-10" />
                   <div
@@ -492,7 +492,7 @@ export default function HomePage() {
             </div>
             <Link
               href="/products?sort=newest"
-              className="hidden sm:inline-flex items-center gap-2 text-sm font-medium text-gold-500 hover:text-gold-600 transition-colors"
+              className="hidden sm:inline-flex items-center gap-2 text-sm font-medium text-gold-500 hover:text-gold-600 hover:gap-3 transition-all"
             >
               View All <ArrowRight className="h-4 w-4" />
             </Link>
@@ -623,7 +623,7 @@ export default function HomePage() {
                 <Link
                   key={event.id}
                   href={`/events/${event.slug}`}
-                  className="group relative aspect-[3/4] rounded-2xl overflow-hidden bg-muted"
+                  className="group relative aspect-[3/4] rounded-2xl overflow-hidden bg-muted hover:shadow-xl transition-all duration-300"
                 >
                   <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent z-10" />
                   {event.coverImageUrl ? (

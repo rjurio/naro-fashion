@@ -25,11 +25,11 @@ export default function ProfilePage() {
     setSaving(true);
     setMessage('');
     try {
-      await adminApi.patch('/auth/me', { firstName, lastName, phone });
+      await adminApi.updateProfile({ firstName, lastName, phone });
       await refreshUser();
       setMessage('Profile updated successfully');
-    } catch {
-      setMessage('Failed to update profile');
+    } catch (err: any) {
+      setMessage(err?.message || 'Failed to update profile');
     } finally {
       setSaving(false);
     }

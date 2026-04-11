@@ -150,6 +150,17 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ===== Interactive element defaults ===== */
+a,
+button,
+[role="button"],
+input[type="submit"],
+input[type="button"],
+select,
+summary {
+  cursor: pointer;
+}
+
 /* ===== Utility classes ===== */
 @utility scrollbar-hide {
   -ms-overflow-style: none;

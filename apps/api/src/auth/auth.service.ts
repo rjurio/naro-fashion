@@ -1,6 +1,7 @@
 import {
   Injectable,
   ConflictException,
+  NotFoundException,
   UnauthorizedException,
   Logger,
 } from '@nestjs/common';
@@ -299,20 +300,26 @@ export class AuthService {
     data: { firstName?: string; lastName?: string; phone?: string },
     isAdmin?: boolean,
   ) {
+    const updateData: any = {};
+    if (data.firstName !== undefined) updateData.firstName = data.firstName;
+    if (data.lastName !== undefined) updateData.lastName = data.lastName;
+    if (data.phone !== undefined) updateData.phone = data.phone || null;
+
     if (isAdmin) {
       const admin = await this.prisma.adminUser.findUnique({ where: { id: userId } });
       if (admin) {
         return this.prisma.adminUser.update({
           where: { id: userId },
-          data: { firstName: data.firstName, lastName: data.lastName, phone: data.phone },
+          data: updateData,
           select: { id: true, email: true, firstName: true, lastName: true, phone: true, role: true },
         });
       }
+      throw new NotFoundException('Admin user not found');
     }
 
     return this.prisma.user.update({
       where: { id: userId },
-      data: { firstName: data.firstName, lastName: data.lastName, phone: data.phone },
+      data: updateData,
       select: { id: true, email: true, firstName: true, lastName: true, phone: true },
     });
   }

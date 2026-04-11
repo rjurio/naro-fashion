@@ -26,6 +26,8 @@ export interface BusinessProfile {
   domain: string;
   currency: string;
   acceptedPaymentMethods: string[];
+  mapLatitude: string;
+  mapLongitude: string;
 }
 
 const DEFAULTS: BusinessProfile = {
@@ -49,6 +51,8 @@ const DEFAULTS: BusinessProfile = {
   domain: 'narofashion.co.tz',
   currency: 'TZS',
   acceptedPaymentMethods: ['VISA', 'MASTERCARD', 'MPESA', 'TIGOPESA'],
+  mapLatitude: '',
+  mapLongitude: '',
 };
 
 function resolveUrl(url: string): string {

@@ -16,6 +16,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -25,7 +26,7 @@ export default function LoginPage() {
     setError('');
 
     try {
-      await login(email, password);
+      await login(email, password, rememberMe);
       router.push('/dashboard');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Invalid email or password';
@@ -136,6 +137,8 @@ export default function LoginPage() {
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
                   className="w-4 h-4 rounded border-[hsl(var(--border))] text-brand-gold focus:ring-brand-gold"
                 />
                 <span className="text-sm text-[hsl(var(--muted-foreground))]">Remember me</span>

@@ -62,6 +62,7 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [actionId, setActionId] = useState<string | null>(null);
 
   const fetchCustomers = useCallback(async () => {
     try {
@@ -81,22 +82,28 @@ export default function CustomersPage() {
   const handleSuspend = async (customer: Customer) => {
     const ok = await confirm({ title: 'Suspend Customer', message: `Suspend ${customer.firstName || customer.name}? They will not be able to log in.`, confirmLabel: 'Suspend', variant: 'warning' });
     if (!ok) return;
+    setActionId(customer.id);
     try {
       await adminApi.suspendUser(customer.id);
       toast.success('Customer suspended');
       fetchCustomers();
     } catch {
       toast.error('Failed to suspend customer');
+    } finally {
+      setActionId(null);
     }
   };
 
   const handleActivate = async (customer: Customer) => {
+    setActionId(customer.id);
     try {
       await adminApi.activateUser(customer.id);
       toast.success('Customer reactivated');
       fetchCustomers();
     } catch {
       toast.error('Failed to reactivate customer');
+    } finally {
+      setActionId(null);
     }
   };
 
@@ -124,17 +131,19 @@ export default function CustomersPage() {
             <button
               onClick={() => handleSuspend(customer)}
               title="Suspend customer"
-              className="p-1.5 rounded hover:bg-amber-100 dark:hover:bg-amber-900 transition-colors text-amber-600"
+              disabled={actionId === customer.id}
+              className="p-1.5 rounded hover:bg-amber-100 dark:hover:bg-amber-900 transition-colors text-amber-600 disabled:opacity-50"
             >
-              <UserX className="w-4 h-4" />
+              {actionId === customer.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserX className="w-4 h-4" />}
             </button>
           ) : (
             <button
               onClick={() => handleActivate(customer)}
               title="Reactivate customer"
-              className="p-1.5 rounded hover:bg-green-100 dark:hover:bg-green-900 transition-colors text-green-600"
+              disabled={actionId === customer.id}
+              className="p-1.5 rounded hover:bg-green-100 dark:hover:bg-green-900 transition-colors text-green-600 disabled:opacity-50"
             >
-              <UserCheck className="w-4 h-4" />
+              {actionId === customer.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
             </button>
           )}
         </div>

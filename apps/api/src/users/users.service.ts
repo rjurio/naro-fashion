@@ -12,6 +12,94 @@ export class UsersService {
     private readonly tenantContext: TenantContext,
   ) {}
 
+  // ---- Admin endpoints ----
+
+  async findAllForAdmin(search?: string) {
+    const tenantId = this.tenantContext.requireId;
+    const where: any = { tenantId };
+
+    if (search) {
+      where.OR = [
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search } },
+      ];
+    }
+
+    const users = await this.prisma.user.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        isActive: true,
+        isVerified: true,
+        createdAt: true,
+        _count: { select: { orders: true, rentalOrders: true } },
+      },
+    });
+
+    // Compute totals
+    const userIds = users.map((u) => u.id);
+    const orderTotals = await this.prisma.order.groupBy({
+      by: ['userId'],
+      where: { userId: { in: userIds }, tenantId },
+      _sum: { total: true },
+    });
+    const totalMap = new Map(orderTotals.map((o) => [o.userId, Number(o._sum.total ?? 0)]));
+
+    return users.map((u) => {
+      const spent = totalMap.get(u.id) ?? 0;
+      return {
+        id: u.id,
+        email: u.email ?? '',
+        firstName: u.firstName ?? '',
+        lastName: u.lastName ?? '',
+        name: `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() || u.email || 'Unknown',
+        phone: u.phone ?? '',
+        isActive: u.isActive,
+        isVerified: u.isVerified,
+        orders: u._count.orders,
+        rentals: u._count.rentalOrders,
+        totalSpent: spent.toLocaleString('en-TZ', { style: 'currency', currency: 'TZS', minimumFractionDigits: 0 }),
+        joined: u.createdAt.toISOString().split('T')[0],
+        status: !u.isActive ? 'Suspended' : 'Active',
+      };
+    });
+  }
+
+  async suspendUser(userId: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, tenantId: this.tenantContext.requireId },
+    });
+    if (!user) throw new NotFoundException('Customer not found');
+
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { isActive: false },
+      select: { id: true, isActive: true },
+    });
+  }
+
+  async activateUser(userId: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, tenantId: this.tenantContext.requireId },
+    });
+    if (!user) throw new NotFoundException('Customer not found');
+
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { isActive: true },
+      select: { id: true, isActive: true },
+    });
+  }
+
+  // ---- Customer-facing endpoints ----
+
   async getProfile(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId, tenantId: this.tenantContext.requireId },

@@ -43,6 +43,7 @@ import { NewsletterModule } from './newsletter/newsletter.module';
 import { SizeGuidesModule } from './size-guides/size-guides.module';
 import { PaymentMethodsModule } from './payment-methods/payment-methods.module';
 import { TenantsModule } from './tenants/tenants.module';
+import { AuditModule } from './audit/audit.module';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { TenantsModule } from './tenants/tenants.module';
     }),
     PrismaModule,
     TenantModule,
+    AuditModule,
     AuthModule,
     UsersModule,
     ProductsModule,

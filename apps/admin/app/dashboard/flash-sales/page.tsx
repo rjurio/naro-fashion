@@ -16,6 +16,8 @@ import Button from '@/components/ui/Button';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import { adminApi } from '@/lib/api';
+import { useToast } from '@/contexts/ToastContext';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
 
 interface FlashSaleProduct {
   [key: string]: string | number;
@@ -42,6 +44,8 @@ const statusStyles: Record<string, string> = {
 };
 
 export default function FlashSalesPage() {
+  const toast = useToast();
+  const confirm = useConfirm();
   const [flashSales, setFlashSales] = useState<FlashSale[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -120,12 +124,14 @@ export default function FlashSalesPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this flash sale?')) return;
+    const ok = await confirm({ title: 'Delete Flash Sale', message: 'Move this flash sale to recycle bin?', confirmLabel: 'Delete', variant: 'danger' });
+    if (!ok) return;
     try {
       await adminApi.deleteFlashSale(id);
       setFlashSales((prev) => prev.filter((s) => s.id !== id));
-    } catch (err) {
-      console.error('Failed to delete flash sale:', err);
+      toast.success('Flash sale deleted');
+    } catch {
+      toast.error('Failed to delete flash sale');
     }
   };
 

@@ -1,12 +1,26 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Cron, SchedulerRegistry } from '@nestjs/schedule';
+import { CronJob } from 'cron';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { InstagramService } from '../cms/instagram.service';
 
+/** Mapping from admin-friendly interval keys to cron expressions */
+export const INSTAGRAM_SYNC_INTERVALS: Record<string, string> = {
+  OFF: '',
+  EVERY_HOUR: '0 * * * *',
+  EVERY_3_HOURS: '0 */3 * * *',
+  EVERY_6_HOURS: '0 */6 * * *',
+  EVERY_12_HOURS: '0 */12 * * *',
+  DAILY: '0 0 * * *',
+  WEEKLY: '0 0 * * 0',
+};
+
+const IG_SYNC_JOB_NAME = 'instagram-sync-dynamic';
+
 @Injectable()
-export class SchedulerService {
+export class SchedulerService implements OnModuleInit {
   private readonly logger = new Logger(SchedulerService.name);
 
   constructor(
@@ -14,7 +28,42 @@ export class SchedulerService {
     private readonly notifications: NotificationsService,
     private readonly configService: ConfigService,
     private readonly instagramService: InstagramService,
+    private readonly schedulerRegistry: SchedulerRegistry,
   ) {}
+
+  async onModuleInit() {
+    await this.initInstagramSyncCron();
+  }
+
+  /** Read the configured interval from SiteSetting and register the dynamic cron job */
+  async initInstagramSyncCron() {
+    const setting = await this.prisma.siteSetting.findFirst({
+      where: { key: 'instagram_sync_interval' },
+    });
+    const interval = setting?.value || 'EVERY_6_HOURS';
+    this.registerInstagramSyncCron(interval);
+  }
+
+  /** Register (or re-register) the Instagram sync cron job with the given interval key */
+  registerInstagramSyncCron(interval: string) {
+    // Remove existing job if present
+    try {
+      this.schedulerRegistry.deleteCronJob(IG_SYNC_JOB_NAME);
+    } catch {
+      // Job didn't exist yet — that's fine
+    }
+
+    const cronExpr = INSTAGRAM_SYNC_INTERVALS[interval];
+    if (!cronExpr) {
+      this.logger.log(`Instagram auto-sync is OFF`);
+      return;
+    }
+
+    const job = new CronJob(cronExpr, () => this.handleInstagramSync());
+    this.schedulerRegistry.addCronJob(IG_SYNC_JOB_NAME, job);
+    job.start();
+    this.logger.log(`Instagram auto-sync registered: ${interval} (${cronExpr})`);
+  }
 
   /** Helper to get the admin notification email from env or first super-admin. */
   private async getAdminContact(): Promise<{ email: string; phone: string }> {
@@ -440,8 +489,7 @@ export class SchedulerService {
     }
   }
 
-  // --- Instagram sync: every 6 hours ---
-  @Cron('0 */6 * * *', { name: 'instagram-sync' })
+  // --- Instagram sync (dynamic interval, configured via SiteSetting) ---
   async handleInstagramSync() {
     this.logger.log('Running Instagram post sync...');
     try {

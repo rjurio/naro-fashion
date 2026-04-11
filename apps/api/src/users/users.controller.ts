@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
@@ -17,6 +18,25 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  // ---- Admin endpoints (must be above /profile to avoid route conflicts) ----
+
+  @Get()
+  findAll(@Query('search') search?: string) {
+    return this.usersService.findAllForAdmin(search);
+  }
+
+  @Patch(':id/suspend')
+  suspend(@Param('id') id: string) {
+    return this.usersService.suspendUser(id);
+  }
+
+  @Patch(':id/activate')
+  activate(@Param('id') id: string) {
+    return this.usersService.activateUser(id);
+  }
+
+  // ---- Customer-facing endpoints ----
 
   @Get('profile')
   getProfile(@CurrentUser('id') userId: string) {

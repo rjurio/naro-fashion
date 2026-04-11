@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { X, Play, Trash2, Clock } from 'lucide-react';
 import adminApi from '../../../../lib/api';
 import { useToast } from '@/contexts/ToastContext';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
 
 interface Props {
   onClose: () => void;
@@ -12,6 +13,7 @@ interface Props {
 
 export default function HeldSalesModal({ onClose, onResume }: Props) {
   const toast = useToast();
+  const confirm = useConfirm();
   const [heldSales, setHeldSales] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -40,10 +42,12 @@ export default function HeldSalesModal({ onClose, onResume }: Props) {
   };
 
   const handleDiscard = async (id: string) => {
-    if (!confirm('Discard this held sale?')) return;
+    const ok = await confirm({ title: 'Discard Held Sale', message: 'This sale will be permanently removed. Continue?', confirmLabel: 'Discard', variant: 'danger' });
+    if (!ok) return;
     try {
       await adminApi.posDiscardHeldSale(id);
       setHeldSales((prev) => prev.filter((s) => s.id !== id));
+      toast.success('Held sale discarded');
     } catch (err: any) {
       toast.error(err.message || 'Failed to discard');
     }

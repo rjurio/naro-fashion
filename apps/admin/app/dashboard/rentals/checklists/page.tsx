@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useToast } from '@/contexts/ToastContext';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { Plus, ClipboardList, CheckCircle2, Edit2, Trash2, Loader2, X, GripVertical, Power } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { adminApi } from '@/lib/api';
@@ -48,6 +49,7 @@ const emptyForm: TemplateForm = {
 
 export default function ChecklistsPage() {
   const toast = useToast();
+  const confirm = useConfirm();
   const [checklists, setChecklists] = useState<ChecklistTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedType, setSelectedType] = useState<'ALL' | 'DISPATCH' | 'RETURN'>('ALL');
@@ -56,6 +58,7 @@ export default function ChecklistsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<TemplateForm>({ ...emptyForm, items: [{ label: '', labelSwahili: '' }] });
   const [saving, setSaving] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -77,21 +80,26 @@ export default function ChecklistsPage() {
   }, []);
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this checklist template?')) return;
+    const ok = await confirm({ title: 'Delete Template', message: 'Move this checklist template to recycle bin?', confirmLabel: 'Delete', variant: 'danger' });
+    if (!ok) return;
     try {
       await adminApi.deleteChecklistTemplate(id);
       setChecklists((prev) => prev.filter((c) => c.id !== id));
-    } catch (err) {
-      console.error('Failed to delete checklist:', err);
+      toast.success('Template deleted');
+    } catch {
+      toast.error('Failed to delete template');
     }
   };
 
   const handleToggleActive = async (id: string) => {
+    setTogglingId(id);
     try {
       const updated = await adminApi.toggleChecklistTemplate(id);
       setChecklists((prev) => prev.map((c) => (c.id === id ? updated : c)));
     } catch (err) {
       console.error('Failed to toggle template:', err);
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -287,14 +295,15 @@ export default function ChecklistsPage() {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={(e) => { e.stopPropagation(); handleToggleActive(checklist.id); }}
+                      disabled={togglingId === checklist.id}
                       title={checklist.isActive ? 'Deactivate' : 'Activate'}
-                      className={`p-2 rounded-lg transition-colors ${
+                      className={`p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                         checklist.isActive
                           ? 'hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400'
                           : 'hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 dark:text-gray-600'
                       }`}
                     >
-                      <Power className="w-4 h-4" />
+                      {togglingId === checklist.id ? <Loader2 className="w-4 h-4 animate-spin text-brand-gold" /> : <Power className="w-4 h-4" />}
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); openEdit(checklist); }}
@@ -486,21 +495,30 @@ export default function ChecklistsPage() {
                 </div>
 
                 {/* Bulk Add */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const count = parseInt(prompt('How many items to add?') || '0', 10);
-                    if (count > 0 && count <= 20) {
-                      setForm((f) => ({
-                        ...f,
-                        items: [...f.items, ...Array.from({ length: count }, () => ({ label: '', labelSwahili: '' }))],
-                      }));
-                    }
-                  }}
-                  className="mt-3 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] underline"
-                >
-                  Add multiple items at once
-                </button>
+                <div className="mt-3 flex items-center gap-2">
+                  <span className="text-xs text-[hsl(var(--muted-foreground))]">Add</span>
+                  <select
+                    title="Number of items to add"
+                    onChange={(e) => {
+                      const count = parseInt(e.target.value, 10);
+                      if (count > 0) {
+                        setForm((f) => ({
+                          ...f,
+                          items: [...f.items, ...Array.from({ length: count }, () => ({ label: '', labelSwahili: '' }))],
+                        }));
+                      }
+                      e.target.value = '';
+                    }}
+                    defaultValue=""
+                    className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1 text-xs text-[hsl(var(--foreground))] focus:outline-none focus:ring-1 focus:ring-brand-gold"
+                  >
+                    <option value="" disabled>select...</option>
+                    {[2, 3, 5, 8, 10, 15, 20].map((n) => (
+                      <option key={n} value={n}>{n} items</option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-[hsl(var(--muted-foreground))]">at once</span>
+                </div>
               </div>
             </div>
 

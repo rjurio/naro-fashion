@@ -76,11 +76,11 @@ export default function AdminSettingsPage() {
   const handleSaveProfile = async () => {
     setSaving(true);
     try {
-      await adminApi.patch('/auth/me', { firstName, lastName });
+      await adminApi.updateProfile({ firstName, lastName });
       await refreshUser();
       showMsg('Profile updated successfully.', 'success');
-    } catch {
-      showMsg('Failed to update profile.', 'error');
+    } catch (err: any) {
+      showMsg(err?.message || 'Failed to update profile.', 'error');
     } finally {
       setSaving(false);
     }

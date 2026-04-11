@@ -1,10 +1,13 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRef } from 'react';
 import {
   Search, CalendarClock, AlertTriangle, ClipboardCheck, Loader2,
   ChevronDown, ChevronUp, CheckCircle2, Circle, ClipboardList, Plus,
   MapPin, Truck, Calendar, Clock, Upload, FileText, Package,
+  ShieldCheck, CreditCard, Wallet, PackageCheck, Send, RotateCcw, Eye, Lock,
+  ArrowRight,
 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { adminApi } from '@/lib/api';
@@ -394,6 +397,136 @@ function RentalDetailsSection({ rental, onUpdate }: { rental: Rental; onUpdate: 
   );
 }
 
+const STATUS_META: Record<string, { icon: React.ElementType; color: string; bg: string; dot: string; label: string }> = {
+  PENDING_ID_VERIFICATION: { icon: ShieldCheck, color: 'text-amber-700 dark:text-amber-400', bg: 'bg-amber-50 dark:bg-amber-900/20', dot: 'bg-amber-500', label: 'Pending ID Verification' },
+  ID_VERIFIED:             { icon: CheckCircle2, color: 'text-blue-700 dark:text-blue-400', bg: 'bg-blue-50 dark:bg-blue-900/20', dot: 'bg-blue-500', label: 'ID Verified' },
+  DOWN_PAYMENT_PAID:       { icon: CreditCard, color: 'text-indigo-700 dark:text-indigo-400', bg: 'bg-indigo-50 dark:bg-indigo-900/20', dot: 'bg-indigo-500', label: 'Down Payment Paid' },
+  FULLY_PAID:              { icon: Wallet, color: 'text-teal-700 dark:text-teal-400', bg: 'bg-teal-50 dark:bg-teal-900/20', dot: 'bg-teal-500', label: 'Fully Paid' },
+  READY_FOR_PICKUP:        { icon: PackageCheck, color: 'text-cyan-700 dark:text-cyan-400', bg: 'bg-cyan-50 dark:bg-cyan-900/20', dot: 'bg-cyan-500', label: 'Ready For Pickup' },
+  ITEM_DISPATCHED:         { icon: Send, color: 'text-orange-700 dark:text-orange-400', bg: 'bg-orange-50 dark:bg-orange-900/20', dot: 'bg-orange-500', label: 'Item Dispatched' },
+  ACTIVE:                  { icon: CalendarClock, color: 'text-emerald-700 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-900/20', dot: 'bg-emerald-500', label: 'Active' },
+  RETURNED:                { icon: RotateCcw, color: 'text-slate-700 dark:text-slate-400', bg: 'bg-slate-100 dark:bg-slate-800/40', dot: 'bg-slate-500', label: 'Returned' },
+  INSPECTION:              { icon: Eye, color: 'text-purple-700 dark:text-purple-400', bg: 'bg-purple-50 dark:bg-purple-900/20', dot: 'bg-purple-500', label: 'Inspection' },
+  CLOSED:                  { icon: Lock, color: 'text-gray-500 dark:text-gray-500', bg: 'bg-gray-100 dark:bg-gray-800/40', dot: 'bg-gray-400', label: 'Closed' },
+};
+
+const STATUS_WORKFLOW_ORDER = [
+  'PENDING_ID_VERIFICATION', 'ID_VERIFIED', 'DOWN_PAYMENT_PAID', 'FULLY_PAID',
+  'READY_FOR_PICKUP', 'ITEM_DISPATCHED', 'ACTIVE', 'RETURNED', 'INSPECTION', 'CLOSED',
+];
+
+function RentalStatusDropdown({ status, onStatusChange }: { status: string; onStatusChange: (s: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const current = STATUS_META[status] || STATUS_META.CLOSED;
+  const CurrentIcon = current.icon;
+  const currentIdx = STATUS_WORKFLOW_ORDER.indexOf(status);
+
+  // Close on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    if (open) document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
+  const handleSelect = async (s: string) => {
+    if (s === status) { setOpen(false); return; }
+    setUpdating(true);
+    try {
+      await onStatusChange(s);
+    } finally {
+      setUpdating(false);
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div ref={dropdownRef} className="relative">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        disabled={updating}
+        className={`inline-flex items-center gap-1.5 pl-2.5 pr-2 py-1 rounded-full text-xs font-semibold border transition-all hover:shadow-md active:scale-[0.97] ${current.bg} ${current.color} border-current/20 disabled:opacity-60`}
+      >
+        {updating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CurrentIcon className="w-3.5 h-3.5" />}
+        {current.label}
+        <ChevronDown className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1.5 z-50 w-64 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150"
+          onClick={(e) => e.stopPropagation()}>
+          {/* Header */}
+          <div className="px-3 py-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/50">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Update Status</p>
+          </div>
+
+          {/* Progress indicator */}
+          <div className="px-3 py-2 border-b border-[hsl(var(--border))]">
+            <div className="flex items-center gap-0.5">
+              {STATUS_WORKFLOW_ORDER.map((s, i) => {
+                const meta = STATUS_META[s];
+                return (
+                  <div key={s} className="flex-1 flex items-center">
+                    <div className={`h-1.5 w-full rounded-full transition-colors ${i <= currentIdx ? meta.dot : 'bg-[hsl(var(--border))]'}`} />
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-[hsl(var(--muted-foreground))] mt-1">Step {currentIdx + 1} of {STATUS_WORKFLOW_ORDER.length}</p>
+          </div>
+
+          {/* Options */}
+          <div className="max-h-[320px] overflow-y-auto py-1">
+            {STATUS_WORKFLOW_ORDER.map((s, i) => {
+              const meta = STATUS_META[s];
+              const Icon = meta.icon;
+              const isActive = s === status;
+              const isPast = i < currentIdx;
+              const isDisabled = isPast || isActive;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  disabled={isDisabled}
+                  onClick={() => handleSelect(s)}
+                  className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors group
+                    ${isActive
+                      ? `${meta.bg} ${meta.color} font-semibold`
+                      : isPast
+                        ? 'opacity-40 cursor-not-allowed text-[hsl(var(--muted-foreground))]'
+                        : 'hover:bg-[hsl(var(--muted))] text-[hsl(var(--foreground))]'
+                    }
+                  `}
+                >
+                  <div className={`flex items-center justify-center w-7 h-7 rounded-full transition-colors ${
+                    isActive ? meta.bg
+                    : isPast ? 'bg-[hsl(var(--muted))]'
+                    : 'bg-[hsl(var(--muted))] group-hover:bg-[hsl(var(--background))]'
+                  }`}>
+                    {isPast
+                      ? <CheckCircle2 className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
+                      : <Icon className={`w-3.5 h-3.5 ${isActive ? meta.color : 'text-[hsl(var(--muted-foreground))]'}`} />
+                    }
+                  </div>
+                  <span className={`flex-1 text-xs ${isActive ? 'font-semibold' : isPast ? 'line-through' : 'font-medium'}`}>{meta.label}</span>
+                  {isActive && <span className={`w-2 h-2 rounded-full ${meta.dot} animate-pulse`} />}
+                  {i === currentIdx + 1 && (
+                    <span className="text-[10px] font-medium text-brand-gold opacity-60 group-hover:opacity-100 transition-opacity">Next</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RentalsPage() {
   const [rentals, setRentals] = useState<Rental[]>([]);
   const [loading, setLoading] = useState(true);
@@ -465,25 +598,6 @@ export default function RentalsPage() {
     overdue: rentals.filter((r) => OVERDUE_CHECK(r)).length,
   };
 
-  const STATUS_WORKFLOW = [
-    'PENDING_ID_VERIFICATION', 'ID_VERIFIED', 'DOWN_PAYMENT_PAID', 'FULLY_PAID',
-    'READY_FOR_PICKUP', 'ITEM_DISPATCHED', 'ACTIVE', 'RETURNED', 'INSPECTION', 'CLOSED',
-  ];
-
-  const statusLabel = (s: string) => s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-
-  const statusColors: Record<string, string> = {
-    ACTIVE: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400',
-    PENDING_ID_VERIFICATION: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
-    ID_VERIFIED: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
-    DOWN_PAYMENT_PAID: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400',
-    FULLY_PAID: 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-400',
-    READY_FOR_PICKUP: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-400',
-    ITEM_DISPATCHED: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400',
-    RETURNED: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400',
-    INSPECTION: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
-    CLOSED: 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
-  };
 
   return (
     <div className="space-y-6">
@@ -534,7 +648,7 @@ export default function RentalsPage() {
           {filteredRentals.map((rental) => {
             const isOverdue = OVERDUE_CHECK(rental);
             return (
-              <div key={rental.id} className={`rounded-xl border ${isOverdue ? 'border-red-300 dark:border-red-800' : 'border-[hsl(var(--border))]'} bg-[hsl(var(--card))] overflow-hidden`}>
+              <div key={rental.id} className={`rounded-xl border ${isOverdue ? 'border-red-300 dark:border-red-800' : 'border-[hsl(var(--border))]'} bg-[hsl(var(--card))] relative`}>
                 <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-[hsl(var(--accent))] transition-colors"
                   onClick={() => setExpandedRentalId(expandedRentalId === rental.id ? null : rental.id)}>
                   <div className="flex items-center gap-4 flex-1 min-w-0 flex-wrap">
@@ -558,12 +672,10 @@ export default function RentalsPage() {
                         {rental.deliveryModality === 'SHIPPED' ? 'Ship' : 'Pickup'}
                       </span>
                     )}
-                    <select value={rental.status}
-                      onChange={(e) => { e.stopPropagation(); handleStatusUpdate(rental.id, e.target.value); }}
-                      onClick={(e) => e.stopPropagation()}
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border-none outline-none cursor-pointer ${statusColors[rental.status] || 'bg-gray-100 text-gray-800'}`}>
-                      {STATUS_WORKFLOW.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
-                    </select>
+                    <RentalStatusDropdown
+                      status={rental.status}
+                      onStatusChange={(newStatus) => handleStatusUpdate(rental.id, newStatus)}
+                    />
                   </div>
                   <div className="ml-4 flex-shrink-0">
                     {expandedRentalId === rental.id ? <ChevronUp className="w-5 h-5 text-[hsl(var(--muted-foreground))]" /> : <ChevronDown className="w-5 h-5 text-[hsl(var(--muted-foreground))]" />}
@@ -571,7 +683,7 @@ export default function RentalsPage() {
                 </div>
 
                 {expandedRentalId === rental.id && (
-                  <div className="border-t border-[hsl(var(--border))] p-5 bg-[hsl(var(--muted))]/30 space-y-6">
+                  <div className="border-t border-[hsl(var(--border))] p-5 bg-[hsl(var(--muted))]/30 space-y-6 rounded-b-xl overflow-hidden">
                     {/* Rental Details */}
                     <RentalDetailsSection rental={rental} onUpdate={(updated) => handleRentalUpdate(rental.id, updated)} />
 
