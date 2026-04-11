@@ -5,7 +5,6 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import * as jwt from 'jsonwebtoken';
 import { PrismaService } from '../../prisma/prisma.service';
 import { REQUIRES_MODULE_KEY } from '../decorators/requires-module.decorator';
 
@@ -48,8 +47,8 @@ export class ModuleGuard implements CanActivate {
       const authHeader = request.headers?.authorization;
       if (authHeader?.startsWith('Bearer ')) {
         try {
-          const secret = process.env.JWT_SECRET || 'naro-secret-key';
-          const payload = jwt.verify(authHeader.substring(7), secret) as any;
+          const parts = authHeader.substring(7).split('.');
+          const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString()) as any;
           tenantId = payload.tenantId;
           if (tenantId) request.tenantId = tenantId;
         } catch {
