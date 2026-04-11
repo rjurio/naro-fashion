@@ -5,6 +5,8 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { REQUIRES_MODULE_KEY } from '../decorators/requires-module.decorator';
 
@@ -24,6 +26,8 @@ export class ModuleGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -40,7 +44,24 @@ export class ModuleGuard implements CanActivate {
     // Platform admins bypass module checks
     if (request.user?.isPlatformAdmin) return true;
 
-    const tenantId = request.tenantId || request.user?.tenantId;
+    let tenantId = request.tenantId || request.user?.tenantId || request.headers?.['x-tenant-id'];
+
+    // Fallback: decode JWT from Authorization header for @Public() endpoints
+    if (!tenantId) {
+      const authHeader = request.headers?.authorization;
+      if (authHeader?.startsWith('Bearer ')) {
+        try {
+          const payload = this.jwtService.verify(authHeader.substring(7), {
+            secret: this.configService.get<string>('JWT_SECRET', 'naro-secret-key'),
+          });
+          tenantId = payload.tenantId;
+          if (tenantId) request.tenantId = tenantId;
+        } catch {
+          // Invalid token — ignore
+        }
+      }
+    }
+
     if (!tenantId) {
       throw new ForbiddenException('Tenant context required for module access');
     }
