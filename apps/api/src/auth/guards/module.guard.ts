@@ -5,8 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { JwtService } from '@nestjs/jwt';
-import { ConfigService } from '@nestjs/config';
+import * as jwt from 'jsonwebtoken';
 import { PrismaService } from '../../prisma/prisma.service';
 import { REQUIRES_MODULE_KEY } from '../decorators/requires-module.decorator';
 
@@ -26,8 +25,6 @@ export class ModuleGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly prisma: PrismaService,
-    private readonly jwtService: JwtService,
-    private readonly configService: ConfigService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -51,9 +48,8 @@ export class ModuleGuard implements CanActivate {
       const authHeader = request.headers?.authorization;
       if (authHeader?.startsWith('Bearer ')) {
         try {
-          const payload = this.jwtService.verify(authHeader.substring(7), {
-            secret: this.configService.get<string>('JWT_SECRET', 'naro-secret-key'),
-          });
+          const secret = process.env.JWT_SECRET || 'naro-secret-key';
+          const payload = jwt.verify(authHeader.substring(7), secret) as any;
           tenantId = payload.tenantId;
           if (tenantId) request.tenantId = tenantId;
         } catch {
