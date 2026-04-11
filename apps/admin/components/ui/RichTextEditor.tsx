@@ -26,7 +26,6 @@ export default function RichTextEditor({
 }: RichTextEditorProps) {
   const [mode, setMode] = useState<'visual' | 'html'>('visual');
   const [uploading, setUploading] = useState(false);
-  const quillRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleImageUpload = useCallback(() => {
@@ -56,12 +55,9 @@ export default function RichTextEditor({
         ? `${API_BASE_URL.replace('/api/v1', '')}${data.url}`
         : data.url;
 
-      const quill = quillRef.current?.getEditor?.();
-      if (quill) {
-        const range = quill.getSelection(true);
-        quill.insertEmbed(range.index, 'image', imageUrl);
-        quill.setSelection(range.index + 1);
-      }
+      // Append image to current HTML content
+      const imgTag = `<p><img src="${imageUrl}" alt="uploaded image" /></p>`;
+      onChange(value + imgTag);
     } catch {
       // Silent fail — user can try again
     } finally {
@@ -259,7 +255,6 @@ export default function RichTextEditor({
             .rich-editor-wrapper .ql-editor iframe { max-width: 100%; margin: 1rem 0; border-radius: 0.5rem; }
           `}</style>
           <ReactQuill
-            ref={quillRef as any}
             theme="snow"
             value={value}
             onChange={onChange}
