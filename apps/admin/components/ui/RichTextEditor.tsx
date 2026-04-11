@@ -259,7 +259,7 @@ export default function RichTextEditor({
             .rich-editor-wrapper .ql-editor iframe { max-width: 100%; margin: 1rem 0; border-radius: 0.5rem; }
           `}</style>
           <ReactQuill
-            ref={quillRef}
+            ref={quillRef as any}
             theme="snow"
             value={value}
             onChange={onChange}
