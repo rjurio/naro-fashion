@@ -123,7 +123,7 @@ analytics, audit, auth, cart, categories, cms, events, flash-sales, id-verificat
 - **Build notes**: Both Next.js apps use `eslint: { ignoreDuringBuilds: true }`, `output: 'standalone'`, and root layout has `export const dynamic = "force-dynamic"` to prevent prerender errors
 - **CI/CD**: Push to `prod` branch triggers automatic deployment via GitHub Actions (`.github/workflows/deploy-prod.yml`). Secrets: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`
 - **Multer**: Must be explicitly installed (`pnpm add multer @types/multer --filter api`) — not auto-resolved from pnpm hoisting
-- **Deployment guide**: `docs/DEPLOYMENT_GUIDE.md` (with PDF)
+- **Deployment guide**: `docs/DEPLOYMENT_GUIDE.md` (2,160 lines, 16 parts + 2 appendices) and `docs/DEPLOYMENT_GUIDE.pdf` — comprehensive battle-tested guide covering VPS provisioning, build troubleshooting (9 documented errors), CI/CD, email setup, and all challenges encountered during real deployments.
 
 ## Documentation
 All documentation lives in `docs/` with Markdown source and PDF/DOCX/PPTX exports:
