@@ -50,7 +50,7 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - **payment-methods** - DB-driven payment method CRUD (`PaymentMethod` model). 1 public endpoint (`GET /payment-methods` — active only), 7 admin endpoints (create, update, toggle-active, soft delete, restore, deleted list). Icon upload via `POST /upload/payment-icon` (2MB, JPEG/PNG/WebP/SVG → `uploads/payment-methods/`). Seeded: Visa, Mastercard, M-Pesa, Tigo Pesa, Airtel Money, Selcom Pesa, Halopesa.
 - **referrals** - Referral code tracking and stats
 - **id-verification** - National ID upload, admin approve/reject
-- **cms** - Banners (soft delete/restore), pages (soft delete/restore), site settings CRUD. `GET /cms/settings/business-profile` returns all business profile fields including `mapLatitude`, `mapLongitude` (from SiteSetting key-value store)
+- **cms** - Banners (soft delete/restore), pages (soft delete/restore), site settings CRUD. `GET /cms/settings/business-profile` returns all business profile fields including `mapLatitude`, `mapLongitude` (from SiteSetting key-value store). `GET /cms/storefront-stats` (public, tenant-scoped) returns `{ productCount, rentalCount, customerCount }` for live hero stats on the storefront homepage
 - **analytics** - Dashboard stats, revenue charts (daily/weekly/monthly)
 - **notifications** - Email + SMS sending
 - **upload** - Local file upload. `POST /upload/product-image` → `uploads/products/` (JPEG/PNG/WebP, 5MB). `POST /upload/payment-icon` → `uploads/payment-methods/` (JPEG/PNG/WebP/SVG, 2MB). ServeStaticModule serves all `/uploads` paths.

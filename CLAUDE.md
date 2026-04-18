@@ -83,6 +83,8 @@ GitHub: https://github.com/rjurio/naro-fashion
 - **Newsletter**: Full email campaign platform with subscriber management and delivery tracking
 - **Subscription Lifecycle**: Daily cron checks expiry → GRACE (7 days) → SUSPENDED. Reminders at 7, 3, 1 days before expiry
 - **Google Maps on Contact Page**: Configurable via Business Profile settings (`map_latitude`, `map_longitude` in SiteSetting). Admin can enter coordinates manually or auto-detect via browser geolocation. Storefront contact page shows embedded Google Map only when valid coordinates exist. Validation: lat -90..90, lng -180..180, minimum 2 decimal places, both required if either set.
+- **Storefront Hero Stats**: Dynamic counts from database via `GET /cms/storefront-stats` (public, tenant-scoped). Returns `{ productCount, rentalCount, customerCount }` based on active products, rental-eligible products (RENTAL_ONLY/BOTH), and active customers. Each stat on the hero section only renders when count > 0 (no fake placeholder numbers).
+- **Homepage CMS Content**: All homepage section text is admin-editable via `/dashboard/cms/settings` with English + Swahili variants. Rental section perks (e.g. "Designer gowns", "Cleaning included") live in `rental_section_features` SiteSetting as newline-separated items — each line becomes a pill on the storefront.
 
 ## API Modules
 analytics, audit, auth, cart, categories, cms, events, flash-sales, id-verification, newsletter, notifications, orders, payment-methods, payments, products, promo-codes, referrals, rental-checklists, rental-policies, rentals, reviews, scheduler, shipping, size-guides, upload, users, wishlist, permissions, roles, admin-users, expense-categories, expenses, inventory, reports, pos, tenants

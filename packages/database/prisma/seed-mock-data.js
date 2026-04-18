@@ -10,13 +10,12 @@
 
 const { PrismaClient } = require('@prisma/client');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const prisma = new PrismaClient();
 
-// Simple password hash (for demo only)
+// Use bcrypt to match what the API auth service expects (bcrypt.compare)
 function hashSync(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-  return `$demo$${salt}$${hash}`;
+  return bcrypt.hashSync(password, 10);
 }
 
 // Helper: random item from array
