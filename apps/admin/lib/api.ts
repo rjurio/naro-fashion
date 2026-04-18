@@ -215,6 +215,21 @@ class AdminApiClient {
     }
     return res.json();
   }
+  async bulkImportProducts(file: File): Promise<{ created: number; failed: number; total: number; errors: { row: number; field?: string; message: string }[] }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
+    const res = await fetch(`${this.baseUrl}/products/bulk-import`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'Import failed' }));
+      throw new Error(err.message || 'Import failed');
+    }
+    return res.json();
+  }
   createProduct(data: any) {
     return this.post<any>('/products', data);
   }

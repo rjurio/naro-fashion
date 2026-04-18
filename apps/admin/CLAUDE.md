@@ -33,12 +33,12 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 - `/platform/tenants/new` - Create tenant wizard (company info, admin user, plan, branding colors)
 - `/platform/tenants/[id]` - Tenant detail (status, modules toggle, payment history, suspend/activate)
 - `/platform/plans` - Subscription plan CRUD (name, price, limits, modules)
-- `/platform/payments` - All tenant payments across platform
+- `/platform/payments` - All tenant payments across the platform: summary cards (Completed/Pending totals, record count), status filter (All/Completed/Pending/Failed), search by tenant/invoice/transaction-ref, CSV export, full payment table
 
 ### Tenant Admin Pages
 - `/login` - Admin login (checks AdminUser table)
 - `/dashboard` - Overview with stats cards, revenue chart, recent orders
-- `/dashboard/products` - Product CRUD (list, create, edit, soft delete, activate/deactivate toggle, barcode generation)
+- `/dashboard/products` - Product CRUD (list, create, edit, soft delete, activate/deactivate toggle, barcode generation). **Template + Import CSV buttons** in header: "Template" downloads a pre-filled CSV with all columns and 2 example rows (client-side, no API); "Import CSV" opens `ImportProductsModal` that uploads to `POST /products/bulk-import` and shows created/failed/errors summary with per-row feedback.
 - `/dashboard/products/new` - Create product with full form (basic info, pricing, rental settings, image upload with 3:4 crop, variants)
 - `/dashboard/products/[id]/edit` - Edit product (same form, pre-populated)
 - `/dashboard/pos` - Point of Sale (shift management, product search with barcode scan, split payments)

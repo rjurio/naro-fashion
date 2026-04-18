@@ -35,7 +35,7 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 ## Modules (all fully implemented)
 - **auth** - Login, register, JWT access/refresh tokens, profile, password change, 2FA toggle, forgot/reset password, account lockout
 - **users** - Customer-facing: profile CRUD, addresses CRUD. Admin: `GET /users?search=` (list all tenant customers with order/rental counts, total spent), `PATCH /users/:id/suspend`, `PATCH /users/:id/activate`
-- **products** - Full CRUD with variants, images, search, filtering, toggle active, soft delete/restore, admin listing (includes inactive), purchasePrice/minimumStock/supplier fields, `GET /products/by-id/:id` for edit page
+- **products** - Full CRUD with variants, images, search, filtering, toggle active, soft delete/restore, admin listing (includes inactive), purchasePrice/minimumStock/supplier fields, `GET /products/by-id/:id` for edit page. `POST /products/bulk-import` accepts a multipart CSV file (max 5MB, 500 rows) for batch product creation — resolves category by slug or name, returns `{ created, failed, total, errors[] }` with per-row validation feedback.
 - **categories** - Nested category tree CRUD, soft delete/restore
 - **cart** - Add/update/remove items, merge guest cart, count
 - **wishlist** - Toggle, check, count

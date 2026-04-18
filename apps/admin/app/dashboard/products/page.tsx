@@ -12,6 +12,8 @@ import {
   Loader2,
   Power,
   Barcode,
+  Upload,
+  Download,
 } from 'lucide-react';
 import DataTable, { type Column } from '@/components/ui/DataTable';
 import { formatCurrency } from '@/lib/utils';
@@ -20,6 +22,7 @@ import { adminApi } from '@/lib/api';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import BarcodeModal from '@/components/products/BarcodeModal';
+import ImportProductsModal from '@/components/products/ImportProductsModal';
 
 interface Product {
   id: string;
@@ -60,6 +63,79 @@ export default function ProductsPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [barcodeProduct, setBarcodeProduct] = useState<Product | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+
+  const handleDownloadTemplate = () => {
+    const headers = [
+      'name',
+      'nameSwahili',
+      'description',
+      'descriptionSwahili',
+      'categorySlug',
+      'price',
+      'compareAtPrice',
+      'sku',
+      'availabilityMode',
+      'stock',
+      'rentalPricePerDay',
+      'rentalDepositAmount',
+      'minRentalDays',
+      'maxRentalDays',
+      'isFeatured',
+      'published',
+      'imageUrls',
+    ];
+    const examples = [
+      [
+        'Blue Silk Gown',
+        'Gauni la Hariri la Bluu',
+        'Elegant blue silk evening gown perfect for formal occasions',
+        'Gauni la jioni la hariri ya bluu nzuri kwa hafla rasmi',
+        'evening-wear',
+        '150000',
+        '200000',
+        'GOWN-BLUE-001',
+        'BOTH',
+        '5',
+        '25000',
+        '50000',
+        '1',
+        '7',
+        'true',
+        'true',
+        'https://example.com/gown1.jpg;https://example.com/gown1-back.jpg',
+      ],
+      [
+        'Classic Mens Suit',
+        'Suti ya Kawaida ya Wanaume',
+        'Premium wool suit in charcoal grey',
+        'Suti ya pamba ya hali ya juu ya kijivu',
+        'mens-formal',
+        '350000',
+        '',
+        'SUIT-GREY-001',
+        'PURCHASE_ONLY',
+        '10',
+        '',
+        '',
+        '',
+        '',
+        'false',
+        'true',
+        '',
+      ],
+    ];
+    const escape = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
+    const csv = [headers, ...examples].map((row) => row.map(escape).join(',')).join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `naro-products-template-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('Template downloaded — fill it in, then use Import CSV', 'success');
+  };
 
   const fetchProducts = useCallback(async () => {
     const token = localStorage.getItem('token');
@@ -262,13 +338,34 @@ export default function ProductsPage() {
             Manage your product inventory ({products.length} total)
           </p>
         </div>
-        <button
-          onClick={() => router.push('/dashboard/products/new')}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-gold text-black text-sm font-medium hover:bg-brand-gold/90"
-        >
-          <Plus className="w-4 h-4" />
-          Add Product
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleDownloadTemplate}
+            title="Download CSV template for batch upload"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[hsl(var(--border))] text-[hsl(var(--foreground))] text-sm font-medium hover:border-brand-gold hover:text-brand-gold transition-colors cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+            Template
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            title="Import multiple products from a CSV file"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[hsl(var(--border))] text-[hsl(var(--foreground))] text-sm font-medium hover:border-brand-gold hover:text-brand-gold transition-colors cursor-pointer"
+          >
+            <Upload className="w-4 h-4" />
+            Import CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push('/dashboard/products/new')}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-gold text-black text-sm font-medium hover:bg-brand-gold-dark hover:shadow-md transition-all cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Add Product
+          </button>
+        </div>
       </div>
 
       {/* Search */}
@@ -295,6 +392,13 @@ export default function ProductsPage() {
           onClose={() => setBarcodeProduct(null)}
         />
       )}
+
+      {/* Import CSV Modal */}
+      <ImportProductsModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onSuccess={fetchProducts}
+      />
     </div>
   );
 }

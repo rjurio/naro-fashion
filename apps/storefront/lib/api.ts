@@ -158,6 +158,7 @@ export const cmsApi = {
   getSettings: () => api.get<any[]>('/cms/settings'),
   getInstagramPosts: () => api.get<any[]>('/cms/instagram-posts'),
   getBusinessProfile: () => api.get<any>('/cms/settings/business-profile'),
+  getStorefrontStats: () => api.get<{ productCount: number; rentalCount: number; customerCount: number }>('/cms/storefront-stats'),
 };
 
 export const sizeGuidesApi = {

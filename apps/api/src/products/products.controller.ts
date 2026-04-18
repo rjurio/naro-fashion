@@ -8,7 +8,11 @@ import {
   Param,
   Query,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ProductsService } from './products.service';
 import { CreateProductDto, UpdateProductDto, QueryProductsDto } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -52,6 +56,20 @@ export class ProductsController {
   @Post()
   create(@Body() dto: CreateProductDto) {
     return this.productsService.create(dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('bulk-import')
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  }))
+  async bulkImport(@UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const name = (file.originalname || '').toLowerCase();
+    if (!name.endsWith('.csv')) {
+      throw new BadRequestException('Only .csv files are accepted');
+    }
+    return this.productsService.bulkImport(file.buffer);
   }
 
   @UseGuards(JwtAuthGuard)

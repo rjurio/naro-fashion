@@ -142,6 +142,12 @@ export class CmsController {
     return this.cmsService.findAllSettings();
   }
 
+  @Public()
+  @Get('storefront-stats')
+  getStorefrontStats() {
+    return this.cmsService.getStorefrontStats();
+  }
+
   @UseGuards(JwtAuthGuard)
   @Patch('settings/:key')
   updateSetting(@Param('key') key: string, @Body() dto: UpdateSettingDto) {

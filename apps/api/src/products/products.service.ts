@@ -211,6 +211,183 @@ export class ProductsService {
     return product;
   }
 
+  /**
+   * Parse a CSV buffer into rows of {header: value} objects.
+   * Handles quoted fields, escaped quotes (""), and CRLF/LF line endings.
+   */
+  private parseCsv(buffer: Buffer): Record<string, string>[] {
+    const text = buffer.toString('utf-8').replace(/^\uFEFF/, ''); // strip BOM
+    const rows: string[][] = [];
+    let currentRow: string[] = [];
+    let currentField = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"' && text[i + 1] === '"') { currentField += '"'; i++; }
+        else if (c === '"') { inQuotes = false; }
+        else { currentField += c; }
+      } else {
+        if (c === '"') { inQuotes = true; }
+        else if (c === ',') { currentRow.push(currentField); currentField = ''; }
+        else if (c === '\n' || c === '\r') {
+          if (c === '\r' && text[i + 1] === '\n') i++;
+          currentRow.push(currentField);
+          if (currentRow.some((f) => f.trim() !== '')) rows.push(currentRow);
+          currentRow = [];
+          currentField = '';
+        }
+        else { currentField += c; }
+      }
+    }
+    if (currentField !== '' || currentRow.length) {
+      currentRow.push(currentField);
+      if (currentRow.some((f) => f.trim() !== '')) rows.push(currentRow);
+    }
+
+    if (rows.length === 0) return [];
+    const headers = rows[0].map((h) => h.trim());
+    return rows.slice(1).map((row) => {
+      const obj: Record<string, string> = {};
+      headers.forEach((h, i) => { obj[h] = (row[i] ?? '').trim(); });
+      return obj;
+    });
+  }
+
+  async bulkImport(fileBuffer: Buffer) {
+    const tenantId = this.tenantContext.requireId;
+    const rows = this.parseCsv(fileBuffer);
+
+    if (rows.length === 0) {
+      return { created: 0, failed: 0, total: 0, errors: [{ row: 0, message: 'CSV file is empty or has no data rows' }] };
+    }
+
+    if (rows.length > 500) {
+      return { created: 0, failed: 0, total: rows.length, errors: [{ row: 0, message: 'Maximum 500 rows per import. Please split your file.' }] };
+    }
+
+    // Pre-load all categories for slug → id resolution
+    const categories = await this.prisma.category.findMany({
+      where: { tenantId, isActive: true, deletedAt: null },
+      select: { id: true, slug: true, name: true },
+    });
+    const categoryBySlug = new Map(categories.map((c) => [c.slug.toLowerCase(), c.id]));
+    const categoryByName = new Map(categories.map((c) => [c.name.toLowerCase(), c.id]));
+
+    // Pre-load existing SKUs to catch duplicates
+    const existingProducts = await this.prisma.product.findMany({
+      where: { tenantId, deletedAt: null, sku: { not: null } },
+      select: { sku: true },
+    });
+    const existingSkus = new Set(existingProducts.map((p) => p.sku!.toLowerCase()));
+
+    const errors: { row: number; field?: string; message: string }[] = [];
+    let created = 0;
+
+    const parseBool = (v: string, def = true): boolean => {
+      if (!v) return def;
+      const lower = v.toLowerCase();
+      return lower === 'true' || lower === '1' || lower === 'yes';
+    };
+
+    const parseNum = (v: string): number | undefined => {
+      if (!v?.trim()) return undefined;
+      const n = Number(v);
+      return isNaN(n) ? undefined : n;
+    };
+
+    for (let idx = 0; idx < rows.length; idx++) {
+      const row = rows[idx];
+      const rowNum = idx + 2; // +1 for header, +1 for 1-indexed
+
+      try {
+        // Required fields
+        const name = row.name?.trim();
+        const description = row.description?.trim();
+        const priceRaw = row.price?.trim();
+        const categoryRaw = (row.categorySlug || row.category || '').trim().toLowerCase();
+
+        if (!name) { errors.push({ row: rowNum, field: 'name', message: 'Name is required' }); continue; }
+        if (!description) { errors.push({ row: rowNum, field: 'description', message: 'Description is required' }); continue; }
+        if (!priceRaw) { errors.push({ row: rowNum, field: 'price', message: 'Price is required' }); continue; }
+        if (!categoryRaw) { errors.push({ row: rowNum, field: 'categorySlug', message: 'Category slug is required' }); continue; }
+
+        const price = Number(priceRaw);
+        if (isNaN(price) || price < 0) {
+          errors.push({ row: rowNum, field: 'price', message: `Invalid price "${priceRaw}"` });
+          continue;
+        }
+
+        // Resolve category
+        const categoryId = categoryBySlug.get(categoryRaw) || categoryByName.get(categoryRaw);
+        if (!categoryId) {
+          errors.push({ row: rowNum, field: 'categorySlug', message: `Category "${row.categorySlug || row.category}" not found. Create it first or check spelling.` });
+          continue;
+        }
+
+        // Validate availability mode
+        const availabilityMode = (row.availabilityMode?.trim().toUpperCase() || 'PURCHASE_ONLY');
+        if (!['PURCHASE_ONLY', 'RENTAL_ONLY', 'BOTH'].includes(availabilityMode)) {
+          errors.push({ row: rowNum, field: 'availabilityMode', message: `Invalid availability mode "${availabilityMode}". Use PURCHASE_ONLY, RENTAL_ONLY, or BOTH.` });
+          continue;
+        }
+
+        // SKU uniqueness (check both pre-loaded set and in-batch)
+        const sku = row.sku?.trim() || undefined;
+        if (sku && existingSkus.has(sku.toLowerCase())) {
+          errors.push({ row: rowNum, field: 'sku', message: `SKU "${sku}" already exists` });
+          continue;
+        }
+
+        // Build DTO
+        const dto: CreateProductDto = {
+          name,
+          nameSwahili: row.nameSwahili?.trim() || undefined,
+          description,
+          descriptionSwahili: row.descriptionSwahili?.trim() || undefined,
+          price,
+          compareAtPrice: parseNum(row.compareAtPrice),
+          categoryId,
+          sku,
+          availabilityMode,
+          isFeatured: parseBool(row.isFeatured, false),
+          published: parseBool(row.published, true),
+          rentalPricePerDay: parseNum(row.rentalPricePerDay),
+          rentalDepositAmount: parseNum(row.rentalDepositAmount),
+          minRentalDays: parseNum(row.minRentalDays),
+          maxRentalDays: parseNum(row.maxRentalDays),
+        };
+
+        // Optional stock (creates a default variant)
+        const stock = parseNum(row.stock);
+        if (stock !== undefined && stock > 0) {
+          dto.variants = [{ name: 'Default', price, stock }];
+        }
+
+        // Optional images (semicolon-separated URLs)
+        const imagesRaw = row.imageUrls?.trim();
+        if (imagesRaw) {
+          dto.images = imagesRaw.split(';').map((u) => u.trim()).filter(Boolean);
+        }
+
+        await this.create(dto);
+
+        if (sku) existingSkus.add(sku.toLowerCase());
+        created++;
+      } catch (err: any) {
+        errors.push({ row: rowNum, message: err?.message || 'Unknown error' });
+      }
+    }
+
+    return {
+      created,
+      failed: errors.length,
+      total: rows.length,
+      errors,
+    };
+  }
+
   async update(id: string, dto: UpdateProductDto) {
     const product = await this.prisma.product.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!product || product.deletedAt) {

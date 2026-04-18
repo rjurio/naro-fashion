@@ -303,6 +303,29 @@ export class CmsService {
     };
   }
 
+  async getStorefrontStats() {
+    const tenantId = this.tenantContext.requireId;
+
+    const [productCount, rentalCount, customerCount] = await Promise.all([
+      this.prisma.product.count({
+        where: { tenantId, isActive: true, deletedAt: null },
+      }),
+      this.prisma.product.count({
+        where: {
+          tenantId,
+          isActive: true,
+          deletedAt: null,
+          availabilityMode: { in: ['RENTAL_ONLY', 'BOTH'] },
+        },
+      }),
+      this.prisma.user.count({
+        where: { tenantId, isActive: true },
+      }),
+    ]);
+
+    return { productCount, rentalCount, customerCount };
+  }
+
   // --- Instagram Sync Config ---
 
   async getInstagramSyncConfig() {

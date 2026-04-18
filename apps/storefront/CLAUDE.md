@@ -14,7 +14,7 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - Theme toggle (`components/ui/ThemeToggle.tsx`) cycles: light → dark → standard
 
 ## Pages
-- `/` - Homepage (featured categories, new arrivals, flash sales, rental gowns)
+- `/` - Homepage (featured categories, new arrivals, flash sales, rental gowns). Hero stats (products/rentals/customers) fetched live from `GET /cms/storefront-stats` — each stat auto-hides when count is 0 (no placeholder numbers). Rental section perks come from `rental_section_features` CMS setting (newline-separated, admin-editable at `/dashboard/cms/settings`).
 - `/products` - Product listing with filters (category, size, color, price, sort)
 - `/products/[slug]` - Product detail with gallery, reviews, add-to-cart, wishlist, optional 3D view (Photos/3D toggle when model3dUrl exists)
 - `/categories` - Categories index grid

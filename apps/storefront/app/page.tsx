@@ -140,6 +140,7 @@ export default function HomePage() {
   const [loadingRentals, setLoadingRentals] = useState(true);
   const [realWeddings, setRealWeddings] = useState<any[]>([]);
   const [loadingWeddings, setLoadingWeddings] = useState(true);
+  const [stats, setStats] = useState({ productCount: 0, rentalCount: 0, customerCount: 0 });
 
   // Hero slides
   const [heroSlides, setHeroSlides] = useState<{ id: string; imageUrl: string; title?: string }[]>([]);
@@ -163,6 +164,10 @@ export default function HomePage() {
           if (map.new_arrivals_layout === 'multi_row') setNewArrivalsLayout('multi_row');
         }
       })
+      .catch(() => {});
+    cmsApi
+      .getStorefrontStats()
+      .then((data) => setStats(data))
       .catch(() => {});
   }, []);
 
@@ -393,20 +398,30 @@ export default function HomePage() {
               </Link>
             </div>
             <div className="mt-10 flex items-center gap-8 text-gray-400 text-sm">
-              <div>
-                <span className="block text-2xl font-bold text-white">500+</span>
-                Products
-              </div>
-              <div className="w-px h-10 bg-gray-700" />
-              <div>
-                <span className="block text-2xl font-bold text-white">50+</span>
-                Gowns for Rent
-              </div>
-              <div className="w-px h-10 bg-gray-700" />
-              <div>
-                <span className="block text-2xl font-bold text-white">10K+</span>
-                Happy Customers
-              </div>
+              {stats.productCount > 0 && (
+                <>
+                  <div>
+                    <span className="block text-2xl font-bold text-white">{stats.productCount.toLocaleString()}</span>
+                    Products
+                  </div>
+                  <div className="w-px h-10 bg-gray-700" />
+                </>
+              )}
+              {stats.rentalCount > 0 && (
+                <>
+                  <div>
+                    <span className="block text-2xl font-bold text-white">{stats.rentalCount.toLocaleString()}</span>
+                    Gowns for Rent
+                  </div>
+                  <div className="w-px h-10 bg-gray-700" />
+                </>
+              )}
+              {stats.customerCount > 0 && (
+                <div>
+                  <span className="block text-2xl font-bold text-white">{stats.customerCount.toLocaleString()}</span>
+                  Happy Customers
+                </div>
+              )}
             </div>
           </div>
         </div>
