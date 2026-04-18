@@ -121,6 +121,7 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 - All forms use FormField wrapper for consistent label/error/hint layout
 - All modals use Modal component for consistent UX
 - All page headers use PageHeader component with breadcrumbs
+- `StatsCard` component uses `min-w-0 flex-1` on text + `flex-shrink-0` on icon so long values (e.g. `TSh 6,491,000`) wrap instead of clipping. Value text is responsive: `text-xl xl:text-2xl`. 6-card grids should use `2xl:grid-cols-6` (not `xl:grid-cols-6`) to keep cards breathable on common resolutions.
 - Recharts must be dynamically imported with `{ ssr: false }` (see financials/charts.tsx)
 - Product form labels use `InfoLabel` component with hover tooltips for field descriptions
 - SKU auto-generated as `CATEGORY-NAME-NUMBER` (e.g. GOW-ELE-427), editable by admin
