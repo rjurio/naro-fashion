@@ -1,0 +1,29 @@
+[
+  {
+    "name": "Red Sequin Off-Shoulder Sendoff Gown",
+    "nameSwahili": "Gauni la Kupeleka la Sequins Nyekundu",
+    "description": "Statement red sequin off-shoulder sendoff gown with fitted mermaid silhouette and sweeping train. Fully beaded bodice with sparkling sequin overlay catches light from every angle — perfect for the send-off entrance that everyone remembers. Pairs with matching bridesmaids' palette or stands alone as the bride's reception show-stopper.",
+    "descriptionSwahili": "Gauni la kupeleka la rangi nyekundu lililofunikwa kwa sequins linalometa — chaguo kamili kwa siku ya kupelekwa.",
+    "categorySlug": "sendoff-dresses",
+    "availabilityMode": "BOTH",
+    "basePrice": 450000,
+    "compareAtPrice": 600000,
+    "rentalPricePerDay": 80000,
+    "rentalDepositAmount": 200000,
+    "minRentalDays": 1,
+    "maxRentalDays": 3,
+    "isFeatured": true,
+    "heroPhoto": "ai photos/Gemini_Generated_Image_5u7x235u7x235u7x.png",
+    "photos": [
+      "n059.jpg",
+      "n060.jpg",
+      "n061.jpg",
+      "n062.jpg",
+      "n063.jpg",
+      "n064.jpg",
+      "n065.jpg",
+      "n066.jpg",
+      "n069.jpg"
+    ]
+  }
+]

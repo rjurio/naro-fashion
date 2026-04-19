@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Orange Rose & White Hydrangea Bridal Bouquet",
+    "nameSwahili": "Shada la Maua la Harusi — Waridi za Machungwa",
+    "description": "Handcrafted silk bridal bouquet featuring deep orange roses, ivory hydrangeas, calla-lily accents and soft green fern. Warm, romantic palette perfect for an autumn-toned wedding or a bride who wants a statement of colour against a white gown. Reusable — preserve it as a keepsake long after the day.",
+    "categorySlug": "flowers",
+    "availabilityMode": "BOTH",
+    "basePrice": 85000,
+    "compareAtPrice": 120000,
+    "rentalPricePerDay": 25000,
+    "rentalDepositAmount": 50000,
+    "minRentalDays": 1,
+    "maxRentalDays": 2,
+    "isFeatured": true,
+    "photos": ["n083.jpg"]
+  }
+]

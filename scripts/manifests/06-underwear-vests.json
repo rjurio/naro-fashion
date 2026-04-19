@@ -1,0 +1,23 @@
+[
+  {
+    "name": "CNT Ribbed Cotton Vest — 3-Pack White",
+    "nameSwahili": "Fulana za CNT Nyeupe — Paketi ya 3",
+    "description": "CNT-brand ribbed cotton vests in classic white — sold as a 3-pack. Soft, breathable cotton rib with clean shoulder straps and scoop neck. The reliable under-shirt for every man's drawer.",
+    "categorySlug": "vests",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 25000,
+    "compareAtPrice": 35000,
+    "photos": ["n019.jpg"]
+  },
+  {
+    "name": "Bersel Boxer Brief Variety Pack — 8 Pieces",
+    "nameSwahili": "Chupi za Bersel — Paketi ya 8",
+    "description": "Bersel cotton-stretch boxer brief variety pack — 8 pieces in mixed colours including black, grey, navy and prints. Soft elastic waistband with brand-printed band and contoured fit. Everyday comfort in one bundle.",
+    "categorySlug": "underwear",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 45000,
+    "compareAtPrice": 65000,
+    "isFeatured": true,
+    "photos": ["n020.jpg"]
+  }
+]

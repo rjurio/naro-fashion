@@ -1,0 +1,397 @@
+[
+  {
+    "name": "Balotti White Classic Dress Shirt",
+    "nameSwahili": "Shati la Kazi Jeupe la Balotti",
+    "description": "Crisp white Balotti dress shirt — cotton blend, classic point collar, barrel cuff, chest pocket. The workhorse white shirt every Tanzanian man's wardrobe needs. Pairs with black, navy or grey trousers for office, funeral, or wedding guest.",
+    "categorySlug": "shirts",
+    "basePrice": 35000,
+    "compareAtPrice": 50000,
+    "isFeatured": true,
+    "heroPhoto": "ai photos/Use AI Image Apr 19, 2026, 14_35_43.png",
+    "photos": ["n001.jpg"]
+  },
+  {
+    "name": "PM White Dress Shirt",
+    "nameSwahili": "Shati Jeupe la PM",
+    "description": "PM (Purvey of all Things Good) white dress shirt — long sleeve, semi-spread collar, classic fit. Clean and sharp for office wear.",
+    "categorySlug": "shirts",
+    "basePrice": 32000,
+    "compareAtPrice": 45000,
+    "photos": ["n002.jpg"]
+  },
+  {
+    "name": "Balotti Blue Micro-Print Dress Shirt",
+    "nameSwahili": "Shati la Balotti la Buluu",
+    "description": "Balotti dress shirt in soft blue with subtle all-over micro-diamond print. Slim fit with white contrast lining inside the collar — smart office look that stands out without shouting.",
+    "categorySlug": "shirts",
+    "basePrice": 40000,
+    "compareAtPrice": 55000,
+    "photos": ["n003.jpg"]
+  },
+  {
+    "name": "Balotti Brick Rose Dress Shirt",
+    "nameSwahili": "Shati la Balotti la Rangi ya Waridi",
+    "description": "Balotti dress shirt in muted brick-rose with tonal buttons. Confident color for weekend meetings and after-office events.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n004.jpg"]
+  },
+  {
+    "name": "PM Navy Gingham Check Shirt",
+    "nameSwahili": "Shati la PM la Checki za Navy",
+    "description": "PM navy and white gingham check long-sleeve shirt. Casual-smart weekend shirt that layers well under a blazer or wears clean with chinos.",
+    "categorySlug": "shirts",
+    "basePrice": 35000,
+    "compareAtPrice": 48000,
+    "photos": ["n005.jpg"]
+  },
+  {
+    "name": "Balotti Light Grey Dress Shirt",
+    "nameSwahili": "Shati la Kijivu la Balotti",
+    "description": "Light grey Balotti dress shirt, classic point collar, chest pocket. Pairs with navy or black trousers and a silver tie for formal events.",
+    "categorySlug": "shirts",
+    "basePrice": 35000,
+    "compareAtPrice": 48000,
+    "photos": ["n006.jpg"]
+  },
+  {
+    "name": "Hardwood Chambray Blue Slim-Fit Shirt",
+    "nameSwahili": "Shati la Hardwood la Chambray",
+    "description": "Hardwood chambray slim-fit shirt in medium blue with H embroidered chest pocket. Made in Thailand. Lightweight cotton perfect for Dar es Salaam's heat — wear open over a tee or buttoned up with chinos.",
+    "categorySlug": "shirts",
+    "basePrice": 45000,
+    "compareAtPrice": 60000,
+    "photos": ["n007.jpg"]
+  },
+  {
+    "name": "PM Red Gingham Check Shirt",
+    "nameSwahili": "Shati la PM la Checki Nyekundu",
+    "description": "PM red and white gingham check long-sleeve shirt — bold casual look for weekends and informal gatherings.",
+    "categorySlug": "shirts",
+    "basePrice": 35000,
+    "compareAtPrice": 48000,
+    "photos": ["n008.jpg"]
+  },
+  {
+    "name": "PM Cream Ivory Dress Shirt",
+    "nameSwahili": "Shati Cream la PM",
+    "description": "PM soft cream / ivory dress shirt — a warmer alternative to plain white that flatters darker skin tones. Office-ready with any dark trouser.",
+    "categorySlug": "shirts",
+    "basePrice": 35000,
+    "compareAtPrice": 48000,
+    "photos": ["n009.jpg"]
+  },
+  {
+    "name": "PM Mustard Yellow Gingham Check Shirt",
+    "nameSwahili": "Shati la Manjano la PM",
+    "description": "PM mustard yellow and white gingham check long-sleeve shirt — a warm statement casual piece that pops against neutral trousers.",
+    "categorySlug": "shirts",
+    "basePrice": 35000,
+    "compareAtPrice": 48000,
+    "photos": ["n010.jpg"]
+  },
+  {
+    "name": "Balotti Navy Floral Print Shirt",
+    "nameSwahili": "Shati la Navy la Maua la Balotti",
+    "description": "Balotti navy blue shirt with small white botanical leaf print — modern subtle pattern that works for weddings, dinners and events.",
+    "categorySlug": "shirts",
+    "basePrice": 40000,
+    "compareAtPrice": 55000,
+    "photos": ["n011.jpg"]
+  },
+  {
+    "name": "Balotti Grey Pinstripe Dress Shirt",
+    "nameSwahili": "Shati la Balotti la Mistari ya Kijivu",
+    "description": "Balotti grey dress shirt with fine white pinstripe — classic business wardrobe staple that pairs with a solid navy or black suit.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n012.jpg"]
+  },
+  {
+    "name": "PM Pink Dress Shirt",
+    "nameSwahili": "Shati la Pinki la PM",
+    "description": "PM light pink dress shirt with tonal buttons. Soft, modern color — smart for spring weddings and weekend brunches.",
+    "categorySlug": "shirts",
+    "basePrice": 35000,
+    "compareAtPrice": 48000,
+    "photos": ["n013.jpg"]
+  },
+  {
+    "name": "PM Solid Grey Dress Shirt",
+    "nameSwahili": "Shati la Kijivu la PM",
+    "description": "PM solid grey dress shirt — versatile neutral that works with virtually every trouser color. Pictured with dark indigo jeans in the hero shot.",
+    "categorySlug": "shirts",
+    "basePrice": 35000,
+    "compareAtPrice": 48000,
+    "isFeatured": true,
+    "heroPhoto": "ai photos/Gemini_Generated_Image_gn64hfgn64hfgn64.png",
+    "photos": ["n014.jpg"]
+  },
+  {
+    "name": "PM White Red-Dot Dress Shirt",
+    "nameSwahili": "Shati Jeupe la Madoa Mekundu la PM",
+    "description": "PM white dress shirt with small all-over red dot pattern — subtle personality for smart-casual events.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n015.jpg"]
+  },
+  {
+    "name": "Kaishi Grey Oxford Button-Down",
+    "nameSwahili": "Shati la Kaishi la Oxford",
+    "description": "Kaishi grey Oxford button-down — casual-smart weekend shirt. Soft Oxford weave, button-down collar, relaxed fit.",
+    "categorySlug": "shirts",
+    "basePrice": 32000,
+    "compareAtPrice": 45000,
+    "photos": ["n016.jpg"]
+  },
+  {
+    "name": "Porto Lucciano Italy Denim-Blue Shirt",
+    "nameSwahili": "Shati la Porto Lucciano Italy la Navy",
+    "description": "Porto Lucciano Italy denim-blue long-sleeve shirt — premium Italian-designed piece with tonal buttons and clean lines. A cut above the basic office shirt.",
+    "categorySlug": "shirts",
+    "basePrice": 65000,
+    "compareAtPrice": 85000,
+    "photos": ["n017.jpg"]
+  },
+  {
+    "name": "PM White Diamond-Dot Dress Shirt",
+    "nameSwahili": "Shati Jeupe la PM la Madoa",
+    "description": "PM white dress shirt with tiny black diamond dot pattern. Understated interest — still office-appropriate.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n018.jpg"]
+  },
+  {
+    "name": "PM Dusty Purple Dress Shirt",
+    "nameSwahili": "Shati la Zambarau la PM",
+    "description": "PM dusty purple long-sleeve dress shirt with tonal buttons. A distinctive color that photographs beautifully at evening events.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n026.jpg"]
+  },
+  {
+    "name": "Hardwood Tropical Leaf Shirt (Navy & White)",
+    "nameSwahili": "Shati la Hardwood la Majani",
+    "description": "Hardwood tropical print shirt — navy blue palm & monstera leaves on white cotton. Vacation-ready for Zanzibar, Bagamoyo or a weekend by the coast. Lightweight cotton.",
+    "categorySlug": "shirts",
+    "basePrice": 55000,
+    "compareAtPrice": 75000,
+    "isFeatured": true,
+    "heroPhoto": "ai photos/Gemini_Generated_Image_o9tvojo9tvojo9tv.png",
+    "photos": ["n027.jpg", "ai photos/Gemini_Generated_Image_3sfj893sfj893sfj.png"]
+  },
+  {
+    "name": "PM Black & White Plaid Shirt",
+    "nameSwahili": "Shati la PM la Plaid",
+    "description": "PM black and white plaid long-sleeve shirt. Bold graphic check for weekend wear — works over a plain tee or buttoned up.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n028.jpg"]
+  },
+  {
+    "name": "Next Burgundy Dress Shirt",
+    "nameSwahili": "Shati la Next la Zabibu",
+    "description": "Next burgundy long-sleeve dress shirt — rich, confident color for dinners and evening wear.",
+    "categorySlug": "shirts",
+    "basePrice": 45000,
+    "compareAtPrice": 65000,
+    "photos": ["n029.jpg"]
+  },
+  {
+    "name": "Next White Dress Shirt with Blue Collar Trim",
+    "nameSwahili": "Shati la Next Jeupe",
+    "description": "Next white dress shirt with contrast blue collar lining and placket stripes. Sharp modern touch on a classic white shirt.",
+    "categorySlug": "shirts",
+    "basePrice": 45000,
+    "compareAtPrice": 65000,
+    "photos": ["n029.jpg"]
+  },
+  {
+    "name": "PM Navy Textured Dress Shirt",
+    "nameSwahili": "Shati la PM la Navy Lililoshonwa",
+    "description": "PM navy dress shirt with subtle jacquard texture weave. Looks solid navy from across the room but rewards a close look.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n030.jpg"]
+  },
+  {
+    "name": "Balotti Charcoal Grey Dress Shirt",
+    "nameSwahili": "Shati la Balotti la Charcoal",
+    "description": "Balotti charcoal grey dress shirt — deeper, moodier grey than light grey. Pairs beautifully with a black tie.",
+    "categorySlug": "shirts",
+    "basePrice": 35000,
+    "compareAtPrice": 48000,
+    "photos": ["n031.jpg"]
+  },
+  {
+    "name": "PM Navy Heather Dress Shirt",
+    "nameSwahili": "Shati la PM la Navy la Heathered",
+    "description": "PM navy dress shirt in heathered weave with flecks of silver — textured interest while reading as solid navy.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n032.jpg"]
+  },
+  {
+    "name": "Balotti Light Blue Dress Shirt",
+    "nameSwahili": "Shati la Balotti la Buluu",
+    "description": "Balotti classic light blue dress shirt — the second most important shirt after white. Pairs with navy, grey or olive trousers. Pictured with Jeep olive chinos in the hero shot.",
+    "categorySlug": "shirts",
+    "basePrice": 35000,
+    "compareAtPrice": 48000,
+    "isFeatured": true,
+    "heroPhoto": "ai photos/Gemini_Generated_Image_8b3c978b3c978b3c.png",
+    "photos": ["n033.jpg"]
+  },
+  {
+    "name": "Balotti Lavender Dress Shirt",
+    "nameSwahili": "Shati la Balotti la Lavender",
+    "description": "Balotti lavender dress shirt — soft icy purple that flatters on camera. Memorable without being loud.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n034.jpg"]
+  },
+  {
+    "name": "Balotti Royal Blue Dress Shirt",
+    "nameSwahili": "Shati la Balotti la Buluu Kali",
+    "description": "Balotti royal blue dress shirt — saturated, confident blue for evening events and weddings. Pairs with black or charcoal trousers.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n035.jpg"]
+  },
+  {
+    "name": "Balotti White Grey-Pinstripe Dress Shirt",
+    "nameSwahili": "Shati Jeupe la Mistari la Balotti",
+    "description": "Balotti white dress shirt with soft grey pinstripe. Business-classic that brings structure to a plain suit.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n036.jpg"]
+  },
+  {
+    "name": "Balotti Grey Mini-Gingham Shirt",
+    "nameSwahili": "Shati la Balotti la Checki Ndogo",
+    "description": "Balotti grey and white mini-gingham dress shirt — neat, subtle texture close-up. Reads as solid grey from a distance.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n037.jpg"]
+  },
+  {
+    "name": "PM Navy Pinstripe Dress Shirt",
+    "nameSwahili": "Shati la PM la Navy lenye Mistari",
+    "description": "PM navy dress shirt with darker tonal pinstripe — sharp, modern business look.",
+    "categorySlug": "shirts",
+    "basePrice": 38000,
+    "compareAtPrice": 52000,
+    "photos": ["n038.jpg"]
+  },
+  {
+    "name": "Sage Green Buffalo Check Shirt",
+    "nameSwahili": "Shati la Kijani Kibichi la Plaid",
+    "description": "Sage green and white buffalo check button-down shirt — weekend casual piece with earthy, calm color palette.",
+    "categorySlug": "shirts",
+    "basePrice": 32000,
+    "compareAtPrice": 45000,
+    "photos": ["n039.jpg"]
+  },
+  {
+    "name": "Balotti Solid Black Dress Shirt",
+    "nameSwahili": "Shati Jeusi la Balotti",
+    "description": "Balotti solid black dress shirt with tonal black buttons. Perfect for all-black occasions and evening events.",
+    "categorySlug": "shirts",
+    "basePrice": 35000,
+    "compareAtPrice": 48000,
+    "photos": ["n040.jpg"]
+  },
+  {
+    "name": "Grey Buffalo Check Casual Shirt",
+    "nameSwahili": "Shati la Kijivu la Plaid",
+    "description": "Grey and white buffalo check cotton button-down shirt — relaxed weekend wear with a modern color palette.",
+    "categorySlug": "shirts",
+    "basePrice": 30000,
+    "compareAtPrice": 42000,
+    "photos": ["n041.jpg"]
+  },
+  {
+    "name": "Jack & Jones Navy Pinstripe Shirt",
+    "nameSwahili": "Shati la Jack & Jones la Navy",
+    "description": "Jack & Jones navy shirt with white vertical pinstripe — premium branded casual shirt from the Originals line (est. 1975).",
+    "categorySlug": "shirts",
+    "basePrice": 55000,
+    "compareAtPrice": 75000,
+    "photos": ["n042.jpg"]
+  },
+  {
+    "name": "Jack & Jones White Navy-Pinstripe Shirt",
+    "nameSwahili": "Shati la Jack & Jones Jeupe",
+    "description": "Jack & Jones white casual shirt with navy vertical pinstripe and contrast blue inner collar. Signature Originals line detail.",
+    "categorySlug": "shirts",
+    "basePrice": 55000,
+    "compareAtPrice": 75000,
+    "photos": ["n043.jpg"]
+  },
+  {
+    "name": "Hardwood Lavender-Grey Slim-Fit Shirt",
+    "nameSwahili": "Shati la Hardwood la Lavender",
+    "description": "Hardwood slim-fit shirt in soft lavender-grey with H embroidered chest pocket. Made in Thailand. Lightweight and cool.",
+    "categorySlug": "shirts",
+    "basePrice": 45000,
+    "compareAtPrice": 60000,
+    "photos": ["n045.jpg"]
+  },
+  {
+    "name": "Hardwood Tropical Leaf Shirt (Navy & Beige)",
+    "nameSwahili": "Shati la Hardwood la Majani (Navy)",
+    "description": "Hardwood tropical print shirt — beige & cream leaves on deep navy cotton. The darker counterpart to the navy-and-white tropical.",
+    "categorySlug": "shirts",
+    "basePrice": 55000,
+    "compareAtPrice": 75000,
+    "photos": ["n023.jpg", "n057.jpg"]
+  },
+  {
+    "name": "Balotti Teal Dress Shirt + Black Trouser Set",
+    "nameSwahili": "Set la Shati Teal na Suruali Nyeusi",
+    "description": "Matching Balotti teal long-sleeve dress shirt paired with slim black Zani trousers. Complete event look — ready-to-wear.",
+    "categorySlug": "shirts",
+    "basePrice": 85000,
+    "compareAtPrice": 120000,
+    "photos": ["n022.jpg"]
+  },
+  {
+    "name": "Hardwood Tropical Shirt + Navy Jeans Set",
+    "nameSwahili": "Set la Shati na Jinzi",
+    "description": "Hardwood navy-beige tropical leaf shirt paired with dark navy denim jeans — complete resort-casual outfit.",
+    "categorySlug": "shirts",
+    "basePrice": 90000,
+    "compareAtPrice": 130000,
+    "photos": ["n023.jpg", "n057.jpg"]
+  },
+  {
+    "name": "PM Blue Stripe Shirt + Black Trouser Set",
+    "nameSwahili": "Set la Shati na Suruali",
+    "description": "PM blue vertical stripe long-sleeve shirt paired with slim black trousers — clean smart-casual outfit.",
+    "categorySlug": "shirts",
+    "basePrice": 85000,
+    "compareAtPrice": 120000,
+    "photos": ["n024.jpg", "n058.jpg"]
+  },
+  {
+    "name": "Balotti Pink Pinstripe Shirt + Prada Black Trouser Set",
+    "nameSwahili": "Set la Shati la Pinki na Suruali Nyeusi",
+    "description": "Balotti soft pink pinstripe long-sleeve shirt paired with Prada-style black trousers. Event-ready bundle.",
+    "categorySlug": "shirts",
+    "basePrice": 95000,
+    "compareAtPrice": 135000,
+    "photos": ["n025.jpg"]
+  }
+]

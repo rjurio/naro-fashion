@@ -1,0 +1,93 @@
+[
+  {
+    "name": "PM Slim-Fit Grey Trouser",
+    "nameSwahili": "Suruali ya Kijivu ya PM",
+    "description": "PM-brand slim-fit grey formal trouser in medium-weight twill. Flat-front cut with side pockets and clean straight leg — a reliable match for a crisp white or patterned dress shirt for office and event wear.",
+    "categorySlug": "trousers",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 55000,
+    "compareAtPrice": 75000,
+    "photos": ["n021.jpg"]
+  },
+  {
+    "name": "VioBoss Slim-Fit Grey Chino",
+    "nameSwahili": "Chino ya Kijivu ya VioBoss",
+    "description": "VioBoss slim-fit grey chino with a soft cotton-stretch finish. Tapered leg, side pockets and clean waistband — dresses up with a shirt and blazer or down with a polo.",
+    "categorySlug": "trousers",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 60000,
+    "compareAtPrice": 80000,
+    "photos": ["n044.jpg"]
+  },
+  {
+    "name": "Classic Grey Chino",
+    "nameSwahili": "Chino ya Kijivu",
+    "description": "Clean slim-fit grey chino in a medium-weight cotton twill. Versatile, dependable and easy to match — office-ready with a dress shirt, weekend-ready with a tee.",
+    "categorySlug": "trousers",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 50000,
+    "compareAtPrice": 70000,
+    "photos": ["n046.jpg"]
+  },
+  {
+    "name": "Jeep Khaki Tan Chino",
+    "nameSwahili": "Chino ya Khaki ya Jeep",
+    "description": "Jeep-brand khaki tan chino in sturdy cotton twill. Straight fit with reinforced stitching and side pockets — built for everyday wear with a polo, tee or casual shirt.",
+    "categorySlug": "trousers",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 70000,
+    "compareAtPrice": 90000,
+    "photos": ["n047.jpg"]
+  },
+  {
+    "name": "VioBoss Olive Slim Chino",
+    "nameSwahili": "Chino ya Rangi ya Zaituni ya VioBoss",
+    "description": "VioBoss olive-green slim chino in soft cotton-stretch. Tapered cut with clean side pockets — earthy tone pairs effortlessly with white, cream or light-blue shirts.",
+    "categorySlug": "trousers",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 60000,
+    "compareAtPrice": 80000,
+    "photos": ["n048.jpg"]
+  },
+  {
+    "name": "Seeng John Olive Chino",
+    "nameSwahili": "Chino ya Rangi ya Zaituni ya Seeng John",
+    "description": "Seeng John olive chino with straight tapered leg and clean flat-front waistband. Rich olive hue with a soft hand-feel — a smart alternative to classic khaki.",
+    "categorySlug": "trousers",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 58000,
+    "compareAtPrice": 78000,
+    "photos": ["n049.jpg"]
+  },
+  {
+    "name": "Renguler Navy Slim Chino",
+    "nameSwahili": "Chino ya Bluu Nzito ya Renguler",
+    "description": "Renguler navy slim chino in medium-weight cotton twill. Clean tapered leg with side pockets — the dependable navy that works with every shirt in the wardrobe.",
+    "categorySlug": "trousers",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 60000,
+    "compareAtPrice": 80000,
+    "photos": ["n050.jpg"]
+  },
+  {
+    "name": "Zani Black Slim Trouser",
+    "nameSwahili": "Suruali Nyeusi ya Zani",
+    "description": "Zani slim-fit black trouser in smooth twill. Flat-front, tapered leg — sharp with a crisp white dress shirt for formal events, easy with a polo for casual days.",
+    "categorySlug": "trousers",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 60000,
+    "compareAtPrice": 80000,
+    "photos": ["n051.jpg"]
+  },
+  {
+    "name": "Burberry Camel Tan Chino",
+    "nameSwahili": "Chino ya Rangi ya Ngamia ya Burberry",
+    "description": "Burberry camel-tan chino in premium cotton twill. Elevated khaki tone with clean lines — the premium neutral trouser that pairs with anything from navy blazers to pastel shirts.",
+    "categorySlug": "trousers",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 90000,
+    "compareAtPrice": 130000,
+    "isFeatured": true,
+    "photos": ["n053.jpg"]
+  }
+]

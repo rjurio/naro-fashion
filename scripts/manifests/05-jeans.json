@@ -1,0 +1,42 @@
+[
+  {
+    "name": "Medium-Wash Slim-Fit Jeans",
+    "nameSwahili": "Jinzi ya Bluu ya Kati",
+    "description": "Medium-wash blue slim-fit jeans in soft cotton-denim blend. Clean five-pocket cut with a slight stretch for all-day comfort — the everyday blue that works with every shirt.",
+    "categorySlug": "jeans",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 55000,
+    "compareAtPrice": 75000,
+    "photos": ["n052.jpg"]
+  },
+  {
+    "name": "Dark Indigo Slim-Fit Jeans",
+    "nameSwahili": "Jinzi ya Indigo Nzito",
+    "description": "Dark indigo slim-fit jeans in mid-weight denim. Clean hem, five-pocket cut and dependable tapered leg — smart enough to dress up with a button-down, easy enough with a tee.",
+    "categorySlug": "jeans",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 58000,
+    "compareAtPrice": 78000,
+    "photos": ["n054.jpg"]
+  },
+  {
+    "name": "Premium Dark Indigo Straight Jeans",
+    "nameSwahili": "Jinzi Nzito ya Indigo",
+    "description": "Premium dark indigo jeans in heavyweight denim with a straight-through leg. Deep, even wash and reinforced stitching — the dressy blue jean for evenings out.",
+    "categorySlug": "jeans",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 65000,
+    "compareAtPrice": 90000,
+    "photos": ["n055.jpg"]
+  },
+  {
+    "name": "Washed Black Slim Jeans",
+    "nameSwahili": "Jinzi Nyeusi Iliyooshwa",
+    "description": "Washed-black slim jeans with a slight fade for a worn-in look. Tapered leg, clean five-pocket cut — pairs with anything from a white tee to a crisp dress shirt.",
+    "categorySlug": "jeans",
+    "availabilityMode": "PURCHASE_ONLY",
+    "basePrice": 58000,
+    "compareAtPrice": 80000,
+    "photos": ["n056.jpg"]
+  }
+]
