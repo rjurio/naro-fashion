@@ -10,7 +10,7 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - @nestjs/serve-static for serving uploaded files
 
 ## Multi-Tenancy
-- **TenantContext** (`src/tenant/tenant.context.ts`): Request-scoped injectable providing `tenantId`. Use `this.tenantContext.requireId` in all Prisma queries. Falls back to decoding JWT from `Authorization` header when `req.user` is not set (for `@Public()` endpoints).
+- **TenantContext** (`src/tenant/tenant.context.ts`): Request-scoped injectable providing `tenantId`. Use `this.tenantContext.requireId` in all Prisma queries. Falls back to decoding JWT from `Authorization` header when `req.user` is not set (for `@Public()` endpoints). `requireId` throws `BadRequestException` (400) with actionable message ("Provide X-Tenant-Id header or a valid Authorization token") instead of generic 500 — cleaner public API responses.
 - **TenantInterceptor** (`src/tenant/tenant.interceptor.ts`): Global interceptor, extracts tenantId from JWT or `X-Tenant-Id` header.
 - **TenantGuard** (`src/auth/guards/tenant.guard.ts`): Validates tenant is ACTIVE.
 - **ModuleGuard** (`src/auth/guards/module.guard.ts`): Checks `@RequiresModule()` decorator against TenantModule table. 5-min cache per tenant. Decodes JWT payload from `Authorization` header for `@Public()` endpoints (uses Base64 decode, no external dependency).
@@ -36,7 +36,7 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - **auth** - Login, register, JWT access/refresh tokens, profile, password change, 2FA toggle, forgot/reset password, account lockout
 - **users** - Customer-facing: profile CRUD, addresses CRUD. Admin: `GET /users?search=` (list all tenant customers with order/rental counts, total spent), `PATCH /users/:id/suspend`, `PATCH /users/:id/activate`
 - **products** - Full CRUD with variants, images, search, filtering, toggle active, soft delete/restore, admin listing (includes inactive), purchasePrice/minimumStock/supplier fields, `GET /products/by-id/:id` for edit page. `POST /products/bulk-import` accepts a multipart CSV file (max 5MB, 500 rows) for batch product creation — resolves category by slug or name, returns `{ created, failed, total, errors[] }` with per-row validation feedback.
-- **categories** - Nested category tree CRUD, soft delete/restore
+- **categories** - Nested category tree CRUD, soft delete/restore. `findAll()` returns 3 levels deep and includes `_count: { products: { where: { deletedAt: null } } }` at **every** nesting level (parent + children + grandchildren) — child categories would otherwise report 0 products in the admin tree. Soft-deleted products are excluded from the count.
 - **cart** - Add/update/remove items, merge guest cart, count
 - **wishlist** - Toggle, check, count
 - **orders** - Create from cart, status workflow, admin listing, stats

@@ -63,6 +63,7 @@ GitHub: https://github.com/rjurio/naro-fashion
 - `TenantContext` (request-scoped injectable in `apps/api/src/tenant/tenant.context.ts`) — provides `tenantId` to all services
 - `TenantInterceptor` (global) — extracts tenantId from JWT or `X-Tenant-Id` header, sets `request.tenantId`
 - All 26 tenant-scoped services use `this.tenantContext.requireId` in Prisma queries
+- **`requireId` throws 400 not 500**: When tenant context is missing, `TenantContext.requireId` throws `BadRequestException` with an actionable message ("Provide X-Tenant-Id header or a valid Authorization token") — cleaner public API responses for unauthenticated callers.
 - **JWT fallback for @Public() endpoints**: Both `TenantContext` and `ModuleGuard` decode the JWT from the `Authorization` header when `req.user` is not populated (because `@Public()` skips `JwtAuthGuard`). This allows admin users to call public CMS/product/category endpoints with tenant scoping.
 - **Guards**:
   - `TenantGuard` — validates tenant is ACTIVE, attaches tenantId to request
@@ -156,4 +157,6 @@ All documentation lives in `docs/` with Markdown source and PDF/DOCX/PPTX export
 - Account lockout: 5 failed login attempts → 30-min lock; tracked in `AdminUser.lockedUntil` + `LoginAttempt` table
 - `tenantId` is currently nullable (`String?`) in schema — will be made required after full migration. All services already treat it as required via `TenantContext.requireId`
 - Storefront API calls that bypass the API client (raw `fetch`) must manually include `X-Tenant-Id` header from the `tenantId` cookie
+- Prisma `_count` must be included at **every** nesting level of a nested relation query — declaring it only at the parent returns 0 at deeper levels. Example: `categories.findAll()` includes `_count: { products: ... }` on parent, children, and grandchildren. Always also filter the counted relation by `deletedAt: null` so soft-deleted rows don't inflate counts.
+- Admin UI must tolerate both legacy and Prisma-native field names when the API passes the Prisma response through unchanged (e.g. category `name` / `nameSwahili` vs older `nameEn` / `nameSw`, and `_count.products` vs `productCount`). Use `a ?? b` fallbacks.
 - `<model-viewer>` web component requires `types/model-viewer.d.ts` type declaration in both admin and storefront. Must be dynamically imported (never SSR'd). Use `next/dynamic` with `ssr: false` on storefront.
