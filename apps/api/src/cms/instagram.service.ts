@@ -15,8 +15,23 @@ export class InstagramService {
   /**
    * Sync latest posts from Instagram Graph API into the database.
    * Upserts by instagramMediaId to avoid duplicates.
+   * If tenantId is not provided, syncs for all active tenants (used by cron).
    */
-  async syncFromInstagram(): Promise<{ synced: number; errors: number }> {
+  async syncFromInstagram(tenantId?: string): Promise<{ synced: number; errors: number }> {
+    // If no tenantId, resolve the first active tenant (current single-tenant prod setup).
+    // TODO: When we have multiple tenants with separate IG accounts, iterate each.
+    if (!tenantId) {
+      const tenant = await this.prisma.tenant.findFirst({
+        where: { status: 'ACTIVE' },
+        select: { id: true },
+      });
+      tenantId = tenant?.id;
+      if (!tenantId) {
+        this.logger.warn('No active tenant found for Instagram sync');
+        return { synced: 0, errors: 0 };
+      }
+    }
+
     const token = this.configService.get<string>('INSTAGRAM_ACCESS_TOKEN', '');
     const accountId = this.configService.get<string>('INSTAGRAM_BUSINESS_ACCOUNT_ID', '');
 
@@ -57,6 +72,7 @@ export class InstagramService {
           await this.prisma.instagramPost.upsert({
             where: { instagramMediaId: post.id },
             update: {
+              tenantId,
               caption: post.caption || null,
               imageUrl,
               postUrl: post.permalink || null,
@@ -65,6 +81,7 @@ export class InstagramService {
               postedAt: post.timestamp ? new Date(post.timestamp) : null,
             },
             create: {
+              tenantId,
               instagramMediaId: post.id,
               caption: post.caption || null,
               imageUrl,

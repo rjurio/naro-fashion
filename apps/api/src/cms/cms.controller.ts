@@ -31,6 +31,7 @@ import { InstagramService } from './instagram.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { INSTAGRAM_SYNC_INTERVALS } from '../scheduler/scheduler.service';
+import { TenantContext } from '../tenant/tenant.context';
 
 @Controller('cms')
 export class CmsController {
@@ -38,6 +39,7 @@ export class CmsController {
     private readonly cmsService: CmsService,
     private readonly instagramService: InstagramService,
     private readonly schedulerRegistry: SchedulerRegistry,
+    private readonly tenantContext: TenantContext,
   ) {}
 
   // --- Banners ---
@@ -251,7 +253,7 @@ export class CmsController {
   @UseGuards(JwtAuthGuard)
   @Post('instagram-posts/sync')
   syncInstagramPosts() {
-    return this.instagramService.syncFromInstagram();
+    return this.instagramService.syncFromInstagram(this.tenantContext.id ?? undefined);
   }
 
   // --- Instagram Sync Config ---
