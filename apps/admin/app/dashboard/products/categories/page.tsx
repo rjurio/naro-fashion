@@ -77,18 +77,19 @@ export default function CategoriesPage() {
   };
 
   const startEdit = (cat: Category) => {
-    setFormNameEn(cat.nameEn);
-    setFormNameSw(cat.nameSw || '');
+    setFormNameEn(cat.name ?? cat.nameEn ?? '');
+    setFormNameSw(cat.nameSwahili ?? cat.nameSw ?? '');
     setFormSlug(cat.slug);
     setFormParent(cat.parentId || '');
-    setFormImage(cat.imageUrl || '');
+    setFormImage(cat.image ?? cat.imageUrl ?? '');
     setFormSizeGuideId((cat as any).sizeGuideId || '');
     setEditingId(cat.id);
     setShowForm(true);
   };
 
   const handleDelete = async (cat: Category) => {
-    const ok = await confirm({ title: 'Delete Category', message: `Move "${cat.nameEn}" to recycle bin?`, confirmText: 'Delete', variant: 'danger' });
+    const displayName = cat.name ?? cat.nameEn ?? cat.slug;
+    const ok = await confirm({ title: 'Delete Category', message: `Move "${displayName}" to recycle bin?`, confirmText: 'Delete', variant: 'danger' });
     if (!ok) return;
     try {
       await adminApi.deleteCategory(cat.id);
@@ -121,7 +122,7 @@ export default function CategoriesPage() {
   };
 
   // Flatten top-level for parent dropdown
-  const flatParents = categories.map((c) => ({ id: c.id, nameEn: c.nameEn }));
+  const flatParents = categories.map((c) => ({ id: c.id, nameEn: c.name ?? c.nameEn ?? c.slug }));
 
   const inputClass = 'w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold';
 
