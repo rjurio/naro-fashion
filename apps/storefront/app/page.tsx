@@ -294,32 +294,43 @@ export default function HomePage() {
   return (
     <div>
       {/* Hero Section */}
-      <section className="relative min-h-[600px] lg:min-h-[700px] flex items-center overflow-hidden">
-        {/* Animated background slideshow with Ken Burns cinematic zoom+drift */}
+      <section className="relative min-h-[600px] lg:min-h-[720px] flex items-center overflow-hidden bg-[#0f0a10]">
+        {/* AMBIENT BACKDROP: same slide, heavily blurred + darkened.
+            Forced object-cover stretching doesn't matter when the
+            image is blurred into an abstract mood wash — this gives
+            the hero a rich color environment without ever showing
+            the photo distorted. */}
         {heroSlides.length > 0 ? (
-          heroSlides.map((slide, index) => (
-            <div
-              key={slide.id}
-              className="absolute inset-0 transition-opacity duration-[1.5s] ease-in-out"
-              style={{ opacity: index === currentSlide ? 1 : 0 }}
-            >
-              <img
-                src={slide.imageUrl.startsWith('/uploads') ? `${API_ORIGIN}${slide.imageUrl}` : slide.imageUrl}
-                alt={slide.title || 'Hero background'}
-                className={`absolute inset-0 w-full h-full object-cover will-change-transform ${
-                  index === currentSlide ? 'animate-hero-kenburns' : ''
-                }`}
-                style={{
-                  transformOrigin: index % 2 === 0 ? 'center center' : 'left center',
-                }}
-              />
-            </div>
-          ))
+          heroSlides.map((slide, index) => {
+            const src = slide.imageUrl.startsWith('/uploads')
+              ? `${API_ORIGIN}${slide.imageUrl}`
+              : slide.imageUrl;
+            return (
+              <div
+                key={`bg-${slide.id}`}
+                className="absolute inset-0 transition-opacity duration-[1.8s] ease-in-out"
+                style={{ opacity: index === currentSlide ? 1 : 0 }}
+              >
+                <img
+                  src={src}
+                  alt=""
+                  aria-hidden="true"
+                  className={`absolute inset-0 w-full h-full object-cover will-change-transform ${
+                    index === currentSlide ? 'animate-hero-kenburns' : ''
+                  }`}
+                  style={{
+                    filter: 'blur(42px) brightness(0.55) saturate(1.25)',
+                    transform: 'scale(1.15)',
+                    transformOrigin: index % 2 === 0 ? 'center center' : 'left center',
+                  }}
+                />
+              </div>
+            );
+          })
         ) : (
           /* Fallback animated gradient when no slides */
           <div className="absolute inset-0">
             <div className="absolute inset-0 bg-gradient-to-br from-[#1A1A1A] via-[#2d1a2e] to-[#1A1A1A] animate-hero-gradient" />
-            {/* Floating particles */}
             <div className="absolute inset-0 overflow-hidden">
               {[...Array(6)].map((_, i) => (
                 <div
@@ -338,11 +349,12 @@ export default function HomePage() {
             </div>
           </div>
         )}
-        {/* Dark overlay for text readability */}
-        <div className="absolute inset-0 bg-black/50" />
-        <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-black/30 to-transparent" />
 
-        {/* Diagonal gold shimmer sweep — travels across the hero every 8s */}
+        {/* Dark overlays for text contrast over the ambient backdrop */}
+        <div className="absolute inset-0 bg-gradient-to-r from-black/85 via-black/55 to-black/25" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/40" />
+
+        {/* Diagonal gold shimmer sweep — travels across every 8s */}
         <div className="pointer-events-none absolute inset-0 overflow-hidden z-[5]">
           <div
             className="absolute -top-1/2 left-0 h-[300%] w-1/3 animate-hero-shimmer"
@@ -354,15 +366,15 @@ export default function HomePage() {
           />
         </div>
 
-        {/* Twinkling gold sparkle points scattered across the hero */}
+        {/* Twinkling gold sparkles scattered across the hero */}
         <div className="pointer-events-none absolute inset-0 z-[6] hidden sm:block">
           {[
-            { top: '18%', left: '62%', delay: '0s' },
-            { top: '30%', left: '78%', delay: '0.6s' },
-            { top: '55%', left: '70%', delay: '1.2s' },
-            { top: '72%', left: '85%', delay: '1.8s' },
-            { top: '40%', left: '92%', delay: '2.4s' },
-            { top: '80%', left: '55%', delay: '0.9s' },
+            { top: '18%', left: '58%', delay: '0s' },
+            { top: '30%', left: '92%', delay: '0.6s' },
+            { top: '55%', left: '54%', delay: '1.2s' },
+            { top: '72%', left: '95%', delay: '1.8s' },
+            { top: '40%', left: '50%', delay: '2.4s' },
+            { top: '80%', left: '62%', delay: '0.9s' },
           ].map((s, i) => (
             <span
               key={i}
@@ -377,61 +389,82 @@ export default function HomePage() {
           ))}
         </div>
 
-        {/* Floating product thumbnails (desktop only) — featured gowns orbit on the right */}
-        {newArrivals.length > 0 && (
-          <div className="pointer-events-none absolute right-6 top-1/2 -translate-y-1/2 z-[7] hidden lg:block">
-            <div className="relative h-[460px] w-[340px]">
-              {/* Slow-rotating decorative gold orbit ring behind the thumbnails */}
-              <div className="absolute inset-0 rounded-full border border-[#D4AF37]/25 animate-hero-orbit" />
+        {/* SHARP FOREGROUND FRAME: the same slide shown at its natural
+            portrait aspect ratio inside a gold-framed card. This is the
+            "hero subject" — always fully visible, never stretched. The
+            blurred backdrop above provides the mood; this provides the
+            product clarity. Hidden on mobile (the blurred backdrop
+            reads fine on small screens and we keep the text readable). */}
+        {heroSlides.length > 0 && (
+          <div className="pointer-events-none absolute inset-y-0 right-0 z-[8] hidden md:flex items-center justify-end pr-6 lg:pr-16">
+            <div className="relative">
+              {/* Rotating decorative gold ring framing the photo */}
               <div
-                className="absolute inset-6 rounded-full border border-dashed border-[#D4AF37]/15 animate-hero-orbit"
-                style={{ animationDirection: 'reverse', animationDuration: '55s' }}
+                className="absolute -inset-8 rounded-[2rem] border border-[#D4AF37]/30 animate-hero-orbit"
+                style={{ animationDuration: '60s' }}
+              />
+              <div
+                className="absolute -inset-4 rounded-[1.75rem] border border-dashed border-[#D4AF37]/25 animate-hero-orbit"
+                style={{ animationDirection: 'reverse', animationDuration: '90s' }}
               />
 
-              {/* Featured floating thumbnails */}
-              {newArrivals.slice(0, 3).map((p, i) => {
-                const positions = [
-                  { top: '5%', left: '45%', size: 160, delay: '0s', rotate: '-6deg' },
-                  { top: '38%', left: '5%', size: 180, delay: '1.5s', rotate: '4deg' },
-                  { top: '60%', left: '55%', size: 150, delay: '3s', rotate: '-3deg' },
-                ];
-                const pos = positions[i];
-                if (!p.image) return null;
-                return (
-                  <div
-                    key={p.id}
-                    className="absolute animate-hero-product-float"
-                    style={{
-                      top: pos.top,
-                      left: pos.left,
-                      width: `${pos.size}px`,
-                      height: `${pos.size * 1.25}px`,
-                      animationDelay: pos.delay,
-                      transform: `rotate(${pos.rotate})`,
-                    }}
-                  >
-                    <div className="relative h-full w-full overflow-hidden rounded-2xl shadow-2xl animate-hero-ring-pulse ring-2 ring-[#D4AF37]/40">
-                      <img
-                        src={p.image}
-                        alt={p.name}
-                        className="h-full w-full object-cover"
-                        loading="lazy"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
-                      {p.rentPrice || p.isRentable ? (
-                        <span className="absolute top-2 right-2 text-[10px] font-bold uppercase tracking-wide bg-[#D4AF37] text-[#1A1A1A] px-2 py-0.5 rounded-full shadow-md">
-                          Rent
-                        </span>
-                      ) : null}
-                      <div className="absolute bottom-2 left-2 right-2">
-                        <p className="text-xs font-semibold text-white line-clamp-1 drop-shadow-lg">
-                          {p.name}
-                        </p>
-                      </div>
+              {/* The actual photo card — aspect-[3/4] keeps portrait framing */}
+              <div className="relative w-[260px] sm:w-[300px] lg:w-[360px] aspect-[3/4] rounded-3xl overflow-hidden shadow-[0_25px_80px_-15px_rgba(212,175,55,0.45)] ring-1 ring-[#D4AF37]/50 animate-hero-ring-pulse bg-[#1A1A1A]">
+                {heroSlides.map((slide, index) => {
+                  const src = slide.imageUrl.startsWith('/uploads')
+                    ? `${API_ORIGIN}${slide.imageUrl}`
+                    : slide.imageUrl;
+                  return (
+                    <img
+                      key={`fg-${slide.id}`}
+                      src={src}
+                      alt={slide.title || 'Featured bridal gown'}
+                      className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-[1.2s] ease-in-out ${
+                        index === currentSlide ? 'animate-hero-kenburns' : ''
+                      }`}
+                      style={{
+                        opacity: index === currentSlide ? 1 : 0,
+                        transformOrigin: index % 2 === 0 ? 'center center' : 'left center',
+                      }}
+                    />
+                  );
+                })}
+
+                {/* Subtle bottom gradient so the title caption is readable */}
+                <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+
+                {/* Caption: current slide title with gold accent bar */}
+                {heroSlides[currentSlide]?.title && (
+                  <div className="absolute bottom-0 left-0 right-0 p-4 lg:p-5">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="block h-[2px] w-8 bg-[#D4AF37]" />
+                      <span className="text-[10px] uppercase tracking-[0.2em] text-[#D4AF37] font-semibold">
+                        Featured
+                      </span>
                     </div>
+                    <p className="text-white text-sm lg:text-base font-semibold leading-tight drop-shadow-lg line-clamp-2">
+                      {heroSlides[currentSlide].title}
+                    </p>
                   </div>
-                );
-              })}
+                )}
+
+                {/* Diagonal light streak inside the frame for liveliness */}
+                <div
+                  className="absolute inset-0 pointer-events-none animate-hero-shimmer"
+                  style={{
+                    background:
+                      'linear-gradient(115deg, transparent 40%, rgba(255,255,255,0.12) 50%, transparent 60%)',
+                    animationDuration: '6s',
+                  }}
+                />
+              </div>
+
+              {/* Small floating gold corner accents */}
+              <span className="absolute -top-2 -left-2 h-3 w-3 rotate-45 bg-[#D4AF37] rounded-sm shadow-lg animate-hero-sparkle" />
+              <span
+                className="absolute -bottom-2 -right-2 h-3 w-3 rotate-45 bg-[#D4AF37] rounded-sm shadow-lg animate-hero-sparkle"
+                style={{ animationDelay: '1.2s' }}
+              />
             </div>
           </div>
         )}
