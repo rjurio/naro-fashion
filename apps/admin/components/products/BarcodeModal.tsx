@@ -65,30 +65,21 @@ export default function BarcodeModal({ productName, productSku, variants, onClos
         doc.text(v.name || details, x + labelW / 2, y + 7, { align: 'center' });
       }
 
-      // Barcode as SVG → canvas → image
+      // Render barcode directly to a <canvas> (synchronous — no Image loading needed).
+      // Previous implementation used SVG → Image → Canvas which failed because
+      // Image.src loading is async even for data URIs, producing blank PNGs.
       const barcodeValue = getBarcodeValue(v);
-      const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       try {
-        JsBarcode(svgEl, barcodeValue, {
-          format: 'CODE128',
-          width: 1.2,
-          height: 30,
-          displayValue: true,
-          fontSize: 8,
-          margin: 0,
-          textMargin: 1,
-        });
-
-        const svgStr = new XMLSerializer().serializeToString(svgEl);
         const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        const img = new Image();
-        img.src = 'data:image/svg+xml;base64,' + btoa(svgStr);
-
-        // Sync draw — works because SVG is data URI
-        canvas.width = parseInt(svgEl.getAttribute('width') || '200');
-        canvas.height = parseInt(svgEl.getAttribute('height') || '50');
-        ctx?.drawImage(img, 0, 0);
+        JsBarcode(canvas, barcodeValue, {
+          format: 'CODE128',
+          width: 2,
+          height: 60,
+          displayValue: true,
+          fontSize: 16,
+          margin: 4,
+          textMargin: 2,
+        });
 
         const barcodeImg = canvas.toDataURL('image/png');
         const barcodeW = 40;

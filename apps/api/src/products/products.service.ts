@@ -184,6 +184,7 @@ export class ProductsService {
       isFeatured: dto.isFeatured ?? false,
       isActive: dto.published !== false,
       rentalPricePerDay: dto.rentalPricePerDay,
+      latePenaltyPercent: dto.latePenaltyPercent,
       rentalDepositAmount: dto.rentalDepositAmount,
       minRentalDays: dto.minRentalDays,
       maxRentalDays: dto.maxRentalDays,
@@ -423,6 +424,7 @@ export class ProductsService {
     if (dto.isFeatured !== undefined) data.isFeatured = dto.isFeatured;
     if (dto.published !== undefined) data.isActive = dto.published;
     if (dto.rentalPricePerDay !== undefined) data.rentalPricePerDay = dto.rentalPricePerDay;
+    if (dto.latePenaltyPercent !== undefined) data.latePenaltyPercent = dto.latePenaltyPercent;
     if (dto.rentalDepositAmount !== undefined) data.rentalDepositAmount = dto.rentalDepositAmount;
     if (dto.minRentalDays !== undefined) data.minRentalDays = dto.minRentalDays;
     if (dto.maxRentalDays !== undefined) data.maxRentalDays = dto.maxRentalDays;

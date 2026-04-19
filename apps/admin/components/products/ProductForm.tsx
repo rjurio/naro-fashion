@@ -33,6 +33,7 @@ export interface ProductFormData {
   availabilityMode: string;
   isFeatured: boolean;
   rentalPricePerDay: number | null;
+  latePenaltyPercent: number | null;
   rentalDepositAmount: number | null;
   minRentalDays: number | null;
   maxRentalDays: number | null;
@@ -55,9 +56,28 @@ const emptyVariant = (): VariantRow => ({
   name: '', sku: '', barcode: '', size: '', color: '', colorHex: '', price: 0, stock: 0,
 });
 
+/**
+ * Flatten a nested category tree into a depth-annotated list for rendering
+ * indented <option> elements in a native <select>. Children are sorted
+ * under their parent so users can pick parent or subcategory.
+ */
+function flattenCategoryTree(
+  nodes: any[],
+  depth = 0,
+  out: { id: string; name: string; depth: number }[] = [],
+): { id: string; name: string; depth: number }[] {
+  for (const n of nodes) {
+    out.push({ id: n.id, name: n.name, depth });
+    if (Array.isArray(n.children) && n.children.length > 0) {
+      flattenCategoryTree(n.children, depth + 1, out);
+    }
+  }
+  return out;
+}
+
 export default function ProductForm({ initialData, onSubmit, submitLabel }: Props) {
   const { toast } = useToast();
-  const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
   const [sizeGuides, setSizeGuides] = useState<{ id: string; name: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [showRental, setShowRental] = useState(false);
@@ -76,6 +96,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
   const [availabilityMode, setAvailabilityMode] = useState('PURCHASE_ONLY');
   const [isFeatured, setIsFeatured] = useState(false);
   const [rentalPricePerDay, setRentalPricePerDay] = useState<number | null>(null);
+  const [latePenaltyPercent, setLatePenaltyPercent] = useState<number | null>(null);
   const [rentalDepositAmount, setRentalDepositAmount] = useState<number | null>(null);
   const [minRentalDays, setMinRentalDays] = useState<number | null>(null);
   const [maxRentalDays, setMaxRentalDays] = useState<number | null>(null);
@@ -112,6 +133,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
     setIsFeatured(initialData.isFeatured || false);
     setSizeGuideId(initialData.sizeGuideId || '');
     setRentalPricePerDay(initialData.rentalPricePerDay ? Number(initialData.rentalPricePerDay) : null);
+    setLatePenaltyPercent(initialData.latePenaltyPercent != null ? Number(initialData.latePenaltyPercent) : null);
     setRentalDepositAmount(initialData.rentalDepositAmount ? Number(initialData.rentalDepositAmount) : null);
     setMinRentalDays(initialData.minRentalDays || null);
     setMaxRentalDays(initialData.maxRentalDays || null);
@@ -196,6 +218,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
         sizeGuideId: sizeGuideId || undefined,
         isFeatured,
         rentalPricePerDay: showRental ? rentalPricePerDay : null,
+        latePenaltyPercent: showRental ? latePenaltyPercent : null,
         rentalDepositAmount: showRental ? rentalDepositAmount : null,
         minRentalDays: showRental ? minRentalDays : null,
         maxRentalDays: showRental ? maxRentalDays : null,
@@ -265,11 +288,13 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
-            <InfoLabel label="Category" tooltip="The product category this item belongs to (e.g. Gowns, Suits, Accessories). Helps customers find products." required />
+            <InfoLabel label="Category" tooltip="The product category or subcategory this item belongs to. Subcategories are indented under their parent (e.g. Men → Shirts). Picking a subcategory is recommended for better storefront organization." required />
             <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={inputCls}>
               <option value="">Select category...</option>
-              {categories.map((cat) => (
-                <option key={cat.id} value={cat.id}>{cat.name}</option>
+              {flattenCategoryTree(categories).map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  {'\u00A0\u00A0\u00A0\u00A0'.repeat(cat.depth)}{cat.depth > 0 ? '↳ ' : ''}{cat.name}
+                </option>
               ))}
             </select>
           </div>
@@ -304,28 +329,35 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
       {showRental && (
         <section className="bg-[hsl(var(--card))] rounded-xl border border-[hsl(var(--border))] p-5 space-y-4">
           <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Rental Settings</h3>
+          <p className="text-xs text-[hsl(var(--muted-foreground))]">
+            Customers pay a flat <strong>Rental Price</strong> for the entire rental period up to the <strong>Max Rental Days</strong>. If they return late, a daily penalty equal to the <strong>Late Penalty %</strong> of the rental price is charged for each extra day.
+          </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             <div>
-              <InfoLabel label="Price per Day (TZS)" tooltip="The daily rental fee charged to the customer for borrowing this product." />
+              <InfoLabel label="Rental Price (TZS)" tooltip="The flat fee customers pay for the entire rental period, up to the Max Rental Days. Not a per-day rate." />
               <input type="number" min={0} value={rentalPricePerDay ?? ''} onChange={(e) => setRentalPricePerDay(e.target.value ? Number(e.target.value) : null)} className={inputCls} />
+            </div>
+            <div>
+              <InfoLabel label="Late Penalty (% per day)" tooltip="If the customer returns the item after Max Rental Days, they pay this percentage of the Rental Price for every extra day. Example: Rental Price 50,000 + Penalty 10% → 5,000/day late fee." />
+              <input type="number" min={0} max={100} step={0.5} value={latePenaltyPercent ?? ''} onChange={(e) => setLatePenaltyPercent(e.target.value ? Number(e.target.value) : null)} className={inputCls} placeholder="10" />
             </div>
             <div>
               <InfoLabel label="Deposit Amount (TZS)" tooltip="Refundable security deposit collected before the rental begins (typically 25% of product value)." />
               <input type="number" min={0} value={rentalDepositAmount ?? ''} onChange={(e) => setRentalDepositAmount(e.target.value ? Number(e.target.value) : null)} className={inputCls} />
             </div>
-            <div>
-              <InfoLabel label="Buffer Days Override" tooltip="Number of days blocked between rentals for cleaning and inspection. Overrides the global rental policy buffer (default 7 days)." />
-              <input type="number" min={0} value={bufferDaysOverride ?? ''} onChange={(e) => setBufferDaysOverride(e.target.value ? Number(e.target.value) : null)} className={inputCls} />
-            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             <div>
               <InfoLabel label="Min Rental Days" tooltip="The minimum number of days a customer must rent this product." />
               <input type="number" min={1} value={minRentalDays ?? ''} onChange={(e) => setMinRentalDays(e.target.value ? Number(e.target.value) : null)} className={inputCls} />
             </div>
             <div>
-              <InfoLabel label="Max Rental Days" tooltip="The maximum number of days a customer can rent this product in a single booking." />
+              <InfoLabel label="Max Rental Days" tooltip="The maximum days included in the flat Rental Price. Returning later triggers the daily late penalty." />
               <input type="number" min={1} value={maxRentalDays ?? ''} onChange={(e) => setMaxRentalDays(e.target.value ? Number(e.target.value) : null)} className={inputCls} />
+            </div>
+            <div>
+              <InfoLabel label="Buffer Days Override" tooltip="Number of days blocked between rentals for cleaning and inspection. Overrides the global rental policy buffer (default 7 days)." />
+              <input type="number" min={0} value={bufferDaysOverride ?? ''} onChange={(e) => setBufferDaysOverride(e.target.value ? Number(e.target.value) : null)} className={inputCls} />
             </div>
           </div>
         </section>

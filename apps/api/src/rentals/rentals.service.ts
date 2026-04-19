@@ -112,7 +112,13 @@ export class RentalsService {
       );
     }
 
-    const rentalPricePerDay = product.rentalPricePerDay
+    // New pricing: flat rental price for the entire rental within maxRentalDays.
+    // If returned within maxRentalDays → customer pays only the flat price.
+    // If returned after maxRentalDays → customer pays flat price PLUS
+    //   latePenaltyPercent% of flat price per day late.
+    // The stored totalRentalPrice here is the flat price at booking time;
+    //   any late fee is assessed on actual return in the rental controller.
+    const rentalPrice = product.rentalPricePerDay
       ? Number(product.rentalPricePerDay)
       : Number(product.basePrice) * 0.1;
     const depositAmount = product.rentalDepositAmount
@@ -123,7 +129,7 @@ export class RentalsService {
       policy?.defaultDownPaymentPct ??
       25;
 
-    const totalRentalPrice = rentalPricePerDay * rentalDays;
+    const totalRentalPrice = rentalPrice;
     const downPaymentAmount = totalRentalPrice * (downPaymentPct / 100);
 
     // Check ID verification status
@@ -282,7 +288,30 @@ export class RentalsService {
 
     const data: any = { status };
     if (status === 'RETURNED') {
-      data.actualReturnDate = new Date();
+      const returnedAt = new Date();
+      data.actualReturnDate = returnedAt;
+
+      // Calculate late fee if returned after maxRentalDays.
+      // Late fee per day = latePenaltyPercent% of flat rental price.
+      const product = await this.prisma.product.findUnique({
+        where: { id: rental.productId },
+        select: {
+          rentalPricePerDay: true,
+          maxRentalDays: true,
+          latePenaltyPercent: true,
+        },
+      });
+      if (product?.maxRentalDays && product.rentalPricePerDay) {
+        const startMs = new Date(rental.startDate).getTime();
+        const returnMs = returnedAt.getTime();
+        const daysUsed = Math.ceil((returnMs - startMs) / (1000 * 60 * 60 * 24));
+        const daysLate = Math.max(0, daysUsed - product.maxRentalDays);
+        if (daysLate > 0) {
+          const pct = Number(product.latePenaltyPercent ?? 10);
+          const flatPrice = Number(product.rentalPricePerDay);
+          data.lateFee = (flatPrice * (pct / 100)) * daysLate;
+        }
+      }
     }
 
     const updated = await this.prisma.rentalOrder.update({

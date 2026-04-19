@@ -318,7 +318,13 @@ model Product {
   specifications    Json?
 
   // Rental-specific fields
+  // rentalPrice = flat price paid for the entire rental period (up to maxRentalDays).
+  // If customer exceeds maxRentalDays, they pay a late penalty per day =
+  //   latePenaltyPercent% of rentalPrice, per day late.
+  // (Column name kept as rentalPricePerDay for backward compatibility but
+  //  the value now represents the total flat rental price.)
   rentalPricePerDay    Decimal? @db.Decimal(12, 2)
+  latePenaltyPercent   Decimal? @db.Decimal(5, 2) @default(10)
   rentalDepositAmount  Decimal? @db.Decimal(12, 2)
   rentalDownPaymentPct Int?     @default(25)
   minRentalDays        Int?

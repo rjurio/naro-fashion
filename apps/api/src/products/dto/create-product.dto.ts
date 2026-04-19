@@ -112,6 +112,12 @@ export class CreateProductDto {
   @IsNumber()
   @Min(0)
   @Type(() => Number)
+  latePenaltyPercent?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
   rentalDepositAmount?: number;
 
   @IsOptional()
