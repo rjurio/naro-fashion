@@ -43,9 +43,9 @@ const IDENTITY_FIELDS: SettingField[] = [
 
 const CONTACT_FIELDS: SettingField[] = [
   { key: 'contact_email', label: 'Email Address', type: 'email', placeholder: 'hello@example.com' },
-  { key: 'contact_phone', label: 'Phone Number', type: 'tel', placeholder: '+255 700 000 000' },
+  { key: 'contact_phone', label: 'Phone Number', type: 'tel', placeholder: '0753968554' },
   { key: 'whatsapp_number', label: 'WhatsApp Number', type: 'tel', placeholder: '255700000000' },
-  { key: 'contact_address', label: 'Address', type: 'text', placeholder: 'Dar es Salaam, Tanzania' },
+  { key: 'contact_address', label: 'Address', type: 'text', placeholder: 'Kibada/Kigamboni, Dar es Salaam, Tanzania' },
   { key: 'contact_address_sw', label: 'Address (Swahili)', type: 'text', placeholder: '', swahili: true },
 ];
 

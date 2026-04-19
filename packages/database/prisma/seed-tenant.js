@@ -43,9 +43,9 @@ async function main() {
 
     // Contact Info
     { key: 'contact_email', value: 'hello@narofashion.co.tz', type: 'string' },
-    { key: 'contact_phone', value: '+255 759 047 287', type: 'string' },
-    { key: 'contact_address', value: 'Kariakoo, Dar es Salaam, Tanzania', type: 'string' },
-    { key: 'contact_address_sw', value: 'Kariakoo, Dar es Salaam, Tanzania', type: 'string' },
+    { key: 'contact_phone', value: '0753968554', type: 'string' },
+    { key: 'contact_address', value: 'Kibada/Kigamboni, Dar es Salaam, Tanzania', type: 'string' },
+    { key: 'contact_address_sw', value: 'Kibada/Kigamboni, Dar es Salaam, Tanzania', type: 'string' },
     { key: 'whatsapp_number', value: '255759047287', type: 'string' },
 
     // Social Media Links

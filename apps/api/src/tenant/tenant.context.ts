@@ -1,4 +1,4 @@
-import { Injectable, Scope, Inject } from '@nestjs/common';
+import { Injectable, Scope, Inject, BadRequestException } from '@nestjs/common';
 import { REQUEST } from '@nestjs/core';
 import { Request } from 'express';
 import { JwtService } from '@nestjs/jwt';
@@ -59,7 +59,9 @@ export class TenantContext {
   get requireId(): string {
     const id = this.id;
     if (!id) {
-      throw new Error('Tenant context is required but not available');
+      throw new BadRequestException(
+        'Tenant context is required. Provide X-Tenant-Id header or a valid Authorization token.',
+      );
     }
     return id;
   }
