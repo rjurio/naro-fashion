@@ -180,38 +180,45 @@ export default function BarcodeModal({ productName, productSku, productId, produ
         </div>
 
         {/* Preview */}
-        <div className="p-4 rounded-lg bg-[hsl(var(--accent))] overflow-x-auto">
-          <p className="text-xs text-[hsl(var(--muted-foreground))] mb-2">Preview (first variant):</p>
-          {effectiveVariants[0] && (
-            <BarcodeLabel
-              productName={productName}
-              variantName={effectiveVariants[0].name}
-              barcode={getBarcodeValue(effectiveVariants[0])}
-              price={Number(effectiveVariants[0].price)}
-              size={effectiveVariants[0].size || undefined}
-              color={effectiveVariants[0].color || undefined}
-            />
-          )}
+        <div className="p-4 rounded-lg bg-[hsl(var(--accent))]">
+          <p className="text-xs text-[hsl(var(--muted-foreground))] mb-3 text-center">
+            Preview — printed at 50mm × 30mm
+          </p>
+          <div className="flex items-center justify-center">
+            {effectiveVariants[0] && (
+              <BarcodeLabel
+                productName={productName}
+                variantName={effectiveVariants[0].name}
+                barcode={getBarcodeValue(effectiveVariants[0])}
+                price={Number(effectiveVariants[0].price)}
+                size={effectiveVariants[0].size || undefined}
+                color={effectiveVariants[0].color || undefined}
+              />
+            )}
+          </div>
         </div>
 
         {/* Actions */}
-        <div className="flex justify-end gap-3">
+        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 text-sm rounded-lg border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))]"
           >
             Close
           </button>
           <button
+            type="button"
             onClick={handleDownload}
-            className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg border border-brand-gold text-brand-gold hover:bg-brand-gold/10"
+            className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm rounded-lg border border-brand-gold text-brand-gold hover:bg-brand-gold/10"
           >
             <Download className="w-4 h-4" />
             Download PDF
           </button>
           <button
+            type="button"
             onClick={handlePrint}
-            className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg bg-brand-gold text-black font-medium hover:bg-brand-gold/90"
+            className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm rounded-lg bg-brand-gold text-black font-medium hover:bg-brand-gold/90"
           >
             <Printer className="w-4 h-4" />
             Print
