@@ -202,7 +202,7 @@ export default function Header() {
                 className="hidden sm:flex items-center justify-center h-10 px-2.5 rounded-lg text-xs font-bold hover:bg-muted transition-colors border border-border"
                 aria-label={locale === 'en' ? t('header.switchToSwahili') : t('header.switchToEnglish')}
               >
-                {locale === 'en' ? 'EN' : 'SW'}
+                {locale === 'en' ? 'SW' : 'EN'}
               </button>
 
               {/* Wishlist */}
