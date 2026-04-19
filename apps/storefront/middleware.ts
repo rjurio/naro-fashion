@@ -14,9 +14,15 @@ async function resolveTenant(hostname: string): Promise<any | null> {
     return cached.data;
   }
 
+  // Strip leading "www." so www.narofashion.co.tz and narofashion.co.tz both
+  // resolve to the same tenant row (which is stored under the apex domain).
+  // Without this, the www variant falls through to the slug fallback and
+  // we unnecessarily waste a round-trip on every request.
+  const lookupDomain = hostname.replace(/^www\./i, '');
+
   try {
     // Try domain resolution
-    const res = await fetch(`${API_URL}/tenants/resolve?domain=${hostname}`, {
+    const res = await fetch(`${API_URL}/tenants/resolve?domain=${lookupDomain}`, {
       next: { revalidate: 60 },
     });
 

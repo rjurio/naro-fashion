@@ -342,6 +342,100 @@ export default function HomePage() {
         <div className="absolute inset-0 bg-black/50" />
         <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-black/30 to-transparent" />
 
+        {/* Diagonal gold shimmer sweep — travels across the hero every 8s */}
+        <div className="pointer-events-none absolute inset-0 overflow-hidden z-[5]">
+          <div
+            className="absolute -top-1/2 left-0 h-[300%] w-1/3 animate-hero-shimmer"
+            style={{
+              background:
+                'linear-gradient(90deg, transparent 0%, rgba(212,175,55,0.14) 45%, rgba(255,255,255,0.28) 50%, rgba(212,175,55,0.14) 55%, transparent 100%)',
+              filter: 'blur(6px)',
+            }}
+          />
+        </div>
+
+        {/* Twinkling gold sparkle points scattered across the hero */}
+        <div className="pointer-events-none absolute inset-0 z-[6] hidden sm:block">
+          {[
+            { top: '18%', left: '62%', delay: '0s' },
+            { top: '30%', left: '78%', delay: '0.6s' },
+            { top: '55%', left: '70%', delay: '1.2s' },
+            { top: '72%', left: '85%', delay: '1.8s' },
+            { top: '40%', left: '92%', delay: '2.4s' },
+            { top: '80%', left: '55%', delay: '0.9s' },
+          ].map((s, i) => (
+            <span
+              key={i}
+              className="absolute block h-1.5 w-1.5 rounded-full bg-[#D4AF37] animate-hero-sparkle"
+              style={{
+                top: s.top,
+                left: s.left,
+                animationDelay: s.delay,
+                boxShadow: '0 0 12px 2px rgba(212,175,55,0.8)',
+              }}
+            />
+          ))}
+        </div>
+
+        {/* Floating product thumbnails (desktop only) — featured gowns orbit on the right */}
+        {newArrivals.length > 0 && (
+          <div className="pointer-events-none absolute right-6 top-1/2 -translate-y-1/2 z-[7] hidden lg:block">
+            <div className="relative h-[460px] w-[340px]">
+              {/* Slow-rotating decorative gold orbit ring behind the thumbnails */}
+              <div className="absolute inset-0 rounded-full border border-[#D4AF37]/25 animate-hero-orbit" />
+              <div
+                className="absolute inset-6 rounded-full border border-dashed border-[#D4AF37]/15 animate-hero-orbit"
+                style={{ animationDirection: 'reverse', animationDuration: '55s' }}
+              />
+
+              {/* Featured floating thumbnails */}
+              {newArrivals.slice(0, 3).map((p, i) => {
+                const positions = [
+                  { top: '5%', left: '45%', size: 160, delay: '0s', rotate: '-6deg' },
+                  { top: '38%', left: '5%', size: 180, delay: '1.5s', rotate: '4deg' },
+                  { top: '60%', left: '55%', size: 150, delay: '3s', rotate: '-3deg' },
+                ];
+                const pos = positions[i];
+                if (!p.image) return null;
+                return (
+                  <div
+                    key={p.id}
+                    className="absolute animate-hero-product-float"
+                    style={{
+                      top: pos.top,
+                      left: pos.left,
+                      width: `${pos.size}px`,
+                      height: `${pos.size * 1.25}px`,
+                      animationDelay: pos.delay,
+                      transform: `rotate(${pos.rotate})`,
+                    }}
+                  >
+                    <div className="relative h-full w-full overflow-hidden rounded-2xl shadow-2xl animate-hero-ring-pulse ring-2 ring-[#D4AF37]/40">
+                      <img
+                        src={p.image}
+                        alt={p.name}
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
+                      {p.rentPrice || p.isRentable ? (
+                        <span className="absolute top-2 right-2 text-[10px] font-bold uppercase tracking-wide bg-[#D4AF37] text-[#1A1A1A] px-2 py-0.5 rounded-full shadow-md">
+                          Rent
+                        </span>
+                      ) : null}
+                      <div className="absolute bottom-2 left-2 right-2">
+                        <p className="text-xs font-semibold text-white line-clamp-1 drop-shadow-lg">
+                          {p.name}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Slide indicators */}
         {heroSlides.length > 1 && (
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2">

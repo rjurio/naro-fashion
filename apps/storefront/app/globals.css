@@ -254,3 +254,84 @@ summary {
 .animate-hero-float {
   animation: hero-float 10s ease-in-out infinite;
 }
+
+/* Shimmer sweep — diagonal gold highlight that travels across the hero */
+@keyframes hero-shimmer {
+  0% {
+    transform: translateX(-150%) translateY(-50%) rotate(20deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 0.9;
+  }
+  90% {
+    opacity: 0.6;
+  }
+  100% {
+    transform: translateX(150%) translateY(50%) rotate(20deg);
+    opacity: 0;
+  }
+}
+
+.animate-hero-shimmer {
+  animation: hero-shimmer 8s ease-in-out infinite;
+}
+
+/* Floating product thumbnail — bob + gentle rotate to feel alive */
+@keyframes hero-product-float {
+  0%, 100% {
+    transform: translateY(0) rotate(-2deg);
+  }
+  50% {
+    transform: translateY(-18px) rotate(2deg);
+  }
+}
+
+.animate-hero-product-float {
+  animation: hero-product-float 6s ease-in-out infinite;
+}
+
+/* Pulsing gold ring around a product — grabs the eye */
+@keyframes hero-ring-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(212, 175, 55, 0.55),
+                0 0 35px 0 rgba(212, 175, 55, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 12px rgba(212, 175, 55, 0),
+                0 0 50px 6px rgba(212, 175, 55, 0.5);
+  }
+}
+
+.animate-hero-ring-pulse {
+  animation: hero-ring-pulse 3.5s ease-in-out infinite;
+}
+
+/* Slow rotating decorative gold orbit ring */
+@keyframes hero-orbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.animate-hero-orbit {
+  animation: hero-orbit 40s linear infinite;
+}
+
+/* Sparkle twinkle — quick flashes for gold dots */
+@keyframes hero-sparkle {
+  0%, 100% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-hero-sparkle {
+  animation: hero-sparkle 2.5s ease-in-out infinite;
+}
