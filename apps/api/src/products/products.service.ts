@@ -26,7 +26,7 @@ export class ProductsService {
   ) {}
 
   async findAll(query: QueryProductsDto) {
-    const { search, categoryId, availability_mode, minPrice, maxPrice, sort, page = 1, limit = 20 } = query;
+    const { search, categoryId, categorySlug, availability_mode, minPrice, maxPrice, sort, page = 1, limit = 20 } = query;
 
     const where: any = { tenantId: this.tenantContext.requireId, isActive: true, deletedAt: null };
 
@@ -37,7 +37,13 @@ export class ProductsService {
       ];
     }
 
-    if (categoryId) where.categoryId = categoryId;
+    const categoryIds = await this.resolveCategoryIds({ categoryId, categorySlug });
+    if (categoryIds !== null) {
+      if (categoryIds.length === 0) {
+        return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
+      }
+      where.categoryId = categoryIds.length === 1 ? categoryIds[0] : { in: categoryIds };
+    }
 
     if (availability_mode) {
       const modes = availability_mode.split(',').map((m) => m.trim());
@@ -75,7 +81,7 @@ export class ProductsService {
   }
 
   async findAllAdmin(query: QueryProductsDto) {
-    const { search, categoryId, minPrice, maxPrice, sort, page = 1, limit = 20 } = query;
+    const { search, categoryId, categorySlug, minPrice, maxPrice, sort, page = 1, limit = 20 } = query;
 
     const where: any = { tenantId: this.tenantContext.requireId, deletedAt: null };
 
@@ -86,7 +92,13 @@ export class ProductsService {
       ];
     }
 
-    if (categoryId) where.categoryId = categoryId;
+    const categoryIds = await this.resolveCategoryIds({ categoryId, categorySlug });
+    if (categoryIds !== null) {
+      if (categoryIds.length === 0) {
+        return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
+      }
+      where.categoryId = categoryIds.length === 1 ? categoryIds[0] : { in: categoryIds };
+    }
 
     if (minPrice !== undefined || maxPrice !== undefined) {
       where.basePrice = {};
@@ -536,6 +548,48 @@ export class ProductsService {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '')
       + '-' + Date.now().toString(36);
+  }
+
+  /**
+   * Resolve a categoryId/categorySlug filter into the full set of category IDs
+   * to match. Categories are hierarchical — clicking a parent like "Men" must
+   * fan out to its children (shirts, trousers, jeans, etc.) because parents
+   * typically have no direct products.
+   *
+   * Returns null when no category filter was supplied (caller should not add
+   * a categoryId clause). Returns [] when the slug didn't resolve (caller
+   * should short-circuit to an empty result).
+   */
+  private async resolveCategoryIds(opts: { categoryId?: string; categorySlug?: string }): Promise<string[] | null> {
+    const tenantId = this.tenantContext.requireId;
+    let rootId: string | null = null;
+
+    if (opts.categoryId) {
+      rootId = opts.categoryId;
+    } else if (opts.categorySlug) {
+      const cat = await this.prisma.category.findFirst({
+        where: { tenantId, slug: opts.categorySlug, deletedAt: null },
+        select: { id: true },
+      });
+      if (!cat) return [];
+      rootId = cat.id;
+    } else {
+      return null;
+    }
+
+    const ids: string[] = [rootId];
+    let frontier: string[] = [rootId];
+    while (frontier.length) {
+      const kids = await this.prisma.category.findMany({
+        where: { tenantId, deletedAt: null, parentId: { in: frontier } },
+        select: { id: true },
+      });
+      if (!kids.length) break;
+      const nextIds = kids.map((k) => k.id);
+      ids.push(...nextIds);
+      frontier = nextIds;
+    }
+    return ids;
   }
 
   private getSortOrder(sort?: SortOrder): any {

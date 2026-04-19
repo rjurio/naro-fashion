@@ -66,6 +66,8 @@ interface Category {
   name: string;
   slug: string;
   productCount?: number;
+  totalProductCount?: number;
+  children?: Category[];
 }
 
 interface Product {
@@ -88,6 +90,7 @@ interface Product {
 export default function ProductsPage() {
   const searchParams = useSearchParams();
   const urlSearch = searchParams.get("search") || "";
+  const urlCategory = searchParams.get("category") || "";
   const { t } = useTranslation();
 
   // Localized price ranges and sort options (built each render so labels switch with locale)
@@ -108,7 +111,7 @@ export default function ProductsPage() {
   ];
 
   const [showFilters, setShowFilters] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [selectedCategorySlug, setSelectedCategorySlug] = useState<string>(urlCategory || "all");
   const [selectedSizes, setSelectedSizes] = useState<string[]>([]);
   const [selectedColors, setSelectedColors] = useState<string[]>([]);
   const [selectedPriceRange, setSelectedPriceRange] = useState<number | null>(null);
@@ -128,6 +131,11 @@ export default function ProductsPage() {
   useEffect(() => {
     setSearchTerm(urlSearch);
   }, [urlSearch]);
+
+  // Sync selected category from URL (e.g. /products?category=men from homepage)
+  useEffect(() => {
+    setSelectedCategorySlug(urlCategory || "all");
+  }, [urlCategory]);
 
   // Fetch categories on mount
   useEffect(() => {
@@ -152,8 +160,8 @@ export default function ProductsPage() {
       if (searchTerm) {
         params.search = searchTerm;
       }
-      if (selectedCategory !== "All") {
-        params.category = selectedCategory;
+      if (selectedCategorySlug && selectedCategorySlug !== "all") {
+        params.categorySlug = selectedCategorySlug;
       }
       if (selectedSizes.length > 0) {
         params.sizes = selectedSizes.join(",");
@@ -168,7 +176,7 @@ export default function ProductsPage() {
       }
       return params;
     },
-    [selectedCategory, selectedSizes, selectedColors, selectedPriceRange, sortBy, searchTerm]
+    [selectedCategorySlug, selectedSizes, selectedColors, selectedPriceRange, sortBy, searchTerm]
   );
 
   // Fetch products when filters change
@@ -226,14 +234,14 @@ export default function ProductsPage() {
   };
 
   const clearFilters = () => {
-    setSelectedCategory("All");
+    setSelectedCategorySlug("all");
     setSelectedSizes([]);
     setSelectedColors([]);
     setSelectedPriceRange(null);
   };
 
   const activeFilterCount =
-    (selectedCategory !== "All" ? 1 : 0) +
+    (selectedCategorySlug && selectedCategorySlug !== "all" ? 1 : 0) +
     selectedSizes.length +
     selectedColors.length +
     (selectedPriceRange !== null ? 1 : 0);
@@ -255,10 +263,29 @@ export default function ProductsPage() {
     defaultVariantId: p.defaultVariantId,
   });
 
-  const allCategories = [
-    { name: "All", displayName: t("categories.all"), slug: "all", productCount: totalProducts },
-    ...categories.map((c) => ({ ...c, displayName: c.name })),
-  ];
+  // Flatten the hierarchical category tree into a display list so subcategories
+  // (e.g. Shirts under Men) are clickable in the sidebar. Parent categories
+  // typically have no direct products — their totalProductCount (sum of
+  // descendants) is what we show.
+  const flattenCategories = (
+    cats: Category[],
+    depth = 0,
+  ): Array<Category & { depth: number; count: number }> => {
+    const out: Array<Category & { depth: number; count: number }> = [];
+    for (const c of cats) {
+      const count = c.totalProductCount ?? c.productCount ?? 0;
+      out.push({ ...c, depth, count });
+      if (c.children?.length) {
+        out.push(...flattenCategories(c.children, depth + 1));
+      }
+    }
+    return out;
+  };
+
+  const allCategories: Array<{ slug: string; displayName: string; depth: number; count?: number }> = [
+    { slug: "all", displayName: t("categories.all"), depth: 0, count: totalProducts },
+    ...flattenCategories(categories),
+  ].map((c: any) => ({ ...c, displayName: c.displayName ?? c.name }));
 
   return (
     <div className="bg-background min-h-screen">
@@ -372,19 +399,20 @@ export default function ProductsPage() {
                 {t("products.category")}
               </h3>
               <div className="space-y-2">
-                {allCategories.map((cat: any) => (
+                {allCategories.map((cat) => (
                   <button
-                    key={cat.name}
-                    onClick={() => setSelectedCategory(cat.name)}
+                    key={cat.slug}
+                    onClick={() => setSelectedCategorySlug(cat.slug)}
+                    style={cat.depth ? { paddingLeft: `${12 + cat.depth * 12}px` } : undefined}
                     className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                      selectedCategory === cat.name
+                      selectedCategorySlug === cat.slug
                         ? "bg-gold-500/10 text-gold-500 font-medium"
                         : "text-muted-foreground hover:bg-muted"
                     }`}
                   >
-                    {cat.displayName ?? cat.name}
-                    {cat.productCount !== undefined && (
-                      <span className="text-xs">({cat.productCount})</span>
+                    <span className="truncate">{cat.displayName}</span>
+                    {cat.count !== undefined && (
+                      <span className="text-xs">({cat.count})</span>
                     )}
                   </button>
                 ))}

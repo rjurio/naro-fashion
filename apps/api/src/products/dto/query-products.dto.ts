@@ -19,6 +19,10 @@ export class QueryProductsDto {
   categoryId?: string;
 
   @IsOptional()
+  @IsString()
+  categorySlug?: string;
+
+  @IsOptional()
   @IsNumber()
   @Min(0)
   minPrice?: number;
