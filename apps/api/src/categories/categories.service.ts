@@ -20,11 +20,17 @@ export class CategoriesService {
         children: {
           where: { deletedAt: null },
           include: {
-            children: { where: { deletedAt: null } },
+            children: {
+              where: { deletedAt: null },
+              include: {
+                _count: { select: { products: { where: { deletedAt: null } } } },
+              },
+            },
+            _count: { select: { products: { where: { deletedAt: null } } } },
           },
         },
         sizeGuideRef: { select: { id: true, name: true, slug: true } },
-        _count: { select: { products: true } },
+        _count: { select: { products: { where: { deletedAt: null } } } },
       },
       orderBy: { name: 'asc' },
     });

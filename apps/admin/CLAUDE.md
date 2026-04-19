@@ -50,7 +50,7 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 - `/dashboard/flash-sales` - Flash sale CRUD
 - `/dashboard/analytics` - Recharts-based analytics (revenue bars, category/status/payment pies, growth line, daily orders area)
 - `/dashboard/referrals` - Referral program stats
-- `/dashboard/categories` - Category management
+- `/dashboard/categories` - Category management. **Field-name compat**: the API returns Prisma-native `name` / `nameSwahili` and `_count.products`, but older admin code read `nameEn` / `nameSw` / `productCount`. The page reads both shapes with fallbacks (`cat.name ?? cat.nameEn`, `cat.nameSwahili ?? cat.nameSw`, `cat._count?.products ?? cat.productCount ?? 0`) so it works with either API version.
 - `/dashboard/cms` - Banners, pages (RichTextEditor for EN/SW content), settings, Instagram posts (with IG API sync, configurable auto-sync interval, pin/unpin, source badges)
 - `/dashboard/shipping` - Shipping zones and rates
 - `/dashboard/reviews` - Review moderation

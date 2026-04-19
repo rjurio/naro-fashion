@@ -12,12 +12,17 @@ import { cn } from '@/lib/utils';
 
 interface Category {
   id: string;
-  nameEn: string;
+  // API returns name / nameSwahili; older admin code read nameEn / nameSw — support both
+  name?: string;
+  nameSwahili?: string;
+  nameEn?: string;
   nameSw?: string;
   slug: string;
   parentId: string | null;
+  image?: string;
   imageUrl?: string;
   productCount?: number;
+  _count?: { products: number };
   children?: Category[];
 }
 
@@ -139,11 +144,11 @@ export default function CategoriesPage() {
             <FolderOpen className="w-4 h-4 text-brand-gold" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-medium text-sm text-[hsl(var(--foreground))] truncate">{cat.nameEn}</p>
-            {cat.nameSw && <p className="text-xs text-[hsl(var(--muted-foreground))]">{cat.nameSw}</p>}
+            <p className="font-medium text-sm text-[hsl(var(--foreground))] truncate">{cat.name ?? cat.nameEn ?? cat.slug}</p>
+            {(cat.nameSwahili ?? cat.nameSw) && <p className="text-xs text-[hsl(var(--muted-foreground))]">{cat.nameSwahili ?? cat.nameSw}</p>}
           </div>
           <span className="hidden sm:inline text-xs text-[hsl(var(--muted-foreground))] font-mono bg-[hsl(var(--muted))] px-2 py-0.5 rounded">/{cat.slug}</span>
-          <span className="text-xs text-[hsl(var(--muted-foreground))] whitespace-nowrap">{cat.productCount ?? 0} products</span>
+          <span className="text-xs text-[hsl(var(--muted-foreground))] whitespace-nowrap">{cat._count?.products ?? cat.productCount ?? 0} products</span>
           <div className="flex items-center gap-1">
             <button onClick={() => startEdit(cat)} className="p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] hover:text-blue-600 transition-colors" title="Edit">
               <Pencil className="w-4 h-4" />
