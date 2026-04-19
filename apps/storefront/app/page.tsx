@@ -61,7 +61,15 @@ interface Category {
   slug: string;
   image?: string;
   imageUrl?: string;
+  // Computed on the API: first product image from this category or any
+  // descendant. Lets parent categories like "Wedding Dresses" (0 direct
+  // products, all products live in subcategories) still display a real gown.
+  fallbackImageUrl?: string | null;
   _count?: { products: number };
+  // Computed on the API: rolled-up product count including all descendants.
+  // Use this instead of _count.products so parents show "14 items" rather
+  // than "0 items".
+  totalProductCount?: number;
   badge?: string;
 }
 
@@ -260,23 +268,35 @@ export default function HomePage() {
 
   const countdown = formatCountdown(flashSaleSeconds);
 
-  // Helper to build category display data
-  const featuredCategories = categories.slice(0, 4).map((cat) => ({
-    name: cat.name,
-    image: (() => {
-      const url = cat.image || cat.imageUrl || `/uploads/categories/${cat.slug}.jpg`;
-      return url.startsWith('/uploads') ? `${API_ORIGIN}${url}` : url;
-    })(),
-    href:
-      cat.slug === "gowns" || cat.name.toLowerCase().includes("gown")
-        ? "/rentals"
-        : `/products?category=${cat.slug}`,
-    itemCount: cat._count?.products ?? 0,
-    badge:
-      cat.slug === "gowns" || cat.name.toLowerCase().includes("gown")
-        ? "Rent Available"
-        : undefined,
-  }));
+  // Helper to build category display data.
+  // Sort categories by their rolled-up product count (desc) so the tiles
+  // showcase the categories that actually have inventory. Parents like
+  // "Wedding Dresses" bubble their subcategory products up through
+  // totalProductCount, so they surface first with a real gown photo
+  // supplied by fallbackImageUrl.
+  const resolveCategoryImage = (cat: Category): string | null => {
+    const raw = cat.imageUrl || cat.image || cat.fallbackImageUrl;
+    if (!raw) return null;
+    return raw.startsWith("/uploads") ? `${API_ORIGIN}${raw}` : raw;
+  };
+
+  const featuredCategories = [...categories]
+    .sort((a, b) => (b.totalProductCount ?? b._count?.products ?? 0) - (a.totalProductCount ?? a._count?.products ?? 0))
+    .slice(0, 4)
+    .map((cat) => ({
+      name: cat.name,
+      image: resolveCategoryImage(cat),
+      slug: cat.slug,
+      href:
+        cat.slug === "gowns" || cat.name.toLowerCase().includes("gown")
+          ? "/rentals"
+          : `/products?category=${cat.slug}`,
+      itemCount: cat.totalProductCount ?? cat._count?.products ?? 0,
+      badge:
+        cat.slug === "gowns" || cat.name.toLowerCase().includes("gown")
+          ? "Rent Available"
+          : undefined,
+    }));
 
   const LoadingGrid = ({ cols = 4 }: { cols?: number }) => (
     <div
@@ -578,14 +598,25 @@ export default function HomePage() {
                   className="group relative aspect-[3/4] rounded-2xl overflow-hidden bg-muted hover:shadow-xl transition-all duration-300"
                 >
                   <div className="absolute inset-0 bg-gradient-to-t from-[#1A1A1A]/80 via-[#1A1A1A]/20 to-transparent z-10" />
-                  <div
-                    className="absolute inset-0 bg-muted transition-transform duration-500 group-hover:scale-110"
-                    style={{
-                      backgroundImage: `url(${category.image})`,
-                      backgroundSize: "cover",
-                      backgroundPosition: "center",
-                    }}
-                  />
+                  {category.image ? (
+                    <div
+                      className="absolute inset-0 bg-muted transition-transform duration-500 group-hover:scale-110"
+                      style={{
+                        backgroundImage: `url(${category.image})`,
+                        backgroundSize: "cover",
+                        backgroundPosition: "center",
+                      }}
+                    />
+                  ) : (
+                    // Graceful placeholder — gold-on-dark gradient with an
+                    // initial, so categories without a photo still feel
+                    // intentional instead of broken.
+                    <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1A1A1A] via-[#2A2318] to-[#D4AF37]/40 transition-transform duration-500 group-hover:scale-110">
+                      <span className="font-heading text-6xl sm:text-7xl text-[#D4AF37]/80 select-none drop-shadow">
+                        {category.name.trim().charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                  )}
                   <div className="absolute bottom-0 left-0 right-0 z-20 p-4 sm:p-6">
                     {category.badge && (
                       <span className="inline-block mb-2 text-xs font-semibold uppercase tracking-wide bg-[#D4AF37] text-[#1A1A1A] px-2.5 py-0.5 rounded-full">
