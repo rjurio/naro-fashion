@@ -104,7 +104,7 @@ export default function Header() {
     { name: t('common.categories'), href: '/categories', show: hasCategories },
     { name: t('common.rentals'), href: '/rentals', show: hasRentals },
     { name: t('common.flashSales'), href: '/flash-sales', show: hasFlashSales },
-    { name: 'Real Weddings', href: '/events', show: hasEvents },
+    { name: t('header.realWeddings'), href: '/events', show: hasEvents },
   ].filter((item) => item.show);
 
   return (
@@ -116,7 +116,7 @@ export default function Header() {
             <button
               onClick={() => setIsMobileMenuOpen(true)}
               className="lg:hidden flex items-center justify-center h-10 w-10 rounded-lg hover:bg-muted transition-colors"
-              aria-label="Open menu"
+              aria-label={t('header.openMenu')}
             >
               <Menu className="h-5 w-5" />
             </button>
@@ -177,7 +177,7 @@ export default function Header() {
                   <button
                     onClick={() => setIsSearchOpen(true)}
                     className="flex items-center justify-center h-10 w-10 rounded-lg hover:bg-muted active:scale-95 transition-all"
-                    aria-label="Search"
+                    aria-label={t('header.search')}
                   >
                     <Search className="h-5 w-5" />
                   </button>
@@ -188,7 +188,7 @@ export default function Header() {
               <button
                 onClick={handleMobileSearch}
                 className="md:hidden flex items-center justify-center h-10 w-10 rounded-lg hover:bg-muted transition-colors"
-                aria-label="Search"
+                aria-label={t('header.search')}
               >
                 <Search className="h-5 w-5" />
               </button>
@@ -200,7 +200,7 @@ export default function Header() {
               <button
                 onClick={() => setLocale(locale === 'en' ? 'sw' : 'en')}
                 className="hidden sm:flex items-center justify-center h-10 px-2.5 rounded-lg text-xs font-bold hover:bg-muted transition-colors border border-border"
-                aria-label={`Switch to ${locale === 'en' ? 'Swahili' : 'English'}`}
+                aria-label={locale === 'en' ? t('header.switchToSwahili') : t('header.switchToEnglish')}
               >
                 {locale === 'en' ? 'EN' : 'SW'}
               </button>
@@ -209,7 +209,7 @@ export default function Header() {
               <Link
                 href="/account/wishlist"
                 className="hidden sm:flex items-center justify-center h-10 w-10 rounded-lg hover:bg-muted transition-colors"
-                aria-label="Wishlist"
+                aria-label={t('header.wishlist')}
               >
                 <Heart className="h-5 w-5" />
               </Link>
@@ -220,7 +220,7 @@ export default function Header() {
                   <button
                     onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                     className="flex items-center gap-1.5 h-10 px-2 rounded-lg hover:bg-muted transition-colors"
-                    aria-label="User menu"
+                    aria-label={t('header.userMenu')}
                   >
                     <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gold-500 text-white text-xs font-bold">
                       {userInitials || <User className="h-3.5 w-3.5" />}
@@ -282,7 +282,7 @@ export default function Header() {
                 <Link
                   href="/auth/login"
                   className="hidden sm:flex items-center justify-center h-10 w-10 rounded-lg hover:bg-muted transition-colors"
-                  aria-label="Sign in"
+                  aria-label={t('header.signIn')}
                 >
                   <User className="h-5 w-5" />
                 </Link>
@@ -292,7 +292,7 @@ export default function Header() {
               <Link
                 href="/cart"
                 className="relative flex items-center justify-center h-10 w-10 rounded-lg hover:bg-muted transition-colors"
-                aria-label="Cart"
+                aria-label={t('header.cart')}
               >
                 <ShoppingBag className="h-5 w-5" />
                 {cartCount > 0 && (

@@ -16,6 +16,7 @@ import {
 import Button from "@/components/ui/Button";
 import { formatPrice } from "@/lib/utils";
 import { cartApi, promoCodesApi } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -38,6 +39,7 @@ interface CartItem {
 }
 
 export default function CartPage() {
+  const { t } = useTranslation();
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [promoCode, setPromoCode] = useState("");
@@ -115,7 +117,7 @@ export default function CartPage() {
       setPromoDiscount(result.discountAmount);
       setPromoApplied(true);
     } catch (err: any) {
-      setPromoError(err?.data?.message || err?.message || "Invalid promo code");
+      setPromoError(err?.data?.message || err?.message || t("cart.invalidPromoCode"));
       setPromoApplied(false);
       setPromoDiscount(0);
     } finally {
@@ -129,7 +131,7 @@ export default function CartPage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-20">
           <div className="text-center">
             <Loader2 className="h-10 w-10 text-gold-500 mx-auto mb-4 animate-spin" />
-            <p className="text-muted-foreground">Loading your cart...</p>
+            <p className="text-muted-foreground">{t("cart.loadingCart")}</p>
           </div>
         </div>
       </div>
@@ -143,14 +145,14 @@ export default function CartPage() {
           <div className="text-center">
             <ShoppingBag className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
             <h1 className="text-2xl font-heading font-bold text-foreground mb-2">
-              Your cart is empty
+              {t("cart.empty")}
             </h1>
             <p className="text-muted-foreground mb-8">
-              Looks like you haven&apos;t added anything to your cart yet.
+              {t("cart.emptyDescription")}
             </p>
             <Link href="/products">
               <Button size="lg" className="gap-2">
-                Continue Shopping <ArrowRight className="h-5 w-5" />
+                {t("cart.continueShopping")} <ArrowRight className="h-5 w-5" />
               </Button>
             </Link>
           </div>
@@ -165,16 +167,16 @@ export default function CartPage() {
       <div className="border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+            <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
             <span>/</span>
-            <span className="text-foreground font-medium">Shopping Cart</span>
+            <span className="text-foreground font-medium">{t("cart.shoppingCart")}</span>
           </nav>
         </div>
       </div>
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
         <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground mb-8">
-          Shopping Cart ({cartItems.length} {cartItems.length === 1 ? "item" : "items"})
+          {t("cart.shoppingCart")} ({cartItems.length} {cartItems.length === 1 ? t("cart.itemSingular") : t("cart.itemPlural")})
         </h1>
 
         <div className="grid lg:grid-cols-3 gap-8">
@@ -206,7 +208,7 @@ export default function CartPage() {
                         {item.name}
                       </Link>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Size: {item.size} &middot; Color: {item.color}
+                        {t("common.size")}: {item.size} &middot; {t("common.color")}: {item.color}
                       </p>
                     </div>
                     <button
@@ -251,7 +253,7 @@ export default function CartPage() {
               className="inline-flex items-center gap-2 text-sm font-medium text-gold-500 hover:text-gold-600 transition-colors mt-4"
             >
               <ArrowRight className="h-4 w-4 rotate-180" />
-              Continue Shopping
+              {t("cart.continueShopping")}
             </Link>
           </div>
 
@@ -259,7 +261,7 @@ export default function CartPage() {
           <div>
             <div className="rounded-xl border border-border bg-card p-6 sticky top-24">
               <h2 className="text-lg font-bold text-foreground mb-6">
-                Order Summary
+                {t("cart.orderSummary")}
               </h2>
 
               {/* Promo Code */}
@@ -269,7 +271,7 @@ export default function CartPage() {
                     <Tag className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <input
                       type="text"
-                      placeholder="Promo code"
+                      placeholder={t("cart.promoCode")}
                       value={promoCode}
                       onChange={(e) => setPromoCode(e.target.value)}
                       className="w-full rounded-lg border border-border bg-background pl-9 pr-4 py-2.5 text-sm outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500"
@@ -281,12 +283,12 @@ export default function CartPage() {
                     onClick={applyPromo}
                     disabled={promoApplied || applyingPromo}
                   >
-                    {applyingPromo ? "..." : promoApplied ? "Applied" : "Apply"}
+                    {applyingPromo ? "..." : promoApplied ? t("common.applied") : t("common.apply")}
                   </Button>
                 </div>
                 {promoApplied && (
                   <p className="text-xs text-green-600 mt-1.5">
-                    {promoCode.toUpperCase()} applied! You save {formatPrice(discount)}
+                    {promoCode.toUpperCase()} {t("cart.promoApplied")} {formatPrice(discount)}
                   </p>
                 )}
                 {promoError && (
@@ -297,16 +299,16 @@ export default function CartPage() {
               {/* Price Breakdown */}
               <div className="space-y-3 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Subtotal</span>
+                  <span className="text-muted-foreground">{t("cart.subtotal")}</span>
                   <span className="font-medium text-foreground">
                     {formatPrice(subtotal)}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Delivery</span>
+                  <span className="text-muted-foreground">{t("cart.shipping")}</span>
                   <span className="font-medium text-foreground">
                     {deliveryFee === 0 ? (
-                      <span className="text-green-600">Free</span>
+                      <span className="text-green-600">{t("common.free")}</span>
                     ) : (
                       formatPrice(deliveryFee)
                     )}
@@ -314,12 +316,12 @@ export default function CartPage() {
                 </div>
                 {discount > 0 && (
                   <div className="flex justify-between text-green-600">
-                    <span>Discount</span>
+                    <span>{t("cart.discount")}</span>
                     <span className="font-medium">-{formatPrice(discount)}</span>
                   </div>
                 )}
                 <div className="border-t border-border pt-3 flex justify-between">
-                  <span className="text-base font-bold text-foreground">Total</span>
+                  <span className="text-base font-bold text-foreground">{t("cart.total")}</span>
                   <span className="text-base font-bold text-foreground">
                     {formatPrice(total)}
                   </span>
@@ -329,17 +331,17 @@ export default function CartPage() {
               {/* Checkout Button */}
               <Link href="/checkout" className="block mt-6">
                 <Button size="lg" className="w-full gap-2">
-                  Proceed to Checkout <ArrowRight className="h-5 w-5" />
+                  {t("cart.proceedToCheckout")} <ArrowRight className="h-5 w-5" />
                 </Button>
               </Link>
 
               {/* Trust badges */}
               <div className="mt-6 flex items-center justify-center gap-4 text-xs text-muted-foreground">
                 <span className="flex items-center gap-1">
-                  <Shield className="h-3.5 w-3.5" /> Secure
+                  <Shield className="h-3.5 w-3.5" /> {t("common.secure")}
                 </span>
                 <span className="flex items-center gap-1">
-                  <Truck className="h-3.5 w-3.5" /> Fast Delivery
+                  <Truck className="h-3.5 w-3.5" /> {t("common.fastDelivery")}
                 </span>
               </div>
             </div>

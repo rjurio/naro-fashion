@@ -111,7 +111,7 @@ const CMS_DEFAULTS: Record<string, string> = {
 };
 
 export default function HomePage() {
-  const { locale } = useTranslation();
+  const { locale, t } = useTranslation();
   const [flashSaleSeconds, setFlashSaleSeconds] = useState(0);
   const [showInstagram, setShowInstagram] = useState(true);
   const [showRentalSection, setShowRentalSection] = useState(true);
@@ -294,7 +294,7 @@ export default function HomePage() {
       itemCount: cat.totalProductCount ?? cat._count?.products ?? 0,
       badge:
         cat.slug === "gowns" || cat.name.toLowerCase().includes("gown")
-          ? "Rent Available"
+          ? t('home.rentAvailable')
           : undefined,
     }));
 
@@ -459,7 +459,7 @@ export default function HomePage() {
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className="block h-[2px] w-8 bg-[#D4AF37]" />
                       <span className="text-[10px] uppercase tracking-[0.2em] text-[#D4AF37] font-semibold">
-                        Featured
+                        {t('home.featured')}
                       </span>
                     </div>
                     <p className="text-white text-sm lg:text-base font-semibold leading-tight drop-shadow-lg line-clamp-2">
@@ -496,7 +496,7 @@ export default function HomePage() {
               <button
                 key={index}
                 type="button"
-                title={`Go to slide ${index + 1}`}
+                title={`${t('home.goToSlide')} ${index + 1}`}
                 onClick={() => setCurrentSlide(index)}
                 className={`h-2 rounded-full transition-all duration-300 ${
                   index === currentSlide
@@ -512,35 +512,33 @@ export default function HomePage() {
           <div className="max-w-2xl">
             <span className="inline-flex items-center gap-2 rounded-full bg-white/10 backdrop-blur-sm px-4 py-1.5 text-sm text-[#D4AF37] border border-[#D4AF37]/30 mb-6">
               <Sparkles className="h-4 w-4" />
-              New Collection 2026
+              {t('home.heroTag')}
             </span>
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-heading font-bold text-white leading-tight">
-              Elevate Your{" "}
+              {t('home.heroTitle')}{" "}
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#D4AF37] to-[#D4AF37]">
-                Style
+                {t('home.heroTitleHighlight1')}
               </span>
               <br />
-              Define Your{" "}
+              {t('home.heroTitleMiddle')}{" "}
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#D4AF37] to-[#D4AF37]">
-                Story
+                {t('home.heroTitleHighlight2')}
               </span>
             </h1>
             <p className="mt-6 text-lg text-gray-300 max-w-lg">
-              Discover premium fashion, rent designer gowns, and grab exclusive
-              flash sale deals. Tanzania&apos;s premier online fashion
-              destination.
+              {t('home.heroSubtitle')}
             </p>
             <div className="mt-8 flex flex-wrap gap-4">
               <Link href="/products">
                 <Button size="lg" className="gap-2">
-                  Shop Now
+                  {t('home.shopNow')}
                   <ArrowRight className="h-5 w-5" />
                 </Button>
               </Link>
               <Link href="/rentals">
                 <Button variant="outline" size="lg" className="gap-2 border-[#D4AF37] text-[#D4AF37] hover:bg-[#D4AF37] hover:text-[#1A1A1A]">
                   <Crown className="h-5 w-5" />
-                  Rent a Gown
+                  {t('home.rentAGown')}
                 </Button>
               </Link>
             </div>
@@ -549,7 +547,7 @@ export default function HomePage() {
                 <>
                   <div>
                     <span className="block text-2xl font-bold text-white">{stats.productCount.toLocaleString()}</span>
-                    Products
+                    {t('home.productsCount')}
                   </div>
                   <div className="w-px h-10 bg-gray-700" />
                 </>
@@ -558,7 +556,7 @@ export default function HomePage() {
                 <>
                   <div>
                     <span className="block text-2xl font-bold text-white">{stats.rentalCount.toLocaleString()}</span>
-                    Gowns for Rent
+                    {t('home.gownsForRent')}
                   </div>
                   <div className="w-px h-10 bg-gray-700" />
                 </>
@@ -566,7 +564,7 @@ export default function HomePage() {
               {stats.customerCount > 0 && (
                 <div>
                   <span className="block text-2xl font-bold text-white">{stats.customerCount.toLocaleString()}</span>
-                  Happy Customers
+                  {t('home.happyCustomers')}
                 </div>
               )}
             </div>
@@ -579,11 +577,11 @@ export default function HomePage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-12">
             <h2 className="text-3xl sm:text-4xl font-heading font-bold text-foreground">
-              Shop by{" "}
-              <span className="text-gold-500">Category</span>
+              {t('home.shopByCategory')}{" "}
+              <span className="text-gold-500">{t('home.shopByCategoryHighlight')}</span>
             </h2>
             <p className="mt-3 text-muted-foreground max-w-md mx-auto">
-              Browse our curated collections for every occasion
+              {t('home.categorySubtitle')}
             </p>
           </div>
 
@@ -627,10 +625,10 @@ export default function HomePage() {
                       {category.name}
                     </h3>
                     <p className="text-sm text-gray-300 mt-1">
-                      {category.itemCount} items
+                      {category.itemCount} {t('home.items')}
                     </p>
                     <span className="inline-flex items-center gap-1 text-sm text-[#D4AF37] mt-2 group-hover:gap-2 transition-all">
-                      Explore <ChevronRight className="h-4 w-4" />
+                      {t('common.explore')} <ChevronRight className="h-4 w-4" />
                     </span>
                   </div>
                 </Link>
@@ -638,7 +636,7 @@ export default function HomePage() {
             </div>
           ) : (
             <p className="text-center text-muted-foreground">
-              No categories available at the moment.
+              {t('home.noCategoriesAvailable')}
             </p>
           )}
         </div>
@@ -667,7 +665,7 @@ export default function HomePage() {
               href="/products?sort=newest"
               className="hidden sm:inline-flex items-center gap-2 text-sm font-medium text-gold-500 hover:text-gold-600 hover:gap-3 transition-all"
             >
-              View All <ArrowRight className="h-4 w-4" />
+              {t('common.viewAll')} <ArrowRight className="h-4 w-4" />
             </Link>
           </div>
 
@@ -689,14 +687,14 @@ export default function HomePage() {
             )
           ) : (
             <p className="text-center text-muted-foreground py-8">
-              No new arrivals at the moment. Check back soon!
+              {t('home.noNewArrivals')}
             </p>
           )}
 
           <div className="mt-8 text-center sm:hidden">
             <Link href="/products?sort=newest">
               <Button variant="outline" size="md" className="gap-2">
-                View All New Arrivals <ArrowRight className="h-4 w-4" />
+                {t('home.viewAllNewArrivals')} <ArrowRight className="h-4 w-4" />
               </Button>
             </Link>
           </div>
@@ -758,8 +756,8 @@ export default function HomePage() {
               <div className="w-20 h-20 rounded-full bg-[#D4AF37]/10 flex items-center justify-center mb-4">
                 <Crown className="h-10 w-10 text-[#D4AF37]" />
               </div>
-              <p className="text-white text-lg font-medium">Our rental collection is being prepared</p>
-              <p className="text-gray-400 mt-1 max-w-md">We&apos;re curating an exquisite selection of designer gowns. Check back soon or contact us to reserve.</p>
+              <p className="text-white text-lg font-medium">{t('home.rentalCollectionPreparing')}</p>
+              <p className="text-gray-400 mt-1 max-w-md">{t('home.rentalCollectionPreparingDesc')}</p>
             </div>
           )}
 
@@ -782,13 +780,13 @@ export default function HomePage() {
             <div className="text-center mb-12">
               <span className="inline-flex items-center gap-2 rounded-full bg-[#D4AF37]/10 px-4 py-1.5 text-sm text-[#D4AF37] border border-[#D4AF37]/30 mb-4">
                 <Heart className="h-4 w-4" />
-                Love Stories
+                {t('home.loveStories')}
               </span>
               <h2 className="text-3xl sm:text-4xl font-heading font-bold text-foreground">
-                Real <span className="text-gold-500">Weddings</span>
+                {t('home.realWeddingsTitle')} <span className="text-gold-500">{t('home.realWeddingsHighlight')}</span>
               </h2>
               <p className="mt-3 text-muted-foreground max-w-md mx-auto">
-                See our beautiful brides and their special moments
+                {t('home.realWeddingsSubtitle')}
               </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -845,7 +843,7 @@ export default function HomePage() {
                   size="md"
                   className="gap-2 border-[#D4AF37] text-[#D4AF37] hover:bg-[#D4AF37] hover:text-[#1A1A1A]"
                 >
-                  View All Real Weddings <ArrowRight className="h-4 w-4" />
+                  {t('home.viewAllRealWeddings')} <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
             </div>
@@ -860,13 +858,13 @@ export default function HomePage() {
               <div>
                 <div className="flex items-center gap-3 mb-2">
                   <h2 className="text-3xl sm:text-4xl font-heading font-bold text-foreground">
-                    Flash{" "}
-                    <span className="text-gold-500">Sales</span>
+                    {t('home.flashSalesTitle')}{" "}
+                    <span className="text-gold-500">{t('home.flashSalesHighlight')}</span>
                   </h2>
                   <span className="inline-block h-3 w-3 rounded-full bg-gold-500 animate-pulse" />
                 </div>
                 <p className="text-muted-foreground">
-                  Limited time deals - grab them before they&apos;re gone!
+                  {t('home.flashSalesSubtitle')}
                 </p>
               </div>
 
@@ -876,10 +874,10 @@ export default function HomePage() {
                   <Timer className="h-5 w-5 text-gold-500" />
                   <div className="flex items-center gap-2">
                     {[
-                      { label: "Days", value: countdown.days },
-                      { label: "Hrs", value: countdown.hours },
-                      { label: "Min", value: countdown.minutes },
-                      { label: "Sec", value: countdown.secs },
+                      { label: t('home.days'), value: countdown.days },
+                      { label: t('home.hrs'), value: countdown.hours },
+                      { label: t('home.min'), value: countdown.minutes },
+                      { label: t('home.sec'), value: countdown.secs },
                     ].map((unit, i) => (
                       <div key={unit.label} className="flex items-center gap-2">
                         <div className="flex flex-col items-center">
@@ -911,7 +909,7 @@ export default function HomePage() {
             <div className="mt-8 text-center">
               <Link href="/flash-sales">
                 <Button variant="outline" size="md" className="gap-2">
-                  View All Flash Sales <ArrowRight className="h-4 w-4" />
+                  {t('home.viewAllFlashSales')} <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
             </div>

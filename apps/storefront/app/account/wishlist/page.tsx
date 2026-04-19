@@ -6,6 +6,7 @@ import { Heart, ShoppingCart, X, ArrowLeft, Star, Loader2 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { formatPrice } from "@/lib/utils";
 import { wishlistApi } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -46,6 +47,7 @@ function normalizeItem(raw: any): WishlistItem {
 }
 
 export default function WishlistPage() {
+  const { t } = useTranslation();
   const [items, setItems] = useState<WishlistItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [removingId, setRemovingId] = useState<string | null>(null);
@@ -91,11 +93,11 @@ export default function WishlistPage() {
       <div className="border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+            <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
             <span>/</span>
-            <Link href="/account" className="hover:text-gold-500 transition-colors">Account</Link>
+            <Link href="/account" className="hover:text-gold-500 transition-colors">{t("account.account")}</Link>
             <span>/</span>
-            <span className="text-foreground font-medium">Wishlist</span>
+            <span className="text-foreground font-medium">{t("account.wishlist")}</span>
           </nav>
         </div>
       </div>
@@ -103,12 +105,12 @@ export default function WishlistPage() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">My Wishlist</h1>
-            <p className="text-muted-foreground text-sm mt-1">{items.length} items saved</p>
+            <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">{t("account.myWishlistTitle")}</h1>
+            <p className="text-muted-foreground text-sm mt-1">{items.length} {t("account.itemsSaved")}</p>
           </div>
           <Link href="/account">
             <Button variant="outline" size="sm">
-              <ArrowLeft className="h-4 w-4 mr-1" /> Account
+              <ArrowLeft className="h-4 w-4 mr-1" /> {t("account.account")}
             </Button>
           </Link>
         </div>
@@ -116,10 +118,10 @@ export default function WishlistPage() {
         {items.length === 0 ? (
           <div className="text-center py-20">
             <Heart className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-            <h2 className="text-xl font-bold text-foreground mb-2">Your wishlist is empty</h2>
-            <p className="text-muted-foreground mb-8">Save items you love for later.</p>
+            <h2 className="text-xl font-bold text-foreground mb-2">{t("account.wishlistEmpty")}</h2>
+            <p className="text-muted-foreground mb-8">{t("account.saveItemsForLater")}</p>
             <Link href="/products">
-              <Button size="lg">Browse Products</Button>
+              <Button size="lg">{t("account.browseProducts")}</Button>
             </Link>
           </div>
         ) : (
@@ -150,7 +152,7 @@ export default function WishlistPage() {
                     )}
                     {!item.inStock && (
                       <div className="absolute inset-0 bg-dark-500/50 flex items-center justify-center">
-                        <span className="bg-white text-dark-500 text-sm font-bold px-4 py-1.5 rounded-full">Out of Stock</span>
+                        <span className="bg-white text-dark-500 text-sm font-bold px-4 py-1.5 rounded-full">{t("common.outOfStock")}</span>
                       </div>
                     )}
                   </div>
@@ -176,7 +178,7 @@ export default function WishlistPage() {
                       disabled={!item.inStock}
                     >
                       <ShoppingCart className="h-3.5 w-3.5" />
-                      {item.inStock ? "Add to Cart" : "Out of Stock"}
+                      {item.inStock ? t("common.addToCart") : t("common.outOfStock")}
                     </Button>
                   </div>
                 </div>

@@ -40,7 +40,7 @@ export default function ForgotPasswordPage() {
       setSent(true);
       startCooldown();
     } catch (err: any) {
-      const message = err?.data?.message || err?.message || "Something went wrong. Please try again.";
+      const message = err?.data?.message || err?.message || t("somethingWentWrong");
       setError(message);
     } finally {
       setIsLoading(false);

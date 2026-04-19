@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useTranslation } from "@/lib/i18n";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -33,22 +34,25 @@ const colors = [
   { name: "Red", value: "#DC2626" },
   { name: "Blue", value: "#2563EB" },
 ];
-const priceRanges = [
-  { label: "Under TZS 50,000", min: 0, max: 50000 },
-  { label: "TZS 50,000 - 100,000", min: 50000, max: 100000 },
-  { label: "TZS 100,000 - 200,000", min: 100000, max: 200000 },
-  { label: "Over TZS 200,000", min: 200000, max: Infinity },
-];
-const sortOptions = [
-  { label: "Newest", value: "newest" },
-  { label: "Price: Low to High", value: "price-asc" },
-  { label: "Price: High to Low", value: "price-desc" },
-  { label: "Most Popular", value: "popular" },
-];
 
 export default function CategoryPage() {
   const params = useParams();
   const slug = params.slug as string;
+  const { t } = useTranslation();
+
+  const fmt = (n: number) => n.toLocaleString();
+  const priceRanges = [
+    { label: t("products.underPrice").replace("{price}", fmt(50000)), min: 0, max: 50000 },
+    { label: t("products.priceFromTo").replace("{min}", fmt(50000)).replace("{max}", fmt(100000)), min: 50000, max: 100000 },
+    { label: t("products.priceFromTo").replace("{min}", fmt(100000)).replace("{max}", fmt(200000)), min: 100000, max: 200000 },
+    { label: t("products.overPrice").replace("{price}", fmt(200000)), min: 200000, max: Infinity },
+  ];
+  const sortOptions = [
+    { label: t("products.newest"), value: "newest" },
+    { label: t("products.priceLowToHigh"), value: "price-asc" },
+    { label: t("products.priceHighToLow"), value: "price-desc" },
+    { label: t("products.mostPopular"), value: "popular" },
+  ];
 
   const [category, setCategory] = useState<any>(null);
   const [products, setProducts] = useState<any[]>([]);
@@ -90,9 +94,9 @@ export default function CategoryPage() {
         <div className="border-b border-border">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
             <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+              <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
               <span>/</span>
-              <Link href="/categories" className="hover:text-gold-500 transition-colors">Categories</Link>
+              <Link href="/categories" className="hover:text-gold-500 transition-colors">{t("common.categories")}</Link>
               <span>/</span>
               <span className="text-foreground font-medium">{slug}</span>
             </nav>
@@ -125,9 +129,9 @@ export default function CategoryPage() {
       <div className="border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+            <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
             <span>/</span>
-            <Link href="/categories" className="hover:text-gold-500 transition-colors">Categories</Link>
+            <Link href="/categories" className="hover:text-gold-500 transition-colors">{t("common.categories")}</Link>
             <span>/</span>
             <span className="text-foreground font-medium">{categoryName}</span>
           </nav>
@@ -161,14 +165,14 @@ export default function CategoryPage() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
         {/* Toolbar */}
         <div className="flex items-center justify-between gap-4 mb-6">
-          <p className="text-sm text-muted-foreground">{products.length} products</p>
+          <p className="text-sm text-muted-foreground">{products.length} {t("products.productsLower")}</p>
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowFilters(!showFilters)}
               className="lg:hidden inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors"
             >
               <SlidersHorizontal className="h-4 w-4" />
-              Filters
+              {t("products.filters")}
               {activeFilterCount > 0 && (
                 <span className="flex items-center justify-center h-5 w-5 rounded-full bg-gold-500 text-white text-xs">{activeFilterCount}</span>
               )}
@@ -200,19 +204,19 @@ export default function CategoryPage() {
           {/* Filters Sidebar */}
           <aside className={`${showFilters ? "fixed inset-0 z-50 bg-background p-6 overflow-y-auto lg:static lg:p-0 lg:z-auto" : "hidden"} lg:block lg:w-60 lg:flex-shrink-0`}>
             <div className="flex items-center justify-between mb-6 lg:hidden">
-              <h2 className="text-lg font-bold">Filters</h2>
+              <h2 className="text-lg font-bold">{t("products.filters")}</h2>
               <button onClick={() => setShowFilters(false)}><X className="h-5 w-5" /></button>
             </div>
 
             {activeFilterCount > 0 && (
               <button onClick={() => { setSelectedSizes([]); setSelectedColors([]); setSelectedPriceRange(null); }} className="text-sm text-gold-500 hover:text-gold-600 font-medium mb-4">
-                Clear all ({activeFilterCount})
+                {t("products.clearAll")} ({activeFilterCount})
               </button>
             )}
 
             {/* Price */}
             <div className="mb-6">
-              <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-3">Price Range</h3>
+              <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-3">{t("products.priceRange")}</h3>
               <div className="space-y-2">
                 {priceRanges.map((range, idx) => (
                   <button
@@ -228,7 +232,7 @@ export default function CategoryPage() {
 
             {/* Sizes */}
             <div className="mb-6">
-              <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-3">Size</h3>
+              <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-3">{t("products.size")}</h3>
               <div className="flex flex-wrap gap-2">
                 {sizes.map((size) => (
                   <button
@@ -244,7 +248,7 @@ export default function CategoryPage() {
 
             {/* Colors */}
             <div className="mb-6">
-              <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-3">Color</h3>
+              <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-3">{t("products.color")}</h3>
               <div className="flex flex-wrap gap-2">
                 {colors.map((color) => (
                   <button
@@ -259,7 +263,7 @@ export default function CategoryPage() {
             </div>
 
             <div className="lg:hidden mt-6">
-              <Button onClick={() => setShowFilters(false)} className="w-full">Apply Filters</Button>
+              <Button onClick={() => setShowFilters(false)} className="w-full">{t("products.applyFilters")}</Button>
             </div>
           </aside>
 
@@ -267,7 +271,7 @@ export default function CategoryPage() {
           <div className="flex-1">
             {products.length === 0 ? (
               <div className="text-center py-16">
-                <p className="text-muted-foreground">No products found in this category.</p>
+                <p className="text-muted-foreground">{t("products.noProductsInCategory")}</p>
               </div>
             ) : (
               <div className={viewMode === "grid" ? "grid grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6" : "space-y-4"}>
@@ -319,7 +323,7 @@ export default function CategoryPage() {
             {/* Load More */}
             {products.length > 0 && (
               <div className="mt-12 text-center">
-                <Button variant="outline" size="lg">Load More Products</Button>
+                <Button variant="outline" size="lg">{t("products.loadMoreProducts")}</Button>
               </div>
             )}
           </div>

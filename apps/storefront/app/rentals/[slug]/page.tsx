@@ -20,6 +20,7 @@ import Badge from "@/components/ui/Badge";
 import { formatPrice } from "@/lib/utils";
 import { productsApi, rentalsApi } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
+import { useTranslation } from "@/lib/i18n";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -33,6 +34,7 @@ export default function RentalDetailPage() {
   const params = useParams();
   const slug = params.slug as string;
   const toast = useToast();
+  const { t } = useTranslation();
 
   const [product, setProduct] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -75,9 +77,9 @@ export default function RentalDetailPage() {
         startDate,
         endDate,
       });
-      toast.success("Rental booked successfully!");
+      toast.success(t('rentals.rentalBookedSuccess'));
     } catch {
-      toast.error("Failed to book rental. Please try again.");
+      toast.error(t('rentals.rentalBookFailed'));
     } finally {
       setBooking(false);
     }
@@ -89,9 +91,9 @@ export default function RentalDetailPage() {
         <div className="border-b border-border">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
             <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+              <Link href="/" className="hover:text-gold-500 transition-colors">{t('common.home')}</Link>
               <ChevronRight className="h-3 w-3" />
-              <Link href="/rentals" className="hover:text-gold-500 transition-colors">Rentals</Link>
+              <Link href="/rentals" className="hover:text-gold-500 transition-colors">{t('common.rentals')}</Link>
             </nav>
           </div>
         </div>
@@ -115,10 +117,10 @@ export default function RentalDetailPage() {
     return (
       <div className="bg-background min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-foreground mb-2">Product Not Found</h1>
-          <p className="text-muted-foreground mb-4">The rental product you are looking for does not exist.</p>
+          <h1 className="text-2xl font-bold text-foreground mb-2">{t('rentals.productNotFound')}</h1>
+          <p className="text-muted-foreground mb-4">{t('rentals.productNotFoundDesc')}</p>
           <Link href="/rentals">
-            <Button>Browse Rentals</Button>
+            <Button>{t('rentals.browseRentals')}</Button>
           </Link>
         </div>
       </div>
@@ -160,9 +162,9 @@ export default function RentalDetailPage() {
       <div className="border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+            <Link href="/" className="hover:text-gold-500 transition-colors">{t('common.home')}</Link>
             <ChevronRight className="h-3 w-3" />
-            <Link href="/rentals" className="hover:text-gold-500 transition-colors">Rentals</Link>
+            <Link href="/rentals" className="hover:text-gold-500 transition-colors">{t('common.rentals')}</Link>
             <ChevronRight className="h-3 w-3" />
             <span className="text-foreground font-medium">{product.name}</span>
           </nav>
@@ -182,12 +184,12 @@ export default function RentalDetailPage() {
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-muted-foreground">
-                  No Image
+                  {t('rentals.noImage')}
                 </div>
               )}
               <div className="absolute top-4 left-4">
                 <Badge variant="rent">
-                  {product.availabilityMode === 'RENTAL_ONLY' ? 'Rental Only' : 'Rent Available'}
+                  {product.availabilityMode === 'RENTAL_ONLY' ? t('rentals.rentalOnly') : t('rentals.rentAvailable')}
                 </Badge>
               </div>
             </div>
@@ -216,7 +218,7 @@ export default function RentalDetailPage() {
           <div>
             <div className="flex items-center gap-2 mb-2">
               <Crown className="h-5 w-5 text-gold-500" />
-              <span className="text-sm font-medium text-gold-600">Premium Rental</span>
+              <span className="text-sm font-medium text-gold-600">{t('rentals.premiumRental')}</span>
             </div>
 
             <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">
@@ -238,7 +240,7 @@ export default function RentalDetailPage() {
                 ))}
               </div>
               <span className="text-sm text-muted-foreground">
-                {rating} ({reviewCount} reviews)
+                {rating} ({reviewCount} {t('product.reviews').toLowerCase()})
               </span>
             </div>
 
@@ -248,11 +250,11 @@ export default function RentalDetailPage() {
                 <span className="text-3xl font-bold text-foreground">
                   {formatPrice(rentalPricePerDay)}
                 </span>
-                <span className="text-muted-foreground">/ day</span>
+                <span className="text-muted-foreground">{t('rentals.perDay')}</span>
               </div>
               {retailPrice > 0 && (
                 <p className="text-sm text-muted-foreground mt-1">
-                  Retail price: {formatPrice(retailPrice)}
+                  {t('rentals.retailPrice')} {formatPrice(retailPrice)}
                 </p>
               )}
             </div>
@@ -266,7 +268,7 @@ export default function RentalDetailPage() {
             {/* Size Selection */}
             {uniqueSizes.length > 0 ? (
               <div className="mt-6">
-                <h3 className="text-sm font-semibold text-foreground mb-3">Select Size</h3>
+                <h3 className="text-sm font-semibold text-foreground mb-3">{t('rentals.selectSize')}</h3>
                 <div className="flex flex-wrap gap-2">
                   {uniqueSizes.map((size) => (
                     <button
@@ -286,7 +288,7 @@ export default function RentalDetailPage() {
               </div>
             ) : variants.length > 0 ? (
               <div className="mt-6">
-                <h3 className="text-sm font-semibold text-foreground mb-3">Select Variant</h3>
+                <h3 className="text-sm font-semibold text-foreground mb-3">{t('rentals.selectVariant')}</h3>
                 <div className="flex flex-wrap gap-2">
                   {variants.map((v: any) => (
                     <button
@@ -310,15 +312,16 @@ export default function RentalDetailPage() {
             <div className="mt-6">
               <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
                 <Calendar className="h-4 w-4 text-gold-500" />
-                Select Rental Period
+                {t('rentals.selectRentalPeriod')}
               </h3>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs text-muted-foreground mb-1">
-                    Pickup Date
+                    {t('rentals.pickupDate')}
                   </label>
                   <input
                     type="date"
+                    title={t('rentals.pickupDate')}
                     value={startDate}
                     onChange={(e) => setStartDate(e.target.value)}
                     min={new Date().toISOString().split("T")[0]}
@@ -327,10 +330,11 @@ export default function RentalDetailPage() {
                 </div>
                 <div>
                   <label className="block text-xs text-muted-foreground mb-1">
-                    Return Date
+                    {t('rentals.returnDate')}
                   </label>
                   <input
                     type="date"
+                    title={t('rentals.returnDate')}
                     value={endDate}
                     onChange={(e) => setEndDate(e.target.value)}
                     min={startDate || new Date().toISOString().split("T")[0]}
@@ -340,17 +344,17 @@ export default function RentalDetailPage() {
               </div>
               <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1">
                 <Info className="h-3 w-3" />
-                {bufferDays}-day buffer between rentals. Max {maxRentalDays} days.
+                {t('rentals.bufferDaysNote').replace('{buffer}', String(bufferDays)).replace('{max}', String(maxRentalDays))}
               </p>
               {checking && (
-                <p className="text-xs text-gold-500 mt-1">Checking availability...</p>
+                <p className="text-xs text-gold-500 mt-1">{t('rentals.checkingAvailability')}</p>
               )}
               {available === false && (
-                <p className="text-xs text-red-500 mt-1">Not available for selected dates. Please choose different dates.</p>
+                <p className="text-xs text-red-500 mt-1">{t('rentals.notAvailable')}</p>
               )}
               {available === true && (
                 <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                  <Check className="h-3 w-3" /> Available for selected dates
+                  <Check className="h-3 w-3" /> {t('rentals.availableForDates')}
                 </p>
               )}
             </div>
@@ -359,13 +363,15 @@ export default function RentalDetailPage() {
             {rentalDays > 0 && (
               <div className="mt-6 p-4 rounded-xl border border-border bg-card">
                 <h3 className="text-sm font-semibold text-foreground mb-4">
-                  Price Breakdown
+                  {t('rentals.priceBreakdown')}
                 </h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">
-                      Rental fee ({rentalDays} {rentalDays === 1 ? "day" : "days"} x{" "}
-                      {formatPrice(rentalPricePerDay)})
+                      {t('rentals.rentalFeeLine')
+                        .replace('{days}', String(rentalDays))
+                        .replace('{unit}', rentalDays === 1 ? t('rentals.day') : t('rentals.daysLong'))
+                        .replace('{rate}', formatPrice(rentalPricePerDay))}
                     </span>
                     <span className="font-medium text-foreground">
                       {formatPrice(rentalFee)}
@@ -374,7 +380,7 @@ export default function RentalDetailPage() {
                   {depositAmount > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">
-                        Security deposit (refundable)
+                        {t('rentals.securityDeposit')}
                       </span>
                       <span className="font-medium text-foreground">
                         {formatPrice(depositAmount)}
@@ -382,7 +388,7 @@ export default function RentalDetailPage() {
                     </div>
                   )}
                   <div className="border-t border-border pt-2 flex justify-between">
-                    <span className="font-semibold text-foreground">Total</span>
+                    <span className="font-semibold text-foreground">{t('rentals.totalLabel')}</span>
                     <span className="font-bold text-foreground">
                       {formatPrice(totalCost)}
                     </span>
@@ -390,12 +396,12 @@ export default function RentalDetailPage() {
                   <div className="border-t border-border pt-2">
                     <div className="flex justify-between text-gold-600">
                       <span className="font-medium">
-                        Down payment ({downPaymentPercent}% - pay now)
+                        {t('rentals.downPaymentLine').replace('{pct}', String(downPaymentPercent))}
                       </span>
                       <span className="font-bold">{formatPrice(downPayment)}</span>
                     </div>
                     <div className="flex justify-between text-muted-foreground mt-1">
-                      <span>Remaining (pay before dispatch)</span>
+                      <span>{t('rentals.remainingBeforeDispatch')}</span>
                       <span>{formatPrice(remainingPayment)}</span>
                     </div>
                   </div>
@@ -409,12 +415,10 @@ export default function RentalDetailPage() {
                 <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
                 <div>
                   <h4 className="text-sm font-semibold text-amber-800 dark:text-amber-300">
-                    National ID Verification Required
+                    {t('rentals.idVerificationRequired')}
                   </h4>
                   <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                    For security purposes, you will need to provide a valid
-                    National ID (NIDA) for verification before the rental is
-                    confirmed. This is a one-time process.
+                    {t('rentals.idVerificationRequiredDesc')}
                   </p>
                 </div>
               </div>
@@ -430,11 +434,13 @@ export default function RentalDetailPage() {
                 onClick={handleBookNow}
               >
                 <Crown className="h-5 w-5" />
-                {booking ? "Booking..." : `Book Now ${rentalDays > 0 ? `- Pay ${formatPrice(downPayment)}` : ""}`}
+                {booking
+                  ? t('rentals.booking')
+                  : `${t('rentals.bookNowWithPay')}${rentalDays > 0 ? ` - ${t('rentals.payAmount').replace('{amount}', formatPrice(downPayment))}` : ""}`}
               </Button>
               {(!selectedSize || !startDate || !endDate) && (
                 <p className="text-xs text-muted-foreground text-center mt-2">
-                  Please select a size and rental dates to continue
+                  {t('rentals.selectSizeAndDates')}
                 </p>
               )}
             </div>
@@ -443,7 +449,7 @@ export default function RentalDetailPage() {
             {features.length > 0 && (
               <div className="mt-8">
                 <h3 className="text-sm font-semibold text-foreground mb-3">
-                  Product Details
+                  {t('rentals.productDetails')}
                 </h3>
                 <ul className="space-y-2">
                   {features.map((feature: string) => (

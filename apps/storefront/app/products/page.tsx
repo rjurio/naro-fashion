@@ -15,6 +15,7 @@ import {
 import ProductCard from "@/components/ui/ProductCard";
 import Button from "@/components/ui/Button";
 import { productsApi, categoriesApi } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -59,21 +60,6 @@ const colors = [
   { name: "Green", value: "#16A34A" },
 ];
 
-const priceRanges = [
-  { label: "Under TZS 50,000", min: 0, max: 50000 },
-  { label: "TZS 50,000 - 100,000", min: 50000, max: 100000 },
-  { label: "TZS 100,000 - 200,000", min: 100000, max: 200000 },
-  { label: "TZS 200,000 - 500,000", min: 200000, max: 500000 },
-  { label: "Over TZS 500,000", min: 500000, max: 999999999 },
-];
-
-const sortOptions = [
-  { label: "Newest", value: "newest" },
-  { label: "Price: Low to High", value: "price-asc" },
-  { label: "Price: High to Low", value: "price-desc" },
-  { label: "Most Popular", value: "popular" },
-  { label: "Best Rating", value: "rating" },
-];
 
 interface Category {
   id: string;
@@ -102,6 +88,24 @@ interface Product {
 export default function ProductsPage() {
   const searchParams = useSearchParams();
   const urlSearch = searchParams.get("search") || "";
+  const { t } = useTranslation();
+
+  // Localized price ranges and sort options (built each render so labels switch with locale)
+  const fmt = (n: number) => n.toLocaleString();
+  const priceRanges = [
+    { label: t("products.underPrice").replace("{price}", fmt(50000)), min: 0, max: 50000 },
+    { label: t("products.priceFromTo").replace("{min}", fmt(50000)).replace("{max}", fmt(100000)), min: 50000, max: 100000 },
+    { label: t("products.priceFromTo").replace("{min}", fmt(100000)).replace("{max}", fmt(200000)), min: 100000, max: 200000 },
+    { label: t("products.priceFromTo").replace("{min}", fmt(200000)).replace("{max}", fmt(500000)), min: 200000, max: 500000 },
+    { label: t("products.overPrice").replace("{price}", fmt(500000)), min: 500000, max: 999999999 },
+  ];
+  const sortOptions = [
+    { label: t("products.newest"), value: "newest" },
+    { label: t("products.priceLowToHigh"), value: "price-asc" },
+    { label: t("products.priceHighToLow"), value: "price-desc" },
+    { label: t("products.mostPopular"), value: "popular" },
+    { label: t("products.bestRating"), value: "rating" },
+  ];
 
   const [showFilters, setShowFilters] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -252,8 +256,8 @@ export default function ProductsPage() {
   });
 
   const allCategories = [
-    { name: "All", slug: "all", productCount: totalProducts },
-    ...categories,
+    { name: "All", displayName: t("categories.all"), slug: "all", productCount: totalProducts },
+    ...categories.map((c) => ({ ...c, displayName: c.name })),
   ];
 
   return (
@@ -263,10 +267,10 @@ export default function ProductsPage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
             <Link href="/" className="hover:text-gold-500 transition-colors">
-              Home
+              {t("common.home")}
             </Link>
             <span>/</span>
-            <span className="text-foreground font-medium">Products</span>
+            <span className="text-foreground font-medium">{t("common.products")}</span>
           </nav>
         </div>
       </div>
@@ -279,12 +283,14 @@ export default function ProductsPage() {
               {searchTerm ? (
                 <span className="flex items-center gap-2">
                   <Search className="h-6 w-6 text-gold-500" />
-                  Results for &ldquo;{searchTerm}&rdquo;
+                  {t("products.resultsFor")} &ldquo;{searchTerm}&rdquo;
                 </span>
-              ) : "All Products"}
+              ) : t("products.allProducts")}
             </h1>
             <p className="text-muted-foreground mt-1">
-              {loading ? "Loading..." : `Showing ${products.length} of ${totalProducts} results`}
+              {loading
+                ? t("common.loading")
+                : `${t("common.showing")} ${products.length} ${t("products.of")} ${totalProducts} ${t("products.results")}`}
             </p>
           </div>
 
@@ -295,7 +301,7 @@ export default function ProductsPage() {
               className="lg:hidden inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors"
             >
               <SlidersHorizontal className="h-4 w-4" />
-              Filters
+              {t("products.filters")}
               {activeFilterCount > 0 && (
                 <span className="flex items-center justify-center h-5 w-5 rounded-full bg-gold-500 text-white text-xs">
                   {activeFilterCount}
@@ -345,7 +351,7 @@ export default function ProductsPage() {
             } lg:block lg:w-64 lg:flex-shrink-0`}
           >
             <div className="flex items-center justify-between mb-6 lg:hidden">
-              <h2 className="text-lg font-bold">Filters</h2>
+              <h2 className="text-lg font-bold">{t("products.filters")}</h2>
               <button onClick={() => setShowFilters(false)}>
                 <X className="h-5 w-5" />
               </button>
@@ -356,17 +362,17 @@ export default function ProductsPage() {
                 onClick={clearFilters}
                 className="text-sm text-gold-500 hover:text-gold-600 font-medium mb-4"
               >
-                Clear all filters ({activeFilterCount})
+                {t("products.clearAllFilters")} ({activeFilterCount})
               </button>
             )}
 
             {/* Categories */}
             <div className="mb-6">
               <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-3">
-                Category
+                {t("products.category")}
               </h3>
               <div className="space-y-2">
-                {allCategories.map((cat) => (
+                {allCategories.map((cat: any) => (
                   <button
                     key={cat.name}
                     onClick={() => setSelectedCategory(cat.name)}
@@ -376,7 +382,7 @@ export default function ProductsPage() {
                         : "text-muted-foreground hover:bg-muted"
                     }`}
                   >
-                    {cat.name}
+                    {cat.displayName ?? cat.name}
                     {cat.productCount !== undefined && (
                       <span className="text-xs">({cat.productCount})</span>
                     )}
@@ -388,7 +394,7 @@ export default function ProductsPage() {
             {/* Price Range */}
             <div className="mb-6">
               <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-3">
-                Price Range
+                {t("products.priceRange")}
               </h3>
               <div className="space-y-2">
                 {priceRanges.map((range, idx) => (
@@ -412,7 +418,7 @@ export default function ProductsPage() {
             {/* Sizes */}
             <div className="mb-6">
               <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-3">
-                Size
+                {t("products.size")}
               </h3>
               <div className="flex flex-wrap gap-2">
                 {sizes.map((size) => (
@@ -434,7 +440,7 @@ export default function ProductsPage() {
             {/* Colors */}
             <div className="mb-6">
               <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-3">
-                Color
+                {t("products.color")}
               </h3>
               <div className="flex flex-wrap gap-2">
                 {colors.map((color) => (
@@ -459,7 +465,7 @@ export default function ProductsPage() {
                 onClick={() => setShowFilters(false)}
                 className="w-full"
               >
-                Apply Filters
+                {t("products.applyFilters")}
               </Button>
             </div>
           </aside>
@@ -469,12 +475,12 @@ export default function ProductsPage() {
             {loading ? (
               <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
                 <Loader2 className="h-8 w-8 animate-spin mb-4" />
-                <p>Loading products...</p>
+                <p>{t("products.loadingProducts")}</p>
               </div>
             ) : products.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
-                <p className="text-lg font-medium mb-2">No products found</p>
-                <p className="text-sm">Try adjusting your filters</p>
+                <p className="text-lg font-medium mb-2">{t("products.noProducts")}</p>
+                <p className="text-sm">{t("products.tryAdjustingFilters")}</p>
                 {activeFilterCount > 0 && (
                   <Button
                     variant="outline"
@@ -482,7 +488,7 @@ export default function ProductsPage() {
                     onClick={clearFilters}
                     className="mt-4"
                   >
-                    Clear Filters
+                    {t("products.clearFilters")}
                   </Button>
                 )}
               </div>
@@ -514,10 +520,10 @@ export default function ProductsPage() {
                       {loadingMore ? (
                         <>
                           <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                          Loading...
+                          {t("common.loading")}
                         </>
                       ) : (
-                        "Load More Products"
+                        t("products.loadMoreProducts")
                       )}
                     </Button>
                   </div>

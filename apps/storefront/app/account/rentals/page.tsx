@@ -6,6 +6,7 @@ import { ArrowLeft, CalendarDays, Upload, CheckCircle2, Clock, AlertTriangle, Lo
 import Button from "@/components/ui/Button";
 import { formatPrice } from "@/lib/utils";
 import { rentalsApi, idVerificationApi } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 
 interface Rental {
   id: string;
@@ -69,7 +70,7 @@ function formatRentalDate(dateStr: string): string {
   }
 }
 
-function RentalCard({ rental }: { rental: Rental }) {
+function RentalCard({ rental, t }: { rental: Rental; t: (key: string) => string }) {
   return (
     <div className="flex gap-4 p-4 rounded-xl border border-border bg-card">
       <div
@@ -97,7 +98,7 @@ function RentalCard({ rental }: { rental: Rental }) {
             <span>{formatRentalDate(rental.rentalStart)} - {formatRentalDate(rental.rentalEnd)}</span>
           </div>
           <div className="text-right">
-            <span className="text-muted-foreground">Return: </span>
+            <span className="text-muted-foreground">{t("account.returnLabel")} </span>
             <span className="font-medium text-foreground">{formatRentalDate(rental.returnDate)}</span>
           </div>
         </div>
@@ -105,7 +106,7 @@ function RentalCard({ rental }: { rental: Rental }) {
           <span className="text-sm font-bold text-foreground">{formatPrice(rental.totalCost)}</span>
           {["Deposit Paid", "DEPOSIT_PAID"].includes(rental.paymentStatus) && (
             <span className="text-xs text-muted-foreground">
-              Deposit: {formatPrice(rental.depositPaid)} (25%)
+              {t("account.depositLabel")} {formatPrice(rental.depositPaid)} (25%)
             </span>
           )}
         </div>
@@ -115,6 +116,7 @@ function RentalCard({ rental }: { rental: Rental }) {
 }
 
 export default function RentalsPage() {
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [activeRentals, setActiveRentals] = useState<Rental[]>([]);
   const [pastRentals, setPastRentals] = useState<Rental[]>([]);
@@ -163,21 +165,21 @@ export default function RentalsPage() {
       <div className="border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+            <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
             <span>/</span>
-            <Link href="/account" className="hover:text-gold-500 transition-colors">Account</Link>
+            <Link href="/account" className="hover:text-gold-500 transition-colors">{t("account.account")}</Link>
             <span>/</span>
-            <span className="text-foreground font-medium">My Rentals</span>
+            <span className="text-foreground font-medium">{t("account.myRentals")}</span>
           </nav>
         </div>
       </div>
 
       <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
         <div className="flex items-center justify-between mb-8">
-          <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">My Rentals</h1>
+          <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">{t("account.myRentals")}</h1>
           <Link href="/account">
             <Button variant="outline" size="sm">
-              <ArrowLeft className="h-4 w-4 mr-1" /> Account
+              <ArrowLeft className="h-4 w-4 mr-1" /> {t("account.account")}
             </Button>
           </Link>
         </div>
@@ -187,17 +189,17 @@ export default function RentalsPage() {
           <div className="flex items-center gap-3 p-4 rounded-xl border border-yellow-300 bg-yellow-50 mb-6">
             <AlertTriangle className="h-5 w-5 text-yellow-600 flex-shrink-0" />
             <div className="flex-1">
-              <p className="text-sm font-medium text-yellow-800">National ID not verified</p>
-              <p className="text-xs text-yellow-700">You need to verify your ID to rent items.</p>
+              <p className="text-sm font-medium text-yellow-800">{t("account.idNotVerified")}</p>
+              <p className="text-xs text-yellow-700">{t("account.idNeedToVerify")}</p>
             </div>
             <Button size="sm" variant="outline">
-              <Upload className="h-3.5 w-3.5 mr-1.5" /> Upload ID
+              <Upload className="h-3.5 w-3.5 mr-1.5" /> {t("account.uploadIdBtn")}
             </Button>
           </div>
         ) : (
           <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 border border-green-200 mb-6">
             <CheckCircle2 className="h-4 w-4 text-green-600" />
-            <span className="text-sm text-green-700 font-medium">National ID verified</span>
+            <span className="text-sm text-green-700 font-medium">{t("account.idVerifiedShort")}</span>
           </div>
         )}
 
@@ -205,14 +207,14 @@ export default function RentalsPage() {
         <section className="mb-10">
           <div className="flex items-center gap-2 mb-4">
             <Clock className="h-5 w-5 text-gold-500" />
-            <h2 className="text-lg font-bold text-foreground">Active & Upcoming</h2>
+            <h2 className="text-lg font-bold text-foreground">{t("account.activeAndUpcoming")}</h2>
           </div>
           {activeRentals.length === 0 ? (
-            <p className="text-sm text-muted-foreground p-4 rounded-xl border border-border bg-card">No active rentals.</p>
+            <p className="text-sm text-muted-foreground p-4 rounded-xl border border-border bg-card">{t("account.noActiveRentals")}</p>
           ) : (
             <div className="space-y-4">
               {activeRentals.map((rental) => (
-                <RentalCard key={rental.id} rental={rental} />
+                <RentalCard key={rental.id} rental={rental} t={t} />
               ))}
             </div>
           )}
@@ -220,13 +222,13 @@ export default function RentalsPage() {
 
         {/* Past Rentals */}
         <section>
-          <h2 className="text-lg font-bold text-foreground mb-4">Past Rentals</h2>
+          <h2 className="text-lg font-bold text-foreground mb-4">{t("account.pastRentals")}</h2>
           {pastRentals.length === 0 ? (
-            <p className="text-sm text-muted-foreground p-4 rounded-xl border border-border bg-card">No past rentals.</p>
+            <p className="text-sm text-muted-foreground p-4 rounded-xl border border-border bg-card">{t("account.noPastRentals")}</p>
           ) : (
             <div className="space-y-4">
               {pastRentals.map((rental) => (
-                <RentalCard key={rental.id} rental={rental} />
+                <RentalCard key={rental.id} rental={rental} t={t} />
               ))}
             </div>
           )}

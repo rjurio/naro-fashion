@@ -52,7 +52,7 @@ export default function ProductDetailPage() {
   const slug = params.slug as string;
   const router = useRouter();
   const { settings } = useSiteSettings();
-  const { locale } = useTranslation();
+  const { t, locale } = useTranslation();
   const toast = useToast();
 
   const [product, setProduct] = useState<any>(null);
@@ -185,7 +185,7 @@ export default function ProductDetailPage() {
   const handleSubmitReview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!product || !reviewRating) {
-      setReviewMsg({ text: 'Please select a star rating.', ok: false });
+      setReviewMsg({ text: t('product.pleaseSelectRating'), ok: false });
       return;
     }
     setSubmittingReview(true);
@@ -200,9 +200,9 @@ export default function ProductDetailPage() {
       setReviewRating(0);
       setReviewTitle('');
       setReviewComment('');
-      setReviewMsg({ text: 'Review submitted! It will appear after moderation.', ok: true });
+      setReviewMsg({ text: t('product.reviewSubmittedDesc'), ok: true });
     } catch {
-      setReviewMsg({ text: 'Failed to submit review. Please try again.', ok: false });
+      setReviewMsg({ text: t('product.failedSubmitReview'), ok: false });
     } finally {
       setSubmittingReview(false);
     }
@@ -214,9 +214,9 @@ export default function ProductDetailPage() {
         <div className="border-b border-border">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
             <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+              <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
               <ChevronRight className="h-3 w-3" />
-              <Link href="/products" className="hover:text-gold-500 transition-colors">Products</Link>
+              <Link href="/products" className="hover:text-gold-500 transition-colors">{t("common.products")}</Link>
             </nav>
           </div>
         </div>
@@ -240,10 +240,10 @@ export default function ProductDetailPage() {
     return (
       <div className="bg-background min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-foreground mb-2">Product Not Found</h1>
-          <p className="text-muted-foreground mb-4">The product you are looking for does not exist.</p>
+          <h1 className="text-2xl font-bold text-foreground mb-2">{t("product.productNotFound")}</h1>
+          <p className="text-muted-foreground mb-4">{t("product.productNotFoundDesc")}</p>
           <Link href="/products">
-            <Button>Browse Products</Button>
+            <Button>{t("product.browseProducts")}</Button>
           </Link>
         </div>
       </div>
@@ -291,9 +291,9 @@ export default function ProductDetailPage() {
       <div className="border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+            <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
             <ChevronRight className="h-3 w-3" />
-            <Link href="/products" className="hover:text-gold-500 transition-colors">Products</Link>
+            <Link href="/products" className="hover:text-gold-500 transition-colors">{t("common.products")}</Link>
             <ChevronRight className="h-3 w-3" />
             <span className="text-foreground font-medium">{product.name}</span>
           </nav>
@@ -317,7 +317,7 @@ export default function ProductDetailPage() {
                   }`}
                 >
                   <ImageIcon className="h-4 w-4" />
-                  Photos
+                  {t("product.photos")}
                 </button>
                 <button
                   type="button"
@@ -329,7 +329,7 @@ export default function ProductDetailPage() {
                   }`}
                 >
                   <Box className="h-4 w-4" />
-                  3D View
+                  {t("product.view3D")}
                 </button>
               </div>
             )}
@@ -346,7 +346,7 @@ export default function ProductDetailPage() {
                     />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-muted-foreground">
-                      No Image
+                      {t("product.noImage")}
                     </div>
                   )}
                 </>
@@ -370,21 +370,21 @@ export default function ProductDetailPage() {
                   <Badge variant="sale">-{discount}%</Badge>
                 )}
                 {isRentable && (
-                  <Badge variant="rent">Rent Available</Badge>
+                  <Badge variant="rent">{t("product.rentAvailable")}</Badge>
                 )}
               </div>
 
               {/* Share button */}
               <button
                 type="button"
-                aria-label="Share product"
+                aria-label={t("product.shareProduct")}
                 onClick={async () => {
                   const url = window.location.href;
                   if (navigator.share) {
                     try { await navigator.share({ title: product.name, url }); } catch {}
                   } else {
                     await navigator.clipboard.writeText(url);
-                    toast.success('Link copied to clipboard!');
+                    toast.success(t('product.linkCopied'));
                   }
                 }}
                 className="absolute top-4 right-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/90 backdrop-blur-sm shadow-sm hover:scale-110 transition-transform z-10"
@@ -461,7 +461,7 @@ export default function ProductDetailPage() {
                 ))}
               </div>
               <span className="text-sm text-muted-foreground">
-                {rating} ({reviewCount} reviews)
+                {rating} ({reviewCount} {t("product.reviewsCountSuffix")})
               </span>
             </div>
 
@@ -477,7 +477,7 @@ export default function ProductDetailPage() {
               )}
               {discount > 0 && (
                 <span className="text-sm font-semibold text-gold-500">
-                  Save {discount}%
+                  {t("product.save")} {discount}%
                 </span>
               )}
             </div>
@@ -487,7 +487,7 @@ export default function ProductDetailPage() {
               <div className="mt-3 flex items-center gap-2 p-3 rounded-lg bg-gold-500/10 border border-gold-500/30">
                 <Crown className="h-5 w-5 text-gold-600" />
                 <span className="text-sm font-medium text-gold-700">
-                  Available for rent from {formatPrice(rentPrice)}/day
+                  {t("product.rentalPrice")} {formatPrice(rentPrice)}{t("product.perDay")}
                 </span>
               </div>
             )}
@@ -496,7 +496,7 @@ export default function ProductDetailPage() {
             {uniqueColors.length > 0 && (
               <div className="mt-6">
                 <h3 className="text-sm font-semibold text-foreground mb-3">
-                  Color: <span className="font-normal text-muted-foreground">{selectedColor}</span>
+                  {t("product.color")}: <span className="font-normal text-muted-foreground">{selectedColor}</span>
                 </h3>
                 <div className="flex gap-3">
                   {uniqueColors.map((color: any) => (
@@ -520,9 +520,9 @@ export default function ProductDetailPage() {
             {uniqueSizes.length > 0 ? (
               <div className="mt-6">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-foreground">Size</h3>
+                  <h3 className="text-sm font-semibold text-foreground">{t("product.size")}</h3>
                   <Link href="/pages/size-guide" className="text-sm text-gold-500 hover:text-gold-600 font-medium">
-                    Size Guide
+                    {t("product.sizeGuide")}
                   </Link>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -550,7 +550,7 @@ export default function ProductDetailPage() {
               </div>
             ) : variants.length > 0 ? (
               <div className="mt-6">
-                <h3 className="text-sm font-semibold text-foreground mb-3">Select Variant</h3>
+                <h3 className="text-sm font-semibold text-foreground mb-3">{t("product.selectVariant")}</h3>
                 <div className="flex flex-wrap gap-2">
                   {variants.map((v: any) => (
                     <button
@@ -574,7 +574,7 @@ export default function ProductDetailPage() {
 
             {/* Quantity */}
             <div className="mt-6">
-              <h3 className="text-sm font-semibold text-foreground mb-3">Quantity</h3>
+              <h3 className="text-sm font-semibold text-foreground mb-3">{t("product.quantity")}</h3>
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => setQuantity(Math.max(1, quantity - 1))}
@@ -593,7 +593,7 @@ export default function ProductDetailPage() {
                 </button>
                 {stockCount > 0 && (
                   <span className="ml-3 text-sm text-muted-foreground">
-                    {stockCount} in stock
+                    {stockCount} {t("product.inStock")}
                   </span>
                 )}
               </div>
@@ -604,14 +604,14 @@ export default function ProductDetailPage() {
               {product.availabilityMode !== 'RENTAL_ONLY' && (
                 <Button size="lg" className="flex-1 gap-2" onClick={handleAddToCart} disabled={addingToCart || !selectedSize}>
                   <ShoppingCart className="h-5 w-5" />
-                  {addingToCart ? "Adding..." : !selectedSize ? "Select a variant" : "Add to Cart"}
+                  {addingToCart ? t("product.addingToCart") : !selectedSize ? t("product.selectAVariant") : t("product.addToCart")}
                 </Button>
               )}
               {isRentable && (
                 <Link href={`/rentals/${product.slug || product.id}`} className="flex-1">
                   <Button variant="secondary" size="lg" className="w-full gap-2">
                     <Crown className="h-5 w-5" />
-                    Rent This Item
+                    {t("product.rentNow")}
                   </Button>
                 </Link>
               )}
@@ -622,19 +622,19 @@ export default function ProductDetailPage() {
               <div className="flex flex-col items-center text-center gap-2 p-3 rounded-lg bg-muted/50">
                 <Truck className="h-5 w-5 text-gold-500" />
                 <span className="text-xs text-muted-foreground">
-                  Free delivery over TZS 100K
+                  {t("product.freeDelivery")}
                 </span>
               </div>
               <div className="flex flex-col items-center text-center gap-2 p-3 rounded-lg bg-muted/50">
                 <RotateCcw className="h-5 w-5 text-gold-500" />
                 <span className="text-xs text-muted-foreground">
-                  7-day returns
+                  {t("product.sevenDayReturns")}
                 </span>
               </div>
               <div className="flex flex-col items-center text-center gap-2 p-3 rounded-lg bg-muted/50">
                 <Shield className="h-5 w-5 text-gold-500" />
                 <span className="text-xs text-muted-foreground">
-                  Secure payment
+                  {t("product.securePayment")}
                 </span>
               </div>
             </div>
@@ -652,7 +652,7 @@ export default function ProductDetailPage() {
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              Description
+              {t("product.description")}
             </button>
             <button
               onClick={() => setActiveTab("reviews")}
@@ -662,7 +662,7 @@ export default function ProductDetailPage() {
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              Reviews ({reviewCount})
+              {t("product.reviews")} ({reviewCount})
             </button>
             {sizeGuide && (
               <button
@@ -673,7 +673,7 @@ export default function ProductDetailPage() {
                     : "border-transparent text-muted-foreground hover:text-foreground"
                 }`}
               >
-                Size Guide
+                {t("product.sizeGuide")}
               </button>
             )}
           </div>
@@ -687,7 +687,7 @@ export default function ProductDetailPage() {
                 {features.length > 0 && (
                   <>
                     <h3 className="mt-6 text-lg font-semibold text-foreground">
-                      Features
+                      {t("product.features")}
                     </h3>
                     <ul className="mt-3 space-y-2">
                       {features.map((feature: string) => (
@@ -734,7 +734,7 @@ export default function ProductDetailPage() {
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-sm font-medium text-foreground hover:border-gold-500 hover:text-gold-500 transition-colors"
                     >
                       <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="12" y1="18" x2="12" y2="12" /><polyline points="9 15 12 18 15 15" /></svg>
-                      Download Size Guide (PDF)
+                      {t("product.downloadSizeGuide")}
                     </a>
                   </div>
                 )}
@@ -746,9 +746,9 @@ export default function ProductDetailPage() {
                 {/* Write a Review Form */}
                 {isLoggedIn ? (
                   <form onSubmit={handleSubmitReview} className="p-6 rounded-xl border border-border bg-card space-y-4">
-                    <h3 className="text-sm font-semibold text-foreground">Write a Review</h3>
+                    <h3 className="text-sm font-semibold text-foreground">{t("product.writeAReview")}</h3>
                     <div>
-                      <label className="block text-xs text-muted-foreground mb-1.5">Rating *</label>
+                      <label className="block text-xs text-muted-foreground mb-1.5">{t("product.rating")} *</label>
                       <div className="flex items-center gap-1">
                         {Array.from({ length: 5 }, (_, i) => (
                           <button
@@ -758,7 +758,7 @@ export default function ProductDetailPage() {
                             onMouseEnter={() => setReviewHover(i + 1)}
                             onMouseLeave={() => setReviewHover(0)}
                             className="p-0.5"
-                            aria-label={`Rate ${i + 1} star${i > 0 ? 's' : ''}`}
+                            aria-label={(i === 0 ? t("product.rateStars") : t("product.rateStarsPlural")).replace("{n}", String(i + 1))}
                           >
                             <Star
                               className={`h-6 w-6 transition-colors ${
@@ -775,21 +775,21 @@ export default function ProductDetailPage() {
                       </div>
                     </div>
                     <div>
-                      <label className="block text-xs text-muted-foreground mb-1.5">Title (optional)</label>
+                      <label className="block text-xs text-muted-foreground mb-1.5">{t("product.titleOptional")}</label>
                       <input
                         type="text"
                         value={reviewTitle}
                         onChange={(e) => setReviewTitle(e.target.value)}
-                        placeholder="Summarize your experience"
+                        placeholder={t("product.summarizeExperience")}
                         className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-muted-foreground mb-1.5">Review</label>
+                      <label className="block text-xs text-muted-foreground mb-1.5">{t("product.review")}</label>
                       <textarea
                         value={reviewComment}
                         onChange={(e) => setReviewComment(e.target.value)}
-                        placeholder="Share your thoughts about this product..."
+                        placeholder={t("product.shareThoughts")}
                         rows={3}
                         className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500 resize-y"
                       />
@@ -798,21 +798,21 @@ export default function ProductDetailPage() {
                       <p className={`text-xs ${reviewMsg.ok ? 'text-green-600' : 'text-red-500'}`}>{reviewMsg.text}</p>
                     )}
                     <Button type="submit" size="sm" disabled={submittingReview || !reviewRating}>
-                      {submittingReview ? 'Submitting...' : 'Submit Review'}
+                      {submittingReview ? t("product.submitting") : t("product.submitReview")}
                     </Button>
                   </form>
                 ) : (
                   <div className="p-4 rounded-xl border border-dashed border-border text-center">
                     <p className="text-sm text-muted-foreground">
-                      <Link href="/auth/login" className="text-gold-500 hover:underline font-medium">Sign in</Link>
-                      {' '}to write a review
+                      <Link href="/auth/login" className="text-gold-500 hover:underline font-medium">{t("product.signIn")}</Link>
+                      {' '}{t("product.toWriteReview")}
                     </p>
                   </div>
                 )}
 
                 {/* Review List */}
                 {reviews.length === 0 ? (
-                  <p className="text-muted-foreground text-sm">No reviews yet. Be the first to share your experience!</p>
+                  <p className="text-muted-foreground text-sm">{t("product.noReviewsYet")}</p>
                 ) : (
                   reviews.map((review) => (
                     <div
@@ -826,7 +826,7 @@ export default function ProductDetailPage() {
                         <div className="flex-1">
                           <div className="flex items-center justify-between">
                             <h4 className="text-sm font-semibold text-foreground">
-                              {review.user?.firstName ? `${review.user.firstName} ${(review.user.lastName || "").charAt(0)}.` : review.name || "Anonymous"}
+                              {review.user?.firstName ? `${review.user.firstName} ${(review.user.lastName || "").charAt(0)}.` : review.name || t("product.anonymous")}
                             </h4>
                             <span className="text-xs text-muted-foreground">
                               {review.createdAt ? new Date(review.createdAt).toLocaleDateString() : review.date || ""}
@@ -864,7 +864,7 @@ export default function ProductDetailPage() {
         {relatedProducts.length > 0 && (
           <div className="mt-16">
             <h2 className="text-2xl font-heading font-bold text-foreground mb-8">
-              You May Also Like
+              {t("product.youMayAlsoLike")}
             </h2>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
               {relatedProducts.map((rp) => (

@@ -14,6 +14,7 @@ function resolveImg(url?: string): string {
 import Button from "@/components/ui/Button";
 import { formatPrice, formatCountdown } from "@/lib/utils";
 import { flashSalesApi } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 
 interface FlashSaleProduct {
   id: string;
@@ -29,6 +30,7 @@ interface FlashSaleProduct {
 }
 
 function CountdownTimer({ endTime }: { endTime: number }) {
+  const { t } = useTranslation();
   const [secondsLeft, setSecondsLeft] = useState(0);
 
   useEffect(() => {
@@ -43,15 +45,15 @@ function CountdownTimer({ endTime }: { endTime: number }) {
 
   const { days, hours, minutes, secs } = formatCountdown(secondsLeft);
 
-  if (secondsLeft <= 0) return <span className="text-red-500 font-bold">Sale Ended</span>;
+  if (secondsLeft <= 0) return <span className="text-red-500 font-bold">{t('flashSales.saleEnded')}</span>;
 
   return (
     <div className="flex items-center gap-1.5">
       {[
-        { val: days, label: "D" },
-        { val: hours, label: "H" },
-        { val: minutes, label: "M" },
-        { val: secs, label: "S" },
+        { val: days, label: t('flashSales.days') },
+        { val: hours, label: t('flashSales.hours') },
+        { val: minutes, label: t('flashSales.minutes') },
+        { val: secs, label: t('flashSales.seconds') },
       ].map((unit, idx) => (
         <div key={idx} className="flex items-center gap-1.5">
           <div className="flex flex-col items-center bg-dark-500 text-white rounded-lg px-2.5 py-1.5 min-w-[40px]">
@@ -83,6 +85,7 @@ function ProductSkeleton() {
 }
 
 export default function FlashSalesPage() {
+  const { t } = useTranslation();
   const [products, setProducts] = useState<FlashSaleProduct[]>([]);
   const [saleEndTime, setSaleEndTime] = useState<number>(0);
   const [loading, setLoading] = useState(true);
@@ -137,17 +140,17 @@ export default function FlashSalesPage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 sm:py-12 text-center">
           <div className="flex items-center justify-center gap-2 mb-3">
             <Zap className="h-6 w-6 fill-gold-500 text-gold-500" />
-            <h1 className="text-2xl sm:text-4xl font-heading font-bold">Flash Sale</h1>
+            <h1 className="text-2xl sm:text-4xl font-heading font-bold">{t('flashSales.title')}</h1>
             <Zap className="h-6 w-6 fill-gold-500 text-gold-500" />
           </div>
           <p className="text-gold-100 mb-6 text-sm sm:text-base">
-            Limited time offers on your favorite styles. Grab them before they are gone!
+            {t('flashSales.subtitle')}
           </p>
           {saleEndTime > 0 && (
             <>
               <div className="flex items-center justify-center gap-2 mb-2">
                 <Clock className="h-4 w-4" />
-                <span className="text-sm font-medium">Sale ends in:</span>
+                <span className="text-sm font-medium">{t('flashSales.endsIn')}</span>
               </div>
               <div className="flex justify-center">
                 <CountdownTimer endTime={saleEndTime} />
@@ -169,10 +172,10 @@ export default function FlashSalesPage() {
           <div className="text-center py-16">
             <Zap className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
             <h2 className="text-xl font-heading font-bold text-foreground mb-2">
-              No active flash sales
+              {t('flashSales.noActiveFlashSales')}
             </h2>
             <p className="text-muted-foreground">
-              Check back soon for amazing deals!
+              {t('flashSales.checkBackSoon')}
             </p>
           </div>
         ) : (
@@ -224,8 +227,8 @@ export default function FlashSalesPage() {
                     {/* Stock bar */}
                     <div className="mt-3">
                       <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-                        <span>{product.soldCount} sold</span>
-                        <span>{product.totalStock - product.soldCount} left</span>
+                        <span>{product.soldCount} {t('flashSales.sold')}</span>
+                        <span>{product.totalStock - product.soldCount} {t('flashSales.leftQty')}</span>
                       </div>
                       <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                         <div
@@ -235,7 +238,7 @@ export default function FlashSalesPage() {
                       </div>
                     </div>
                     <Button size="sm" className="w-full mt-3 gap-1.5 text-xs">
-                      <ShoppingCart className="h-3.5 w-3.5" /> Add to Cart
+                      <ShoppingCart className="h-3.5 w-3.5" /> {t('flashSales.addToCart')}
                     </Button>
                   </div>
                 </div>

@@ -86,7 +86,7 @@ export default function MobileMenu({
           <button
             onClick={onClose}
             className="flex items-center justify-center h-10 w-10 rounded-lg hover:bg-muted transition-colors"
-            aria-label="Close menu"
+            aria-label={t('header.closeMenu')}
           >
             <X className="h-5 w-5" />
           </button>

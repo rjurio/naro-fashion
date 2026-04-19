@@ -9,6 +9,7 @@ import { authApi } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 
 export default function SettingsPage() {
+  const { t, locale, setLocale } = useTranslation();
   const [profile, setProfile] = useState({ name: "", email: "", phone: "" });
   const [passwords, setPasswords] = useState({ current: "", newPass: "", confirm: "" });
   const [loading, setLoading] = useState(true);
@@ -18,7 +19,6 @@ export default function SettingsPage() {
   const [passwordMsg, setPasswordMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [error, setError] = useState("");
   const { theme, setTheme } = useTheme();
-  const { locale, setLocale } = useTranslation();
 
   // Fetch profile on mount
   useEffect(() => {
@@ -30,9 +30,9 @@ export default function SettingsPage() {
           phone: user.phone || "",
         });
       })
-      .catch(() => setError("Failed to load profile. Please log in."))
+      .catch(() => setError(t("account.failedLoadProfile")))
       .finally(() => setLoading(false));
-  }, []);
+  }, [t]);
 
   const handleProfileChange = (field: string, value: string) => {
     setProfile((prev) => ({ ...prev, [field]: value }));
@@ -49,7 +49,7 @@ export default function SettingsPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch {
-      setError("Failed to save profile changes.");
+      setError(t("account.failedSaveProfile"));
     } finally {
       setSaving(false);
     }
@@ -58,11 +58,11 @@ export default function SettingsPage() {
   const handleChangePassword = async () => {
     setPasswordMsg(null);
     if (passwords.newPass !== passwords.confirm) {
-      setPasswordMsg({ type: "error", text: "New passwords do not match." });
+      setPasswordMsg({ type: "error", text: t("account.passwordsDoNotMatch") });
       return;
     }
     if (passwords.newPass.length < 6) {
-      setPasswordMsg({ type: "error", text: "Password must be at least 6 characters." });
+      setPasswordMsg({ type: "error", text: t("account.passwordMin6") });
       return;
     }
     setChangingPassword(true);
@@ -71,19 +71,19 @@ export default function SettingsPage() {
         currentPassword: passwords.current,
         newPassword: passwords.newPass,
       });
-      setPasswordMsg({ type: "success", text: "Password updated successfully!" });
+      setPasswordMsg({ type: "success", text: t("account.passwordUpdatedSuccess") });
       setPasswords({ current: "", newPass: "", confirm: "" });
     } catch {
-      setPasswordMsg({ type: "error", text: "Failed to change password. Check your current password." });
+      setPasswordMsg({ type: "error", text: t("account.failedChangePassword") });
     } finally {
       setChangingPassword(false);
     }
   };
 
   const themes = [
-    { id: "light" as const, label: "Light", icon: Sun },
-    { id: "dark" as const, label: "Dark", icon: Moon },
-    { id: "standard" as const, label: "Standard", icon: Monitor },
+    { id: "light" as const, label: t("account.themeLight"), icon: Sun },
+    { id: "dark" as const, label: t("account.themeDark"), icon: Moon },
+    { id: "standard" as const, label: t("account.themeStandard"), icon: Monitor },
   ];
 
   if (loading) {
@@ -99,21 +99,21 @@ export default function SettingsPage() {
       <div className="border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+            <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
             <span>/</span>
-            <Link href="/account" className="hover:text-gold-500 transition-colors">Account</Link>
+            <Link href="/account" className="hover:text-gold-500 transition-colors">{t("account.account")}</Link>
             <span>/</span>
-            <span className="text-foreground font-medium">Settings</span>
+            <span className="text-foreground font-medium">{t("account.settings")}</span>
           </nav>
         </div>
       </div>
 
       <div className="mx-auto max-w-2xl px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
         <div className="flex items-center justify-between mb-8">
-          <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">Settings</h1>
+          <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">{t("account.settings")}</h1>
           <Link href="/account">
             <Button variant="outline" size="sm">
-              <ArrowLeft className="h-4 w-4 mr-1" /> Account
+              <ArrowLeft className="h-4 w-4 mr-1" /> {t("account.account")}
             </Button>
           </Link>
         </div>
@@ -125,10 +125,10 @@ export default function SettingsPage() {
         <div className="space-y-8">
           {/* Profile Info */}
           <section className="rounded-xl border border-border bg-card p-6">
-            <h2 className="text-lg font-bold text-foreground mb-4">Profile Information</h2>
+            <h2 className="text-lg font-bold text-foreground mb-4">{t("account.profileInformation")}</h2>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Full Name</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">{t("account.fullName")}</label>
                 <input
                   type="text"
                   value={profile.name}
@@ -137,17 +137,17 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Email</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">{t("common.email")}</label>
                 <input
                   type="email"
                   value={profile.email}
                   disabled
                   className="w-full rounded-lg border border-border bg-muted px-4 py-2.5 text-sm text-muted-foreground cursor-not-allowed"
                 />
-                <p className="text-xs text-muted-foreground mt-1">Email cannot be changed.</p>
+                <p className="text-xs text-muted-foreground mt-1">{t("account.emailCannotBeChanged")}</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Phone Number</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">{t("account.phoneNumber")}</label>
                 <input
                   type="tel"
                   value={profile.phone}
@@ -156,14 +156,14 @@ export default function SettingsPage() {
                 />
               </div>
               <Button onClick={handleSave} disabled={saving}>
-                {saving ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving...</> : saved ? "Saved!" : "Save Changes"}
+                {saving ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> {t("account.saving")}</> : saved ? t("account.savedExclaim") : t("account.saveChanges")}
               </Button>
             </div>
           </section>
 
           {/* Change Password */}
           <section className="rounded-xl border border-border bg-card p-6">
-            <h2 className="text-lg font-bold text-foreground mb-4">Change Password</h2>
+            <h2 className="text-lg font-bold text-foreground mb-4">{t("account.changePassword")}</h2>
             {passwordMsg && (
               <div className={`mb-4 p-3 rounded-lg text-sm ${passwordMsg.type === "success" ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-red-50 border border-red-200 text-red-700"}`}>
                 {passwordMsg.text}
@@ -171,7 +171,7 @@ export default function SettingsPage() {
             )}
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Current Password</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">{t("account.currentPassword")}</label>
                 <input
                   type="password"
                   value={passwords.current}
@@ -180,7 +180,7 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">New Password</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">{t("auth.newPassword")}</label>
                 <input
                   type="password"
                   value={passwords.newPass}
@@ -189,7 +189,7 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Confirm New Password</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">{t("auth.confirmNewPassword")}</label>
                 <input
                   type="password"
                   value={passwords.confirm}
@@ -202,14 +202,14 @@ export default function SettingsPage() {
                 onClick={handleChangePassword}
                 disabled={changingPassword || !passwords.current || !passwords.newPass || !passwords.confirm}
               >
-                {changingPassword ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Updating...</> : "Update Password"}
+                {changingPassword ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> {t("account.updating")}</> : t("account.updatePassword")}
               </Button>
             </div>
           </section>
 
           {/* Theme */}
           <section className="rounded-xl border border-border bg-card p-6">
-            <h2 className="text-lg font-bold text-foreground mb-4">Theme Preference</h2>
+            <h2 className="text-lg font-bold text-foreground mb-4">{t("account.themePreference")}</h2>
             <div className="grid grid-cols-3 gap-3">
               {themes.map((t) => (
                 <button
@@ -230,7 +230,7 @@ export default function SettingsPage() {
 
           {/* Language */}
           <section className="rounded-xl border border-border bg-card p-6">
-            <h2 className="text-lg font-bold text-foreground mb-4">Language</h2>
+            <h2 className="text-lg font-bold text-foreground mb-4">{t("common.language")}</h2>
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => setLocale("en")}
@@ -239,7 +239,7 @@ export default function SettingsPage() {
                 }`}
               >
                 <Globe className={`h-5 w-5 ${locale === "en" ? "text-gold-500" : "text-muted-foreground"}`} />
-                <span className="text-sm font-medium text-foreground">English</span>
+                <span className="text-sm font-medium text-foreground">{t("account.english")}</span>
               </button>
               <button
                 onClick={() => setLocale("sw")}
@@ -248,7 +248,7 @@ export default function SettingsPage() {
                 }`}
               >
                 <Globe className={`h-5 w-5 ${locale === "sw" ? "text-gold-500" : "text-muted-foreground"}`} />
-                <span className="text-sm font-medium text-foreground">Kiswahili</span>
+                <span className="text-sm font-medium text-foreground">{t("account.kiswahili")}</span>
               </button>
             </div>
           </section>
@@ -257,13 +257,13 @@ export default function SettingsPage() {
           <section className="rounded-xl border-2 border-red-200 bg-red-50/50 p-6">
             <div className="flex items-center gap-2 mb-2">
               <AlertTriangle className="h-5 w-5 text-red-500" />
-              <h2 className="text-lg font-bold text-red-700">Danger Zone</h2>
+              <h2 className="text-lg font-bold text-red-700">{t("account.dangerZone")}</h2>
             </div>
             <p className="text-sm text-red-600 mb-4">
-              Once you delete your account, there is no going back. All your data, orders, and rental history will be permanently removed.
+              {t("account.dangerZoneDesc")}
             </p>
             <button className="px-4 py-2 rounded-lg border-2 border-red-500 text-red-500 text-sm font-medium hover:bg-red-500 hover:text-white transition-colors">
-              Delete My Account
+              {t("account.deleteAccount")}
             </button>
           </section>
         </div>

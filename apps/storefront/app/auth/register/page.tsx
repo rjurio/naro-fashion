@@ -10,7 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { useTranslation } from "@/lib/i18n";
 
-function getPasswordStrength(password: string): { score: number; label: string } {
+function getPasswordStrength(password: string, labels: { weak: string; medium: string; strong: string }): { score: number; label: string } {
   if (!password) return { score: 0, label: "" };
   let score = 0;
   if (password.length >= 8) score++;
@@ -19,9 +19,9 @@ function getPasswordStrength(password: string): { score: number; label: string }
   if (/\d/.test(password)) score++;
   if (/[^a-zA-Z0-9]/.test(password)) score++;
 
-  if (score <= 1) return { score: 1, label: "Weak" };
-  if (score <= 3) return { score: 2, label: "Medium" };
-  return { score: 3, label: "Strong" };
+  if (score <= 1) return { score: 1, label: labels.weak };
+  if (score <= 3) return { score: 2, label: labels.medium };
+  return { score: 3, label: labels.strong };
 }
 
 export default function RegisterPage() {
@@ -53,8 +53,12 @@ export default function RegisterPage() {
   }, [authLoading, isAuthenticated, router]);
 
   const passwordStrength = useMemo(
-    () => getPasswordStrength(formData.password),
-    [formData.password],
+    () => getPasswordStrength(formData.password, {
+      weak: t("passwordWeak"),
+      medium: t("passwordMedium"),
+      strong: t("passwordStrong"),
+    }),
+    [formData.password, t],
   );
 
   const passwordsMatch =
@@ -135,10 +139,10 @@ export default function RegisterPage() {
 
           <div className="mt-12 grid grid-cols-2 gap-4">
             {[
-              { value: "10K+", label: "Happy Customers" },
-              { value: "500+", label: "Products" },
-              { value: "50+", label: "Designer Gowns" },
-              { value: "24/7", label: "Support" },
+              { value: "10K+", label: t("happyCustomers") },
+              { value: "500+", label: t("productsLabel") },
+              { value: "50+", label: t("designerGowns") },
+              { value: "24/7", label: t("support247") },
             ].map((stat) => (
               <div key={stat.label} className="p-4 rounded-xl bg-white/5 backdrop-blur-sm border border-white/10">
                 <div className="text-2xl font-bold text-[#D4AF37]">{stat.value}</div>
@@ -242,7 +246,7 @@ export default function RegisterPage() {
             <div>
               <label htmlFor="phone" className="block text-sm font-medium text-foreground mb-1.5">
                 {t("phoneNumber")}
-                <span className="text-muted-foreground font-normal ml-1">(optional)</span>
+                <span className="text-muted-foreground font-normal ml-1">{t("optional")}</span>
               </label>
               <div className="relative">
                 <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -426,7 +430,7 @@ export default function RegisterPage() {
               </svg>
               Google
               <span className="absolute -top-2 -right-2 rounded-full bg-gold-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                Soon
+                {t("comingSoon")}
               </span>
             </button>
             <button
@@ -439,7 +443,7 @@ export default function RegisterPage() {
               </svg>
               Facebook
               <span className="absolute -top-2 -right-2 rounded-full bg-gold-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                Soon
+                {t("comingSoon")}
               </span>
             </button>
           </div>

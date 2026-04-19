@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { addressesApi } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
+import { useTranslation } from "@/lib/i18n";
 
 interface Address {
   id: string;
@@ -29,6 +30,7 @@ const LABEL_ICONS: Record<string, React.ElementType> = {
 const emptyForm = { street: "", city: "", state: "", zipCode: "", country: "Tanzania", label: "Home", isDefault: false };
 
 export default function AddressesPage() {
+  const { t } = useTranslation();
   const toast = useToast();
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,7 +79,7 @@ export default function AddressesPage() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.street.trim() || !form.city.trim() || !form.state.trim() || !form.country.trim()) {
-      setError("Please fill in all required fields.");
+      setError(t("account.addressFillFields"));
       return;
     }
     setSaving(true);
@@ -91,20 +93,20 @@ export default function AddressesPage() {
       setShowForm(false);
       await load();
     } catch {
-      setError("Failed to save address. Please try again.");
+      setError(t("account.failedSaveAddress"));
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this address?")) return;
+    if (!confirm(t("account.confirmDeleteAddress"))) return;
     setDeleting(id);
     try {
       await addressesApi.delete(id);
       setAddresses((prev) => prev.filter((a) => a.id !== id));
     } catch {
-      toast.error("Failed to delete address.");
+      toast.error(t("account.failedDeleteAddress"));
     } finally {
       setDeleting(null);
     }
@@ -115,7 +117,7 @@ export default function AddressesPage() {
       await addressesApi.update(addr.id, { isDefault: true });
       await load();
     } catch {
-      toast.error("Failed to set default address.");
+      toast.error(t("account.failedSetDefault"));
     }
   };
 
@@ -128,11 +130,11 @@ export default function AddressesPage() {
       <div className="border-b border-border">
         <div className="mx-auto max-w-4xl px-4 sm:px-6 py-4">
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+            <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
             <ChevronRight className="h-3 w-3" />
-            <Link href="/account" className="hover:text-gold-500 transition-colors">Account</Link>
+            <Link href="/account" className="hover:text-gold-500 transition-colors">{t("account.account")}</Link>
             <ChevronRight className="h-3 w-3" />
-            <span className="text-foreground font-medium">Addresses</span>
+            <span className="text-foreground font-medium">{t("account.addresses")}</span>
           </nav>
         </div>
       </div>
@@ -141,8 +143,8 @@ export default function AddressesPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-heading font-bold text-foreground">My Addresses</h1>
-            <p className="text-sm text-muted-foreground mt-1">Manage your delivery addresses</p>
+            <h1 className="text-2xl font-heading font-bold text-foreground">{t("account.myAddressesTitle")}</h1>
+            <p className="text-sm text-muted-foreground mt-1">{t("account.manageDeliveryAddresses")}</p>
           </div>
           {!showForm && (
             <button
@@ -151,7 +153,7 @@ export default function AddressesPage() {
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gold-500 text-[#1A1A1A] text-sm font-semibold hover:bg-gold-600 transition-colors"
             >
               <Plus className="h-4 w-4" />
-              Add Address
+              {t("account.addAddress")}
             </button>
           )}
         </div>
@@ -160,25 +162,29 @@ export default function AddressesPage() {
         {showForm && (
           <div className="rounded-2xl border border-border bg-card p-6 mb-6">
             <h2 className="text-base font-semibold text-foreground mb-5">
-              {editing ? "Edit Address" : "New Address"}
+              {editing ? t("account.editAddress") : t("account.newAddress")}
             </h2>
             <form onSubmit={handleSave} className="space-y-4">
               {/* Label */}
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1.5">Label</label>
+                <label className="block text-xs font-medium text-foreground mb-1.5">{t("account.labelField")}</label>
                 <div className="flex gap-2">
-                  {["Home", "Work", "Other"].map((l) => (
+                  {[
+                    { key: "Home", label: t("account.labelHome") },
+                    { key: "Work", label: t("account.labelWork") },
+                    { key: "Other", label: t("account.labelOther") },
+                  ].map((l) => (
                     <button
-                      key={l}
+                      key={l.key}
                       type="button"
-                      onClick={() => setForm({ ...form, label: l })}
+                      onClick={() => setForm({ ...form, label: l.key })}
                       className={`flex-1 py-2 rounded-xl border text-sm font-medium transition-colors ${
-                        form.label === l
+                        form.label === l.key
                           ? "border-gold-500 bg-gold-500/10 text-gold-600"
                           : "border-border bg-background text-muted-foreground hover:border-gold-500/50"
                       }`}
                     >
-                      {l}
+                      {l.label}
                     </button>
                   ))}
                 </div>
@@ -186,7 +192,7 @@ export default function AddressesPage() {
 
               {/* Street */}
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1.5">Street / Area *</label>
+                <label className="block text-xs font-medium text-foreground mb-1.5">{t("account.streetArea")}</label>
                 <input
                   type="text"
                   required
@@ -200,7 +206,7 @@ export default function AddressesPage() {
               {/* City + State */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1.5">City *</label>
+                  <label className="block text-xs font-medium text-foreground mb-1.5">{t("account.cityRequired")}</label>
                   <input
                     type="text"
                     required
@@ -211,7 +217,7 @@ export default function AddressesPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1.5">Region *</label>
+                  <label className="block text-xs font-medium text-foreground mb-1.5">{t("account.regionRequired")}</label>
                   <input
                     type="text"
                     required
@@ -226,7 +232,7 @@ export default function AddressesPage() {
               {/* Zip + Country */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1.5">ZIP / Postal Code</label>
+                  <label className="block text-xs font-medium text-foreground mb-1.5">{t("account.zipPostal")}</label>
                   <input
                     type="text"
                     value={form.zipCode}
@@ -236,7 +242,7 @@ export default function AddressesPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1.5">Country *</label>
+                  <label className="block text-xs font-medium text-foreground mb-1.5">{t("account.countryRequired")}</label>
                   <input
                     type="text"
                     required
@@ -255,7 +261,7 @@ export default function AddressesPage() {
                   onChange={(e) => setForm({ ...form, isDefault: e.target.checked })}
                   className="h-4 w-4 rounded border-border accent-gold-500"
                 />
-                <span className="text-sm text-foreground">Set as default address</span>
+                <span className="text-sm text-foreground">{t("account.setAsDefault")}</span>
               </label>
 
               {error && <p className="text-sm text-red-500">{error}</p>}
@@ -267,14 +273,14 @@ export default function AddressesPage() {
                   className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gold-500 text-[#1A1A1A] text-sm font-semibold hover:bg-gold-600 disabled:opacity-50 transition-colors"
                 >
                   {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                  {saving ? "Saving..." : editing ? "Save Changes" : "Add Address"}
+                  {saving ? t("account.saving") : editing ? t("account.saveChanges") : t("account.addAddress")}
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowForm(false)}
                   className="px-5 py-2.5 rounded-xl border border-border text-sm text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
               </div>
             </form>
@@ -291,15 +297,15 @@ export default function AddressesPage() {
             <div className="w-14 h-14 rounded-full bg-gold-500/10 flex items-center justify-center mx-auto mb-4">
               <MapPin className="h-7 w-7 text-gold-500" />
             </div>
-            <h3 className="font-semibold text-foreground mb-1">No addresses saved</h3>
-            <p className="text-sm text-muted-foreground mb-4">Add a delivery address to speed up checkout</p>
+            <h3 className="font-semibold text-foreground mb-1">{t("account.noAddressesSaved")}</h3>
+            <p className="text-sm text-muted-foreground mb-4">{t("account.addAddressSpeedCheckout")}</p>
             <button
               type="button"
               onClick={openNew}
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gold-500 text-[#1A1A1A] text-sm font-semibold hover:bg-gold-600 transition-colors"
             >
               <Plus className="h-4 w-4" />
-              Add Your First Address
+              {t("account.addFirstAddress")}
             </button>
           </div>
         ) : (
@@ -317,7 +323,7 @@ export default function AddressesPage() {
                   {addr.isDefault && (
                     <span className="absolute top-3 right-3 flex items-center gap-1 text-xs text-gold-600 font-medium">
                       <CheckCircle2 className="h-3.5 w-3.5" />
-                      Default
+                      {t("account.defaultBadge")}
                     </span>
                   )}
 
@@ -326,7 +332,7 @@ export default function AddressesPage() {
                     <div className="p-1.5 rounded-lg bg-gold-500/10">
                       <LabelIcon className="h-4 w-4 text-gold-500" />
                     </div>
-                    <span className="text-sm font-semibold text-foreground">{addr.label || "Address"}</span>
+                    <span className="text-sm font-semibold text-foreground">{addr.label || t("account.addressFallback")}</span>
                   </div>
 
                   {/* Address text */}
@@ -344,7 +350,7 @@ export default function AddressesPage() {
                       className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
                     >
                       <Pencil className="h-3.5 w-3.5" />
-                      Edit
+                      {t("account.edit")}
                     </button>
                     {!addr.isDefault && (
                       <>
@@ -355,7 +361,7 @@ export default function AddressesPage() {
                           className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-gold-500 transition-colors"
                         >
                           <Star className="h-3.5 w-3.5" />
-                          Set Default
+                          {t("account.setDefault")}
                         </button>
                       </>
                     )}
@@ -367,7 +373,7 @@ export default function AddressesPage() {
                       className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-red-500 transition-colors disabled:opacity-50"
                     >
                       {deleting === addr.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                      Delete
+                      {t("account.delete")}
                     </button>
                   </div>
                 </div>
@@ -382,7 +388,7 @@ export default function AddressesPage() {
                 className="rounded-2xl border border-dashed border-border bg-card p-5 flex flex-col items-center justify-center gap-2 text-muted-foreground hover:border-gold-500 hover:text-gold-500 transition-colors min-h-[160px]"
               >
                 <Plus className="h-6 w-6" />
-                <span className="text-sm font-medium">Add New Address</span>
+                <span className="text-sm font-medium">{t("account.addNewAddress")}</span>
               </button>
             )}
           </div>

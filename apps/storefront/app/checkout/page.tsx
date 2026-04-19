@@ -26,33 +26,36 @@ import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { formatPrice } from "@/lib/utils";
 import { cartApi, ordersApi, paymentsApi } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
-
-const steps = [
-  { id: 1, label: "Shipping", icon: MapPin },
-  { id: 2, label: "Delivery", icon: Truck },
-  { id: 3, label: "Payment", icon: CreditCard },
-  { id: 4, label: "Confirm", icon: ClipboardCheck },
-];
-
-const deliveryMethods = [
-  { id: "standard", name: "Standard Delivery", desc: "5-7 business days", price: 5000, icon: Truck },
-  { id: "express", name: "Express Delivery", desc: "1-2 business days", price: 15000, icon: Truck },
-  { id: "pickup", name: "Pickup Point", desc: "Ready in 24 hours", price: 0, icon: MapPin },
-];
-
-const paymentMethods = [
-  { id: "mobile", name: "Mobile Money", desc: "M-Pesa, Tigo Pesa, Airtel Money", icon: Smartphone, gatewayMethod: "MOBILE_MONEY" as const },
-  { id: "card", name: "Card Payment", desc: "Visa, Mastercard", icon: CreditCard, gatewayMethod: "CARD" as const },
-  { id: "bank", name: "Bank Transfer", desc: "Direct bank transfer", icon: Building2, gatewayMethod: null },
-  { id: "cod", name: "Cash on Delivery", desc: "Pay when you receive", icon: Banknote, gatewayMethod: null },
-];
+import { useTranslation } from "@/lib/i18n";
 
 type PaymentFlowStatus = "idle" | "initiating" | "processing" | "completed" | "failed";
 
 export default function CheckoutPage() {
+  const { t } = useTranslation();
   const { settings } = useSiteSettings();
   const router = useRouter();
   const toast = useToast();
+
+  const steps = [
+    { id: 1, label: t("checkout.shipping"), icon: MapPin },
+    { id: 2, label: t("checkout.delivery"), icon: Truck },
+    { id: 3, label: t("checkout.payment"), icon: CreditCard },
+    { id: 4, label: t("checkout.confirm"), icon: ClipboardCheck },
+  ];
+
+  const deliveryMethods = [
+    { id: "standard", name: t("checkout.standardDelivery"), desc: t("checkout.standardDeliveryDesc"), price: 5000, icon: Truck },
+    { id: "express", name: t("checkout.expressDelivery"), desc: t("checkout.expressDeliveryDesc"), price: 15000, icon: Truck },
+    { id: "pickup", name: t("checkout.pickupPoint"), desc: t("checkout.pickupPointDesc"), price: 0, icon: MapPin },
+  ];
+
+  const paymentMethods = [
+    { id: "mobile", name: t("checkout.mobileMoney"), desc: t("checkout.mobileMoneyDesc"), icon: Smartphone, gatewayMethod: "MOBILE_MONEY" as const },
+    { id: "card", name: t("checkout.cardPayment"), desc: t("checkout.cardPaymentDesc"), icon: CreditCard, gatewayMethod: "CARD" as const },
+    { id: "bank", name: t("checkout.bankTransfer"), desc: t("checkout.bankTransferDesc"), icon: Building2, gatewayMethod: null },
+    { id: "cod", name: t("checkout.cashOnDelivery"), desc: t("checkout.cashOnDeliveryDesc"), icon: Banknote, gatewayMethod: null },
+  ];
+
   const [currentStep, setCurrentStep] = useState(1);
   const [orderItems, setOrderItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -149,9 +152,7 @@ export default function CheckoutPage() {
             pollIntervalRef.current = null;
           }
           setPaymentFlowStatus("failed");
-          setPaymentMessage(
-            "Payment timed out. If you completed the payment, it may still be processing. Check your order status in your account."
-          );
+          setPaymentMessage(t("checkout.paymentTimedOut"));
           return newCount;
         }
 
@@ -167,20 +168,20 @@ export default function CheckoutPage() {
             pollIntervalRef.current = null;
           }
           setPaymentFlowStatus("completed");
-          setPaymentMessage("Payment successful! Redirecting to your order...");
+          setPaymentMessage(t("checkout.paymentSuccessRedirect"));
         } else if (status.status === "FAILED") {
           if (pollIntervalRef.current) {
             clearInterval(pollIntervalRef.current);
             pollIntervalRef.current = null;
           }
           setPaymentFlowStatus("failed");
-          setPaymentMessage("Payment failed. Please try again or choose a different payment method.");
+          setPaymentMessage(t("checkout.paymentFailedRetry"));
         }
       } catch {
         // Silently handle polling errors — will retry on next interval
       }
     }, 3000);
-  }, []);
+  }, [t]);
 
   const handlePlaceOrder = async () => {
     setPlacing(true);
@@ -198,7 +199,7 @@ export default function CheckoutPage() {
       // Step 2: For gateway-enabled payment methods, initiate the payment
       if (isGatewayPayment && createdOrderId) {
         setPaymentFlowStatus("initiating");
-        setPaymentMessage("Connecting to payment gateway...");
+        setPaymentMessage(t("checkout.connectingGateway"));
 
         try {
           const paymentResult = await paymentsApi.initiate({
@@ -217,9 +218,7 @@ export default function CheckoutPage() {
               // Card payment — redirect to gateway
               setGatewayUrl(paymentResult.gatewayUrl);
               setPaymentFlowStatus("processing");
-              setPaymentMessage(
-                "Redirecting to secure payment page..."
-              );
+              setPaymentMessage(t("checkout.redirectingPayment"));
 
               // Also start polling in case user completes and comes back
               startPolling(paymentResult.transactionRef);
@@ -230,21 +229,20 @@ export default function CheckoutPage() {
               // USSD push — show waiting screen and start polling
               setPaymentFlowStatus("processing");
               setPaymentMessage(
-                paymentResult.message ||
-                "A payment prompt has been sent to your phone. Please enter your PIN to confirm."
+                paymentResult.message || t("checkout.mobilePaymentPrompt")
               );
               startPolling(paymentResult.transactionRef);
             }
           } else {
             setPaymentFlowStatus("failed");
             setPaymentMessage(
-              paymentResult.message || "Failed to initiate payment. Please try again."
+              paymentResult.message || t("checkout.failedToInitiate")
             );
           }
         } catch (err: any) {
           setPaymentFlowStatus("failed");
           setPaymentMessage(
-            err?.message || "Payment initiation failed. Please try again."
+            err?.message || t("checkout.paymentInitFailed")
           );
         }
       } else {
@@ -252,7 +250,7 @@ export default function CheckoutPage() {
         router.push(`/orders/${createdOrderId}?success=true`);
       }
     } catch {
-      toast.error("Failed to place order. Please try again.");
+      toast.error(t("checkout.failedToPlaceOrder"));
       setPaymentFlowStatus("idle");
     } finally {
       setPlacing(false);
@@ -280,7 +278,7 @@ export default function CheckoutPage() {
     }
   }, [paymentFlowStatus, orderId, router]);
 
-  const getItemName = (item: any) => item.product?.name || item.name || "Item";
+  const getItemName = (item: any) => item.product?.name || item.name || t("checkout.items");
   const getItemPrice = (item: any) => item.product?.price || item.price || 0;
   const getItemSize = (item: any) => item.variant?.name || item.size || "";
   const getItemImage = (item: any) => item.product?.images?.[0] || item.image || "";
@@ -291,9 +289,9 @@ export default function CheckoutPage() {
         <div className="border-b border-border">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
             <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+              <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
               <span>/</span>
-              <span className="text-foreground font-medium">Checkout</span>
+              <span className="text-foreground font-medium">{t("checkout.checkout")}</span>
             </nav>
           </div>
         </div>
@@ -319,11 +317,11 @@ export default function CheckoutPage() {
         <div className="border-b border-border">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
             <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+              <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
               <span>/</span>
-              <Link href="/cart" className="hover:text-gold-500 transition-colors">Cart</Link>
+              <Link href="/cart" className="hover:text-gold-500 transition-colors">{t("common.cart")}</Link>
               <span>/</span>
-              <span className="text-foreground font-medium">Payment</span>
+              <span className="text-foreground font-medium">{t("checkout.payment")}</span>
             </nav>
           </div>
         </div>
@@ -335,7 +333,7 @@ export default function CheckoutPage() {
               <>
                 <Loader2 className="h-16 w-16 text-gold-500 animate-spin mx-auto mb-6" />
                 <h2 className="text-xl font-bold text-foreground mb-2">
-                  Initiating Payment
+                  {t("checkout.initiatingPayment")}
                 </h2>
                 <p className="text-muted-foreground">{paymentMessage}</p>
               </>
@@ -353,20 +351,20 @@ export default function CheckoutPage() {
                       </div>
                     </div>
                     <h2 className="text-xl font-bold text-foreground mb-2">
-                      Check Your Phone
+                      {t("checkout.checkPhone")}
                     </h2>
                     <p className="text-muted-foreground mb-4">{paymentMessage}</p>
                     <div className="bg-muted rounded-lg p-4 mb-6">
-                      <p className="text-sm text-foreground font-medium mb-1">Payment Details</p>
-                      <p className="text-sm text-muted-foreground">Amount: <span className="font-bold text-gold-500">{formatPrice(total)}</span></p>
-                      <p className="text-sm text-muted-foreground">Phone: <span className="font-medium">{mobilePhone}</span></p>
+                      <p className="text-sm text-foreground font-medium mb-1">{t("checkout.paymentDetails")}</p>
+                      <p className="text-sm text-muted-foreground">{t("checkout.amount")}: <span className="font-bold text-gold-500">{formatPrice(total)}</span></p>
+                      <p className="text-sm text-muted-foreground">{t("checkout.phone")}: <span className="font-medium">{mobilePhone}</span></p>
                     </div>
                   </>
                 ) : (
                   <>
                     <Loader2 className="h-16 w-16 text-gold-500 animate-spin mx-auto mb-6" />
                     <h2 className="text-xl font-bold text-foreground mb-2">
-                      Waiting for Payment
+                      {t("checkout.waitingForPayment")}
                     </h2>
                     <p className="text-muted-foreground mb-4">{paymentMessage}</p>
                     {gatewayUrl && (
@@ -376,7 +374,7 @@ export default function CheckoutPage() {
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-2 text-gold-500 hover:text-gold-600 text-sm font-medium underline mb-4"
                       >
-                        Open payment page again
+                        {t("checkout.openPaymentPage")}
                         <ChevronRight className="h-3 w-3" />
                       </a>
                     )}
@@ -386,7 +384,7 @@ export default function CheckoutPage() {
                 <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground mt-4">
                   <Loader2 className="h-3 w-3 animate-spin" />
                   <span>
-                    Checking payment status... ({Math.floor((maxPolls - pollCount) * 3 / 60)}:{String(((maxPolls - pollCount) * 3) % 60).padStart(2, "0")} remaining)
+                    {t("checkout.checkingPaymentStatus")} ({Math.floor((maxPolls - pollCount) * 3 / 60)}:{String(((maxPolls - pollCount) * 3) % 60).padStart(2, "0")} {t("checkout.remaining")})
                   </span>
                 </div>
               </>
@@ -397,11 +395,11 @@ export default function CheckoutPage() {
               <>
                 <CheckCircle2 className="h-16 w-16 text-green-500 mx-auto mb-6" />
                 <h2 className="text-xl font-bold text-foreground mb-2">
-                  Payment Successful!
+                  {t("checkout.paymentSuccessful")}
                 </h2>
                 <p className="text-muted-foreground mb-4">{paymentMessage}</p>
                 <p className="text-sm text-muted-foreground">
-                  Amount paid: <span className="font-bold text-green-600">{formatPrice(total)}</span>
+                  {t("checkout.amountPaid")} <span className="font-bold text-green-600">{formatPrice(total)}</span>
                 </p>
               </>
             )}
@@ -411,19 +409,19 @@ export default function CheckoutPage() {
               <>
                 <XCircle className="h-16 w-16 text-red-500 mx-auto mb-6" />
                 <h2 className="text-xl font-bold text-foreground mb-2">
-                  Payment Failed
+                  {t("checkout.paymentFailed")}
                 </h2>
                 <p className="text-muted-foreground mb-6">{paymentMessage}</p>
                 <div className="flex flex-col sm:flex-row gap-3 justify-center">
                   <Button onClick={handleRetryPayment}>
                     <RefreshCw className="h-4 w-4 mr-2" />
-                    Try Again
+                    {t("checkout.tryAgain")}
                   </Button>
                   <button
                     onClick={() => router.push(`/orders/${orderId}`)}
                     className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    View Order Details
+                    {t("checkout.viewOrderDetails")}
                   </button>
                 </div>
               </>
@@ -435,8 +433,7 @@ export default function CheckoutPage() {
                 <div className="flex items-start gap-2 text-xs text-muted-foreground">
                   <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
                   <p>
-                    Your payment is secured by Selcom. Never share your PIN with anyone.
-                    {settings.businessName} will never ask for your mobile money PIN.
+                    {t("checkout.securityNotice").replace("{business}", settings.businessName)}
                   </p>
                 </div>
               </div>
@@ -453,11 +450,11 @@ export default function CheckoutPage() {
       <div className="border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+            <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
             <span>/</span>
-            <Link href="/cart" className="hover:text-gold-500 transition-colors">Cart</Link>
+            <Link href="/cart" className="hover:text-gold-500 transition-colors">{t("common.cart")}</Link>
             <span>/</span>
-            <span className="text-foreground font-medium">Checkout</span>
+            <span className="text-foreground font-medium">{t("checkout.checkout")}</span>
           </nav>
         </div>
       </div>
@@ -493,9 +490,9 @@ export default function CheckoutPage() {
 
         {orderItems.length === 0 ? (
           <div className="text-center py-16">
-            <p className="text-muted-foreground mb-4">Your cart is empty.</p>
+            <p className="text-muted-foreground mb-4">{t("checkout.cartEmpty")}</p>
             <Link href="/products">
-              <Button>Continue Shopping</Button>
+              <Button>{t("checkout.continueShopping")}</Button>
             </Link>
           </div>
         ) : (
@@ -505,11 +502,11 @@ export default function CheckoutPage() {
               {/* Step 1: Shipping */}
               {currentStep === 1 && (
                 <div className="rounded-xl border border-border bg-card p-6">
-                  <h2 className="text-lg font-bold text-foreground mb-6">Shipping Address</h2>
+                  <h2 className="text-lg font-bold text-foreground mb-6">{t("checkout.shippingInfo")}</h2>
                   <div className="space-y-4">
                     <div className="grid sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-sm font-medium text-foreground mb-1.5">Full Name</label>
+                        <label className="block text-sm font-medium text-foreground mb-1.5">{t("checkout.fullName")}</label>
                         <input
                           type="text"
                           value={shipping.name}
@@ -519,7 +516,7 @@ export default function CheckoutPage() {
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-foreground mb-1.5">Phone Number</label>
+                        <label className="block text-sm font-medium text-foreground mb-1.5">{t("checkout.phoneNumber")}</label>
                         <input
                           type="tel"
                           value={shipping.phone}
@@ -530,7 +527,7 @@ export default function CheckoutPage() {
                       </div>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-foreground mb-1.5">Street Address</label>
+                      <label className="block text-sm font-medium text-foreground mb-1.5">{t("checkout.streetAddress")}</label>
                       <input
                         type="text"
                         value={shipping.street}
@@ -541,7 +538,7 @@ export default function CheckoutPage() {
                     </div>
                     <div className="grid sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-sm font-medium text-foreground mb-1.5">City</label>
+                        <label className="block text-sm font-medium text-foreground mb-1.5">{t("checkout.city")}</label>
                         <input
                           type="text"
                           value={shipping.city}
@@ -551,15 +548,15 @@ export default function CheckoutPage() {
                         />
                       </div>
                       <div>
-                        <label htmlFor="shipping-region" className="block text-sm font-medium text-foreground mb-1.5">Region</label>
+                        <label htmlFor="shipping-region" className="block text-sm font-medium text-foreground mb-1.5">{t("checkout.region")}</label>
                         <select
                           id="shipping-region"
-                          title="Select shipping region"
+                          title={t("checkout.selectRegion")}
                           value={shipping.region}
                           onChange={(e) => handleShippingChange("region", e.target.value)}
                           className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500"
                         >
-                          <option value="">Select region</option>
+                          <option value="">{t("checkout.selectRegion")}</option>
                           <option value="dar-es-salaam">Dar es Salaam</option>
                           <option value="dodoma">Dodoma</option>
                           <option value="arusha">Arusha</option>
@@ -578,7 +575,7 @@ export default function CheckoutPage() {
               {/* Step 2: Delivery */}
               {currentStep === 2 && (
                 <div className="rounded-xl border border-border bg-card p-6">
-                  <h2 className="text-lg font-bold text-foreground mb-6">Delivery Method</h2>
+                  <h2 className="text-lg font-bold text-foreground mb-6">{t("checkout.deliveryMethod")}</h2>
                   <div className="space-y-3">
                     {deliveryMethods.map((method) => (
                       <button
@@ -596,7 +593,7 @@ export default function CheckoutPage() {
                           <p className="text-sm text-muted-foreground">{method.desc}</p>
                         </div>
                         <span className="font-bold text-foreground">
-                          {method.price === 0 ? "Free" : formatPrice(method.price)}
+                          {method.price === 0 ? t("common.free") : formatPrice(method.price)}
                         </span>
                       </button>
                     ))}
@@ -607,7 +604,7 @@ export default function CheckoutPage() {
               {/* Step 3: Payment */}
               {currentStep === 3 && (
                 <div className="rounded-xl border border-border bg-card p-6">
-                  <h2 className="text-lg font-bold text-foreground mb-6">Payment Method</h2>
+                  <h2 className="text-lg font-bold text-foreground mb-6">{t("checkout.payment")}</h2>
                   <div className="space-y-3">
                     {paymentMethods.map((method) => (
                       <button
@@ -632,11 +629,10 @@ export default function CheckoutPage() {
                   {paymentMethod === "mobile" && (
                     <div className="mt-6 p-4 rounded-xl bg-muted border border-border">
                       <label className="block text-sm font-medium text-foreground mb-2">
-                        Mobile Money Number
+                        {t("checkout.mobileMoneyNumber")}
                       </label>
                       <p className="text-xs text-muted-foreground mb-3">
-                        Enter the phone number registered with your mobile money account.
-                        You will receive a USSD prompt to confirm the payment.
+                        {t("checkout.mobileMoneyHint")}
                       </p>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-muted-foreground bg-background px-3 py-2.5 rounded-lg border border-border">
@@ -656,7 +652,7 @@ export default function CheckoutPage() {
                       </div>
                       {mobilePhone && mobilePhone.length < 9 && (
                         <p className="text-xs text-red-500 mt-1.5">
-                          Please enter a valid 9-digit phone number
+                          {t("checkout.validPhoneError")}
                         </p>
                       )}
                     </div>
@@ -668,7 +664,7 @@ export default function CheckoutPage() {
               {currentStep === 4 && (
                 <div className="space-y-6">
                   <div className="rounded-xl border border-border bg-card p-6">
-                    <h2 className="text-lg font-bold text-foreground mb-4">Order Review</h2>
+                    <h2 className="text-lg font-bold text-foreground mb-4">{t("checkout.review")}</h2>
                     <div className="space-y-4">
                       <div className="flex items-start gap-3 p-3 rounded-lg bg-muted">
                         <MapPin className="h-4 w-4 text-gold-500 mt-0.5" />
@@ -695,14 +691,14 @@ export default function CheckoutPage() {
                   </div>
 
                   <div className="rounded-xl border border-border bg-card p-6">
-                    <h3 className="font-bold text-foreground mb-4">Items ({orderItems.length})</h3>
+                    <h3 className="font-bold text-foreground mb-4">{t("checkout.items")} ({orderItems.length})</h3>
                     <div className="space-y-3">
                       {orderItems.map((item) => (
                         <div key={item.id} className="flex items-center gap-3">
                           <div className="w-12 h-14 rounded-lg bg-muted flex-shrink-0" style={getItemImage(item) ? { backgroundImage: `url(${getItemImage(item)})`, backgroundSize: "cover", backgroundPosition: "center" } : {}} />
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium text-foreground truncate">{getItemName(item)}</p>
-                            <p className="text-xs text-muted-foreground">{getItemSize(item) ? `Size: ${getItemSize(item)} ` : ""}x {item.quantity || 1}</p>
+                            <p className="text-xs text-muted-foreground">{getItemSize(item) ? `${t("common.size")}: ${getItemSize(item)} ` : ""}x {item.quantity || 1}</p>
                           </div>
                           <span className="text-sm font-bold text-foreground">{formatPrice(getItemPrice(item) * (item.quantity || 1))}</span>
                         </div>
@@ -718,13 +714,13 @@ export default function CheckoutPage() {
                         <div className="text-sm">
                           <p className="font-medium text-foreground mb-1">
                             {paymentMethod === "mobile"
-                              ? "Mobile Money Payment"
-                              : "Card Payment"}
+                              ? t("checkout.mobileMoneyTitle")
+                              : t("checkout.cardPaymentTitle")}
                           </p>
                           <p className="text-muted-foreground">
                             {paymentMethod === "mobile"
-                              ? `After placing your order, a USSD prompt will be sent to +255${mobilePhone}. Enter your PIN to complete the payment.`
-                              : "After placing your order, you will be redirected to a secure payment page to enter your card details."}
+                              ? t("checkout.mobileMoneyNotice").replace("{phone}", `+255${mobilePhone}`)
+                              : t("checkout.cardPaymentNotice")}
                           </p>
                         </div>
                       </div>
@@ -742,22 +738,22 @@ export default function CheckoutPage() {
                   }`}
                   disabled={currentStep === 1}
                 >
-                  <ArrowLeft className="h-4 w-4" /> Back
+                  <ArrowLeft className="h-4 w-4" /> {t("checkout.back")}
                 </button>
 
                 {currentStep < 4 ? (
                   <Button onClick={nextStep} disabled={!canProceed()}>
-                    Continue <ChevronRight className="h-4 w-4 ml-1" />
+                    {t("checkout.continue")} <ChevronRight className="h-4 w-4 ml-1" />
                   </Button>
                 ) : (
                   <Button onClick={handlePlaceOrder} disabled={placing}>
                     {placing ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Placing Order...
+                        {t("checkout.placingOrder")}
                       </>
                     ) : (
-                      `Place Order - ${formatPrice(total)}`
+                      `${t("checkout.placeOrder")} - ${formatPrice(total)}`
                     )}
                   </Button>
                 )}
@@ -767,7 +763,7 @@ export default function CheckoutPage() {
             {/* Order Summary Sidebar */}
             <div>
               <div className="rounded-xl border border-border bg-card p-6 sticky top-24">
-                <h2 className="text-lg font-bold text-foreground mb-4">Order Summary</h2>
+                <h2 className="text-lg font-bold text-foreground mb-4">{t("checkout.orderSummary")}</h2>
                 <div className="space-y-3 mb-4">
                   {orderItems.map((item) => (
                     <div key={item.id} className="flex items-center gap-3">
@@ -782,17 +778,17 @@ export default function CheckoutPage() {
                 </div>
                 <div className="border-t border-border pt-4 space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Subtotal</span>
+                    <span className="text-muted-foreground">{t("cart.subtotal")}</span>
                     <span className="font-medium text-foreground">{formatPrice(subtotal)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Shipping</span>
+                    <span className="text-muted-foreground">{t("checkout.shipping")}</span>
                     <span className="font-medium text-foreground">
-                      {shippingCost === 0 ? <span className="text-green-600">Free</span> : formatPrice(shippingCost)}
+                      {shippingCost === 0 ? <span className="text-green-600">{t("common.free")}</span> : formatPrice(shippingCost)}
                     </span>
                   </div>
                   <div className="border-t border-border pt-2 flex justify-between">
-                    <span className="text-base font-bold text-foreground">Total</span>
+                    <span className="text-base font-bold text-foreground">{t("cart.total")}</span>
                     <span className="text-base font-bold text-gold-500">{formatPrice(total)}</span>
                   </div>
                 </div>

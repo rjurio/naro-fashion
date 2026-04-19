@@ -17,6 +17,7 @@ import {
 import ProductCard from "@/components/ui/ProductCard";
 import Button from "@/components/ui/Button";
 import { productsApi, categoriesApi } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -47,8 +48,15 @@ interface RentalProduct {
 }
 
 export default function RentalsPage() {
-  const [selectedCategory, setSelectedCategory] = useState("All");
+  const { t } = useTranslation();
+  const [selectedCategory, setSelectedCategory] = useState(() => "All");
   const [sortBy, setSortBy] = useState("popular");
+
+  // Keep the initial "All" selection in sync when locale changes
+  useEffect(() => {
+    setSelectedCategory((prev) => (prev === "All" || prev === t('rentals.all') ? t('rentals.all') : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t]);
   const [rentalCategories, setRentalCategories] = useState<RentalCategory[]>([]);
   const [rentalProducts, setRentalProducts] = useState<RentalProduct[]>([]);
   const [loading, setLoading] = useState(true);
@@ -93,7 +101,7 @@ export default function RentalsPage() {
         const catCounts: Record<string, number> = {};
         products.forEach((p) => { if (p.categoryName) catCounts[p.categoryName] = (catCounts[p.categoryName] || 0) + 1; });
         const mappedCats: RentalCategory[] = [
-          { name: "All", count: total },
+          { name: t('rentals.all'), count: total },
           ...cats
             .filter((c: any) => catCounts[c.name])
             .map((c: any) => ({
@@ -105,12 +113,13 @@ export default function RentalsPage() {
         setRentalCategories(mappedCats);
       } catch {
         setRentalProducts([]);
-        setRentalCategories([{ name: "All", count: 0 }]);
+        setRentalCategories([{ name: t('rentals.all'), count: 0 }]);
       } finally {
         setLoading(false);
       }
     };
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleLoadMore = async () => {
@@ -139,16 +148,14 @@ export default function RentalsPage() {
         <div className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 text-center">
           <span className="inline-flex items-center gap-2 rounded-full bg-[#D4AF37]/20 px-4 py-1.5 text-sm text-[#D4AF37] border border-[#D4AF37]/30 mb-6">
             <Crown className="h-4 w-4" />
-            Premium Rental Collection
+            {t('rentals.premiumRentalCollection')}
           </span>
           <h1 className="text-3xl sm:text-4xl lg:text-5xl font-heading font-bold text-white">
-            Rent Designer{" "}
-            <span className="text-[#D4AF37]">Gowns & Formal Wear</span>
+            {t('rentals.title')}{" "}
+            <span className="text-[#D4AF37]">{t('rentals.titleHighlight')}</span>
           </h1>
           <p className="mt-4 text-lg text-gray-300 max-w-2xl mx-auto">
-            Access our exclusive collection of designer gowns, suits, and formal
-            wear at a fraction of the retail price. Perfect for weddings, galas,
-            and special occasions.
+            {t('rentals.subtitle')}
           </p>
         </div>
       </section>
@@ -157,29 +164,29 @@ export default function RentalsPage() {
       <section className="py-12 bg-muted/30 border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <h2 className="text-center text-lg font-semibold text-foreground mb-8">
-            How Renting Works
+            {t('rentals.howItWorks')}
           </h2>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
             {[
               {
                 icon: Sparkles,
-                title: "Browse & Select",
-                desc: "Choose from our curated collection of designer pieces",
+                title: t('rentals.browseAndSelect'),
+                desc: t('rentals.browseAndSelectDesc'),
               },
               {
                 icon: Clock,
-                title: "Pick Your Dates",
-                desc: "Select your rental period with our date picker",
+                title: t('rentals.pickYourDates'),
+                desc: t('rentals.pickYourDatesDesc'),
               },
               {
                 icon: CreditCard,
-                title: "Pay 25% Deposit",
-                desc: "Secure with a down payment, full payment before dispatch",
+                title: t('rentals.payDeposit'),
+                desc: t('rentals.payDepositDesc'),
               },
               {
                 icon: Shield,
-                title: "ID Verification",
-                desc: "Quick national ID verification for security",
+                title: t('rentals.idVerification'),
+                desc: t('rentals.idVerificationDesc'),
               },
             ].map((step, idx) => (
               <div key={idx} className="text-center">
@@ -217,15 +224,15 @@ export default function RentalsPage() {
 
           <div className="relative">
             <select
-              title="Sort rentals"
+              title={t('rentals.sortRentals')}
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
               className="appearance-none rounded-lg border border-border bg-card px-4 py-2 pr-8 text-sm font-medium text-foreground outline-none focus:border-gold-500 cursor-pointer"
             >
-              <option value="popular">Most Popular</option>
-              <option value="price-asc">Rent: Low to High</option>
-              <option value="price-desc">Rent: High to Low</option>
-              <option value="rating">Best Rating</option>
+              <option value="popular">{t('rentals.mostPopular')}</option>
+              <option value="price-asc">{t('rentals.rentLowToHigh')}</option>
+              <option value="price-desc">{t('rentals.rentHighToLow')}</option>
+              <option value="rating">{t('rentals.bestRating')}</option>
             </select>
             <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           </div>
@@ -249,16 +256,16 @@ export default function RentalsPage() {
           <div className="text-center py-16">
             <Crown className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
             <h2 className="text-xl font-heading font-bold text-foreground mb-2">
-              No rental products available
+              {t('rentals.noRentalProducts')}
             </h2>
             <p className="text-muted-foreground">
-              Check back soon for our latest rental collection.
+              {t('rentals.noRentalProductsDesc')}
             </p>
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
             {rentalProducts
-              .filter((p) => selectedCategory === "All" || p.categoryName === selectedCategory)
+              .filter((p) => selectedCategory === t('rentals.all') || p.categoryName === selectedCategory)
               .sort((a, b) => {
                 if (sortBy === "price-asc") return (a.rentPrice ?? a.price) - (b.rentPrice ?? b.price);
                 if (sortBy === "price-desc") return (b.rentPrice ?? b.price) - (a.rentPrice ?? a.price);
@@ -275,7 +282,7 @@ export default function RentalsPage() {
         {hasMore && (
           <div className="mt-12 text-center">
             <Button type="button" variant="outline" size="lg" onClick={handleLoadMore} disabled={loadingMore}>
-              {loadingMore ? <><Loader2 className="inline h-4 w-4 animate-spin mr-2" />Loading...</> : "Load More Rentals"}
+              {loadingMore ? <><Loader2 className="inline h-4 w-4 animate-spin mr-2" />{t('rentals.loadingMore')}</> : t('rentals.loadMoreRentals')}
             </Button>
           </div>
         )}
@@ -286,16 +293,15 @@ export default function RentalsPage() {
         <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 text-center">
           <Crown className="h-10 w-10 text-gold-500 mx-auto mb-4" />
           <h2 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">
-            Can&apos;t find what you&apos;re looking for?
+            {t('rentals.cantFind')}
           </h2>
           <p className="mt-3 text-muted-foreground">
-            Contact us with your requirements and we&apos;ll help you find the
-            perfect outfit for your special occasion.
+            {t('rentals.cantFindDesc')}
           </p>
           <div className="mt-6 flex flex-col sm:flex-row gap-3 justify-center">
             <Link href="/pages/contact">
               <Button variant="secondary" size="lg" className="gap-2">
-                Contact Us <ArrowRight className="h-5 w-5" />
+                {t('common.contactUs')} <ArrowRight className="h-5 w-5" />
               </Button>
             </Link>
           </div>

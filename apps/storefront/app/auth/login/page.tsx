@@ -209,7 +209,7 @@ export default function LoginPage() {
               </svg>
               Google
               <span className="absolute -top-2 -right-2 rounded-full bg-gold-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                Soon
+                {t("comingSoon")}
               </span>
             </button>
             <button
@@ -221,7 +221,7 @@ export default function LoginPage() {
               </svg>
               Facebook
               <span className="absolute -top-2 -right-2 rounded-full bg-gold-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                Soon
+                {t("comingSoon")}
               </span>
             </button>
           </div>

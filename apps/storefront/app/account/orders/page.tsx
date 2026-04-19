@@ -6,6 +6,7 @@ import { Package, ChevronDown, ChevronUp, RefreshCw, ArrowLeft, Loader2 } from "
 import Button from "@/components/ui/Button";
 import { formatPrice } from "@/lib/utils";
 import { ordersApi } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 
 const statusColors: Record<string, string> = {
   Pending: "bg-gray-100 text-gray-700",
@@ -22,6 +23,7 @@ const statusColors: Record<string, string> = {
 };
 
 export default function OrdersPage() {
+  const { t } = useTranslation();
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
@@ -58,11 +60,11 @@ export default function OrdersPage() {
       <div className="border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
           <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/" className="hover:text-gold-500 transition-colors">Home</Link>
+            <Link href="/" className="hover:text-gold-500 transition-colors">{t("common.home")}</Link>
             <span>/</span>
-            <Link href="/account" className="hover:text-gold-500 transition-colors">Account</Link>
+            <Link href="/account" className="hover:text-gold-500 transition-colors">{t("account.account")}</Link>
             <span>/</span>
-            <span className="text-foreground font-medium">Orders</span>
+            <span className="text-foreground font-medium">{t("account.orders")}</span>
           </nav>
         </div>
       </div>
@@ -70,12 +72,12 @@ export default function OrdersPage() {
       <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">My Orders</h1>
-            <p className="text-muted-foreground text-sm mt-1">{orders.length} orders total</p>
+            <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">{t("account.myOrders")}</h1>
+            <p className="text-muted-foreground text-sm mt-1">{orders.length} {t("orders.ordersTotal")}</p>
           </div>
           <Link href="/account">
             <Button variant="outline" size="sm">
-              <ArrowLeft className="h-4 w-4 mr-1" /> Account
+              <ArrowLeft className="h-4 w-4 mr-1" /> {t("account.account")}
             </Button>
           </Link>
         </div>
@@ -83,10 +85,10 @@ export default function OrdersPage() {
         {orders.length === 0 ? (
           <div className="text-center py-20">
             <Package className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-            <h2 className="text-xl font-bold text-foreground mb-2">No orders yet</h2>
-            <p className="text-muted-foreground mb-8">Start shopping to see your orders here.</p>
+            <h2 className="text-xl font-bold text-foreground mb-2">{t("orders.noOrders")}</h2>
+            <p className="text-muted-foreground mb-8">{t("account.noOrdersYetMsg")}</p>
             <Link href="/products">
-              <Button size="lg">Browse Products</Button>
+              <Button size="lg">{t("account.browseProducts")}</Button>
             </Link>
           </div>
         ) : (
@@ -116,7 +118,7 @@ export default function OrdersPage() {
                         </span>
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {date} &middot; {items.length} {items.length === 1 ? "item" : "items"}
+                        {date} &middot; {items.length} {items.length === 1 ? t("common.item") : t("common.items")}
                       </p>
                     </div>
                     <span className="text-sm font-bold text-foreground flex-shrink-0">{formatPrice(total)}</span>
@@ -131,7 +133,7 @@ export default function OrdersPage() {
                     <div className="border-t border-border p-4 sm:p-5 bg-muted/30">
                       <div className="space-y-3 mb-4">
                         {items.map((item: any, idx: number) => {
-                          const itemName = item.name || item.product?.name || "Item";
+                          const itemName = item.name || item.product?.name || t("checkout.items");
                           const itemSize = item.size || item.variant?.size || "-";
                           const itemQty = item.quantity || 1;
                           const itemPrice = item.price || item.unitPrice || 0;
@@ -140,7 +142,7 @@ export default function OrdersPage() {
                             <div key={idx} className="flex items-center justify-between text-sm">
                               <div>
                                 <p className="font-medium text-foreground">{itemName}</p>
-                                <p className="text-xs text-muted-foreground">Size: {itemSize} &middot; Qty: {itemQty}</p>
+                                <p className="text-xs text-muted-foreground">{t("common.size")}: {itemSize} &middot; {t("account.qty")}: {itemQty}</p>
                               </div>
                               <span className="font-medium text-foreground">{formatPrice(itemPrice * itemQty)}</span>
                             </div>
@@ -149,11 +151,11 @@ export default function OrdersPage() {
                       </div>
                       {trackingNumber && (
                         <p className="text-xs text-muted-foreground mb-4">
-                          Tracking: <span className="font-medium text-foreground">{trackingNumber}</span>
+                          {t("common.tracking")}: <span className="font-medium text-foreground">{trackingNumber}</span>
                         </p>
                       )}
                       <Button variant="outline" size="sm">
-                        <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Reorder
+                        <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> {t("orders.reorder")}
                       </Button>
                     </div>
                   )}

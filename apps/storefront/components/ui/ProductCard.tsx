@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Heart, ShoppingCart, Star, Loader2 } from "lucide-react";
 import { cn, formatPrice } from "@/lib/utils";
 import { cartApi, wishlistApi } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 import Badge from "./Badge";
 import Button from "./Button";
 
@@ -45,6 +46,7 @@ export default function ProductCard({
   className,
 }: ProductCardProps) {
   const router = useRouter();
+  const { t } = useTranslation();
   const [isWishlisted, setIsWishlisted] = useState(false);
   const [wishlistLoading, setWishlistLoading] = useState(false);
   const [cartLoading, setCartLoading] = useState(false);
@@ -93,10 +95,10 @@ export default function ProductCard({
     setCartMsg("");
     try {
       await cartApi.addItem({ productId: id, variantId: defaultVariantId, quantity: 1 });
-      setCartMsg("Added!");
+      setCartMsg(t('product.added'));
       setTimeout(() => setCartMsg(""), 2000);
     } catch {
-      setCartMsg("Failed");
+      setCartMsg(t('product.failed'));
       setTimeout(() => setCartMsg(""), 2000);
     } finally {
       setCartLoading(false);
@@ -122,16 +124,16 @@ export default function ProductCard({
             backgroundPosition: "center",
           }}
         >
-          {!image && "Product Image"}
+          {!image && t('product.productImage')}
         </div>
 
         {/* Badges */}
         <div className="absolute top-2 left-2 z-20 flex flex-col gap-1">
-          {isNew && <Badge variant="new">New</Badge>}
+          {isNew && <Badge variant="new">{t('product.new')}</Badge>}
           {isOnSale && discount > 0 && (
             <Badge variant="sale">-{discount}%</Badge>
           )}
-          {isRentable && <Badge variant="rent">Rent Available</Badge>}
+          {isRentable && <Badge variant="rent">{t('product.rentAvailable')}</Badge>}
         </div>
 
         {/* Wishlist Button */}
@@ -142,7 +144,7 @@ export default function ProductCard({
             "absolute top-2 right-2 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 backdrop-blur-sm shadow-sm transition-all duration-200 hover:scale-110",
             isWishlisted ? "text-gold-500" : "text-dark-300",
           )}
-          aria-label={isWishlisted ? "Remove from wishlist" : "Add to wishlist"}
+          aria-label={isWishlisted ? t('product.removeFromWishlist') : t('product.addToWishlist')}
         >
           {wishlistLoading ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -169,7 +171,7 @@ export default function ProductCard({
             ) : (
               <>
                 <ShoppingCart className="h-4 w-4" />
-                Add to Cart
+                {t('product.addToCart')}
               </>
             )}
           </Button>
@@ -215,7 +217,7 @@ export default function ProductCard({
         {/* Rent price */}
         {isRentable && rentPrice && (
           <p className="mt-1 text-xs text-gold-600">
-            Rent from {formatPrice(rentPrice)}/day
+            {t('product.rentFrom')} {formatPrice(rentPrice)}{t('product.perDay')}
           </p>
         )}
       </div>

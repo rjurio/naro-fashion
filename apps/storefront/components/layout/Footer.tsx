@@ -51,18 +51,19 @@ export default function Footer() {
       })
       .catch(() => {});
 
-    // Load published CMS pages to build support/company links
+    // Load published CMS pages to build support/company links.
+    // Names use translation keys so they update with locale.
     const supportSlugs: Record<string, string> = {
-      'contact': 'Contact Us',
-      'size-guide': 'Size Guide',
-      'shipping-info': 'Shipping Info',
-      'returns-exchanges': 'Returns & Exchanges',
-      'faq': 'FAQ',
+      'contact': t('footer.contactUs'),
+      'size-guide': t('footer.sizeGuide'),
+      'shipping-info': t('footer.shippingInfo'),
+      'returns-exchanges': t('footer.returnsExchanges'),
+      'faq': t('footer.faq'),
     };
     const companySlugs: Record<string, string> = {
-      'about': 'About Us',
-      'terms': 'Terms of Service',
-      'privacy': 'Privacy Policy',
+      'about': t('footer.aboutNaroFashion'),
+      'terms': t('footer.termsOfService'),
+      'privacy': t('footer.privacyPolicy'),
     };
 
     // The pages endpoint is public and returns all non-deleted pages
@@ -90,23 +91,24 @@ export default function Footer() {
       .catch(() => {
         // Fallback: show all with i18n defaults
         setSupportLinks([
-          { name: 'Contact Us', href: '/pages/contact' },
-          { name: 'Size Guide', href: '/pages/size-guide' },
-          { name: 'FAQ', href: '/pages/faq' },
+          { name: t('footer.contactUs'), href: '/pages/contact' },
+          { name: t('footer.sizeGuide'), href: '/pages/size-guide' },
+          { name: t('footer.faq'), href: '/pages/faq' },
         ]);
         setCompanyLinks([
-          { name: 'About Us', href: '/pages/about' },
-          { name: 'Terms of Service', href: '/pages/terms' },
-          { name: 'Privacy Policy', href: '/pages/privacy' },
+          { name: t('footer.aboutNaroFashion'), href: '/pages/about' },
+          { name: t('footer.termsOfService'), href: '/pages/terms' },
+          { name: t('footer.privacyPolicy'), href: '/pages/privacy' },
         ]);
       });
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t]);
 
   const shopLinks = [
-    { name: t('footer.newArrivals') !== 'footer.newArrivals' ? t('footer.newArrivals') : 'New Arrivals', href: '/shop?sort=newest' },
-    { name: t('footer.bestSellers') !== 'footer.bestSellers' ? t('footer.bestSellers') : 'Best Sellers', href: '/shop?sort=popular' },
-    { name: t('footer.flashSales') !== 'footer.flashSales' ? t('footer.flashSales') : 'Flash Sales', href: '/flash-sales' },
-    { name: t('footer.gownRentals') !== 'footer.gownRentals' ? t('footer.gownRentals') : 'Gown Rentals', href: '/rentals' },
+    { name: t('footer.newArrivals'), href: '/shop?sort=newest' },
+    { name: t('footer.bestSellers'), href: '/shop?sort=popular' },
+    { name: t('footer.flashSales'), href: '/flash-sales' },
+    { name: t('footer.gownRentals'), href: '/rentals' },
   ];
 
   return (
@@ -133,11 +135,11 @@ export default function Footer() {
                   setFooterMsg("");
                   try {
                     const res = await newsletterApi.subscribe({ email: footerEmail.trim() });
-                    setFooterMsg(res.message || "Subscribed successfully!");
+                    setFooterMsg(res.message || t('footer.subscribeSuccess'));
                     setFooterMsgSuccess(true);
                     setFooterEmail("");
                   } catch {
-                    setFooterMsg("Failed to subscribe. Please try again.");
+                    setFooterMsg(t('footer.subscribeFailed'));
                     setFooterMsgSuccess(false);
                   } finally {
                     setFooterSubscribing(false);
@@ -236,7 +238,7 @@ export default function Footer() {
           {shopLinks.length > 0 && (
             <div>
               <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
-                Shop
+                {t('footer.shopTitle')}
               </h4>
               <ul className="space-y-2.5">
                 {shopLinks.map((link) => (
@@ -254,7 +256,7 @@ export default function Footer() {
           {categoryLinks.length > 0 && (
             <div>
               <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
-                Categories
+                {t('footer.categoriesTitle')}
               </h4>
               <ul className="space-y-2.5">
                 {categoryLinks.map((link) => (
@@ -272,7 +274,7 @@ export default function Footer() {
           {supportLinks.length > 0 && (
             <div>
               <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
-                Support
+                {t('footer.supportTitle')}
               </h4>
               <ul className="space-y-2.5">
                 {supportLinks.map((link) => (
@@ -290,7 +292,7 @@ export default function Footer() {
           {companyLinks.length > 0 && (
             <div>
               <h4 className="text-sm font-semibold uppercase tracking-wider text-gold-500 mb-4">
-                Company
+                {t('footer.companyTitle')}
               </h4>
               <ul className="space-y-2.5">
                 {companyLinks.map((link) => (
@@ -311,7 +313,7 @@ export default function Footer() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <p className="text-xs text-dark-300">
-              © {new Date().getFullYear()} {settings.businessName}. All rights reserved.
+              © {new Date().getFullYear()} {settings.businessName}. {t('footer.allRightsReserved')}
             </p>
 
             {/* Payment Methods */}

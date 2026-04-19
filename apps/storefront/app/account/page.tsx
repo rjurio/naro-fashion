@@ -14,17 +14,9 @@ import {
   Clock,
   Loader2,
 } from "lucide-react";
-import Button from "@/components/ui/Button";
 import { formatPrice } from "@/lib/utils";
 import { authApi, ordersApi, rentalsApi, wishlistApi } from "@/lib/api";
-
-const quickLinks = [
-  { label: "My Orders", href: "/account/orders", icon: ShoppingBag, desc: "Track and manage your orders" },
-  { label: "My Rentals", href: "/account/rentals", icon: Key, desc: "View active and past rentals" },
-  { label: "Wishlist", href: "/account/wishlist", icon: Heart, desc: "Items you saved for later" },
-  { label: "Addresses", href: "/account/addresses", icon: MapPin, desc: "Manage delivery addresses" },
-  { label: "Settings", href: "/account/settings", icon: Settings, desc: "Profile and preferences" },
-];
+import { useTranslation } from "@/lib/i18n";
 
 const statusColors: Record<string, string> = {
   Shipped: "bg-blue-100 text-blue-700",
@@ -39,10 +31,19 @@ const statusColors: Record<string, string> = {
 };
 
 export default function AccountPage() {
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<any>(null);
   const [recentOrders, setRecentOrders] = useState<any[]>([]);
   const [stats, setStats] = useState({ orders: 0, activeRentals: 0, wishlist: 0 });
+
+  const quickLinks = [
+    { label: t("account.myOrders"), href: "/account/orders", icon: ShoppingBag, desc: t("account.trackAndManage") },
+    { label: t("account.myRentals"), href: "/account/rentals", icon: Key, desc: t("account.viewActiveAndPast") },
+    { label: t("account.wishlist"), href: "/account/wishlist", icon: Heart, desc: t("account.savedForLater") },
+    { label: t("account.addresses"), href: "/account/addresses", icon: MapPin, desc: t("account.manageAddresses") },
+    { label: t("account.settings"), href: "/account/settings", icon: Settings, desc: t("account.profileAndPreferences") },
+  ];
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -95,7 +96,7 @@ export default function AccountPage() {
     fetchData();
   }, []);
 
-  const firstName = profile?.firstName || profile?.name?.split(" ")[0] || "there";
+  const firstName = profile?.firstName || profile?.name?.split(" ")[0] || t("account.there");
   const email = profile?.email || "";
 
   if (loading) {
@@ -116,7 +117,7 @@ export default function AccountPage() {
           </div>
           <div>
             <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">
-              Welcome back, {firstName}
+              {t("account.welcome")} {firstName}
             </h1>
             {email && <p className="text-muted-foreground text-sm">{email}</p>}
           </div>
@@ -127,17 +128,17 @@ export default function AccountPage() {
           <div className="rounded-xl border border-border bg-card p-5 text-center">
             <ShoppingBag className="h-6 w-6 text-gold-500 mx-auto mb-2" />
             <p className="text-2xl font-bold text-foreground">{stats.orders}</p>
-            <p className="text-xs text-muted-foreground">Orders</p>
+            <p className="text-xs text-muted-foreground">{t("account.orders")}</p>
           </div>
           <div className="rounded-xl border border-border bg-card p-5 text-center">
             <Clock className="h-6 w-6 text-gold-500 mx-auto mb-2" />
             <p className="text-2xl font-bold text-foreground">{stats.activeRentals}</p>
-            <p className="text-xs text-muted-foreground">Active Rentals</p>
+            <p className="text-xs text-muted-foreground">{t("account.activeRentals")}</p>
           </div>
           <div className="rounded-xl border border-border bg-card p-5 text-center">
             <Heart className="h-6 w-6 text-gold-500 mx-auto mb-2" />
             <p className="text-2xl font-bold text-foreground">{stats.wishlist}</p>
-            <p className="text-xs text-muted-foreground">Wishlist</p>
+            <p className="text-xs text-muted-foreground">{t("account.wishlist")}</p>
           </div>
         </div>
 
@@ -146,13 +147,13 @@ export default function AccountPage() {
           <div className="lg:col-span-2">
             <div className="rounded-xl border border-border bg-card p-6">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-bold text-foreground">Recent Orders</h2>
+                <h2 className="text-lg font-bold text-foreground">{t("account.recentOrders")}</h2>
                 <Link href="/account/orders" className="text-sm text-gold-500 hover:text-gold-600 font-medium">
-                  View All
+                  {t("account.viewAll")}
                 </Link>
               </div>
               {recentOrders.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-4">No orders yet.</p>
+                <p className="text-sm text-muted-foreground py-4">{t("account.noOrdersYet")}</p>
               ) : (
                 <div className="space-y-3">
                   {recentOrders.map((order: any) => {
@@ -173,7 +174,7 @@ export default function AccountPage() {
                         <Package className="h-8 w-8 text-muted-foreground flex-shrink-0" />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-foreground">{orderId}</p>
-                          <p className="text-xs text-muted-foreground">{date} &middot; {itemCount} items</p>
+                          <p className="text-xs text-muted-foreground">{date} &middot; {itemCount} {t("common.items")}</p>
                         </div>
                         <div className="text-right flex-shrink-0">
                           <p className="text-sm font-bold text-foreground">{formatPrice(total)}</p>
@@ -193,7 +194,7 @@ export default function AccountPage() {
           {/* Quick Links */}
           <div>
             <div className="rounded-xl border border-border bg-card p-6">
-              <h2 className="text-lg font-bold text-foreground mb-4">Quick Links</h2>
+              <h2 className="text-lg font-bold text-foreground mb-4">{t("account.quickLinks")}</h2>
               <div className="space-y-2">
                 {quickLinks.map((link) => (
                   <Link
