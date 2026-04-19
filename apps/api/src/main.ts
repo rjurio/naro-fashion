@@ -15,10 +15,22 @@ async function bootstrap() {
   app.use(compression());
   app.use(cookieParser());
 
+  // CORS allow-list. Both STOREFRONT_URL and ADMIN_URL support a
+  // comma-separated list so we can allow both apex + www variants
+  // (e.g. "https://narofashion.co.tz,https://www.narofashion.co.tz").
+  // Without this, a browser on www fails CORS preflight because the
+  // API only allow-listed the apex, and every fetch throws "Failed to
+  // fetch" with no Access-Control-Allow-Origin header in the response.
+  const splitOrigins = (raw: string | undefined, fallback: string) =>
+    (raw || fallback)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
   app.enableCors({
     origin: [
-      process.env.STOREFRONT_URL || 'http://localhost:3000',
-      process.env.ADMIN_URL || 'http://localhost:3001',
+      ...splitOrigins(process.env.STOREFRONT_URL, 'http://localhost:3000'),
+      ...splitOrigins(process.env.ADMIN_URL, 'http://localhost:3001'),
     ],
     credentials: true,
   });
