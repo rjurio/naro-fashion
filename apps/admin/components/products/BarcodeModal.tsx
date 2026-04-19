@@ -20,13 +20,26 @@ interface Variant {
 interface Props {
   productName: string;
   productSku?: string | null;
+  productId?: string;
+  productPrice?: number;
   variants: Variant[];
   onClose: () => void;
 }
 
-export default function BarcodeModal({ productName, productSku, variants, onClose }: Props) {
+export default function BarcodeModal({ productName, productSku, productId, productPrice, variants, onClose }: Props) {
+  // Fallback: if the product has no variants, synthesize a single "variant"
+  // from the product itself so the barcode can still be printed.
+  const effectiveVariants: Variant[] = variants.length > 0
+    ? variants
+    : [{
+        id: productId || 'product',
+        name: productName,
+        sku: productSku || '',
+        price: productPrice || 0,
+      }];
+
   const [quantities, setQuantities] = useState<Record<string, number>>(
-    () => Object.fromEntries(variants.map((v) => [v.id, 1]))
+    () => Object.fromEntries(effectiveVariants.map((v) => [v.id, 1]))
   );
 
   const getBarcodeValue = (v: Variant) => v.barcode || v.sku || productSku || v.id.substring(0, 12);
@@ -106,7 +119,7 @@ export default function BarcodeModal({ productName, productSku, variants, onClos
       }
     };
 
-    variants.forEach((v) => {
+    effectiveVariants.forEach((v) => {
       const qty = quantities[v.id] || 1;
       for (let i = 0; i < qty; i++) {
         addLabel(v);
@@ -114,7 +127,7 @@ export default function BarcodeModal({ productName, productSku, variants, onClos
     });
 
     return doc;
-  }, [variants, quantities, productName, productSku]);
+  }, [effectiveVariants, quantities, productName, productSku]);
 
   const handleDownload = () => {
     const doc = generatePdf();
@@ -136,9 +149,14 @@ export default function BarcodeModal({ productName, productSku, variants, onClos
   return (
     <Modal isOpen={true} title="Barcode Labels" size="lg" onClose={onClose}>
       <div className="space-y-4">
+        {variants.length === 0 && (
+          <div className="p-3 rounded-lg bg-amber-100 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 text-xs text-amber-900 dark:text-amber-200">
+            This product has no variants. A single barcode label will be generated from the product SKU.
+          </div>
+        )}
         {/* Variant list with quantity selector */}
         <div className="space-y-2 max-h-[40vh] overflow-y-auto">
-          {variants.map((v) => (
+          {effectiveVariants.map((v) => (
             <div key={v.id} className="flex items-center justify-between p-3 rounded-lg border border-[hsl(var(--border))]">
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-[hsl(var(--foreground))] truncate">{v.name}</p>
@@ -164,14 +182,14 @@ export default function BarcodeModal({ productName, productSku, variants, onClos
         {/* Preview */}
         <div className="p-4 rounded-lg bg-[hsl(var(--accent))] overflow-x-auto">
           <p className="text-xs text-[hsl(var(--muted-foreground))] mb-2">Preview (first variant):</p>
-          {variants[0] && (
+          {effectiveVariants[0] && (
             <BarcodeLabel
               productName={productName}
-              variantName={variants[0].name}
-              barcode={getBarcodeValue(variants[0])}
-              price={Number(variants[0].price)}
-              size={variants[0].size || undefined}
-              color={variants[0].color || undefined}
+              variantName={effectiveVariants[0].name}
+              barcode={getBarcodeValue(effectiveVariants[0])}
+              price={Number(effectiveVariants[0].price)}
+              size={effectiveVariants[0].size || undefined}
+              color={effectiveVariants[0].color || undefined}
             />
           )}
         </div>

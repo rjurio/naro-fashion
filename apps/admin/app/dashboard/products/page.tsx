@@ -388,6 +388,8 @@ export default function ProductsPage() {
         <BarcodeModal
           productName={barcodeProduct.name}
           productSku={barcodeProduct.sku}
+          productId={barcodeProduct.id}
+          productPrice={Number(barcodeProduct.basePrice) || Number(barcodeProduct.price) || 0}
           variants={barcodeProduct.variants || []}
           onClose={() => setBarcodeProduct(null)}
         />
