@@ -65,9 +65,9 @@ export default function NewTenantPage() {
         )}
 
         {/* Company Info */}
-        <div className="bg-[hsl(var(--card-bg))] border border-[hsl(var(--card-border))] rounded-lg p-6 space-y-4">
+        <div className="bg-[hsl(var(--card-bg))] border border-[hsl(var(--card-border))] rounded-lg p-4 sm:p-5 md:p-6 space-y-4">
           <h2 className="text-lg font-semibold text-[hsl(var(--foreground))]">Company Info</h2>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">Business Name *</label>
               <input
@@ -99,7 +99,7 @@ export default function NewTenantPage() {
               className="w-full px-3 py-2 bg-[hsl(var(--input-bg))] border border-[hsl(var(--input-border))] rounded text-[hsl(var(--foreground))]"
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">Primary Color</label>
               <input
@@ -122,9 +122,9 @@ export default function NewTenantPage() {
         </div>
 
         {/* Admin User */}
-        <div className="bg-[hsl(var(--card-bg))] border border-[hsl(var(--card-border))] rounded-lg p-6 space-y-4">
+        <div className="bg-[hsl(var(--card-bg))] border border-[hsl(var(--card-border))] rounded-lg p-4 sm:p-5 md:p-6 space-y-4">
           <h2 className="text-lg font-semibold text-[hsl(var(--foreground))]">First Admin User</h2>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">First Name *</label>
               <input
@@ -170,7 +170,7 @@ export default function NewTenantPage() {
         </div>
 
         {/* Subscription */}
-        <div className="bg-[hsl(var(--card-bg))] border border-[hsl(var(--card-border))] rounded-lg p-6 space-y-4">
+        <div className="bg-[hsl(var(--card-bg))] border border-[hsl(var(--card-border))] rounded-lg p-4 sm:p-5 md:p-6 space-y-4">
           <h2 className="text-lg font-semibold text-[hsl(var(--foreground))]">Subscription</h2>
           <div>
             <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">Plan *</label>
@@ -188,7 +188,7 @@ export default function NewTenantPage() {
               ))}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">Billing Cycle</label>
               <select
@@ -214,20 +214,20 @@ export default function NewTenantPage() {
           </div>
         </div>
 
-        <div className="flex gap-4">
-          <button
-            type="submit"
-            disabled={loading}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-          >
-            {loading ? 'Creating...' : 'Create Tenant'}
-          </button>
+        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
           <button
             type="button"
             onClick={() => router.back()}
             className="px-6 py-2 bg-[hsl(var(--card-bg))] border border-[hsl(var(--card-border))] rounded-lg text-[hsl(var(--foreground))]"
           >
             Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={loading}
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+          >
+            {loading ? 'Creating...' : 'Create Tenant'}
           </button>
         </div>
       </form>

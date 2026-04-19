@@ -165,7 +165,7 @@ export default function SiteSettingsPage() {
 
       {groups.map((group) => (
         <div key={group} className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-          <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+          <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
             {groupIcons[group]}
             <h2 className="font-semibold text-[hsl(var(--foreground))]">{group}</h2>
           </div>
@@ -173,7 +173,7 @@ export default function SiteSettingsPage() {
             {SETTING_DEFINITIONS
               .filter((s) => s.group === group)
               .map((def) => (
-                <div key={def.key} className="px-6 py-4">
+                <div key={def.key} className="px-4 sm:px-6 py-3 sm:py-4">
                   {def.bilingual ? (
                     <div className="space-y-3">
                       <label className="text-sm font-medium text-[hsl(var(--foreground))]">{def.label}</label>

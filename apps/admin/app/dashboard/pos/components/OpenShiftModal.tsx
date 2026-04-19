@@ -22,8 +22,8 @@ export default function OpenShiftModal({ onOpen, onCancel }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-[hsl(var(--card))] rounded-2xl p-8 w-full max-w-md shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4">
+      <div className="bg-[hsl(var(--card))] rounded-2xl p-5 sm:p-6 md:p-8 w-full max-w-md shadow-2xl">
         <div className="text-center mb-6">
           <div className="w-16 h-16 rounded-full bg-brand-gold/10 flex items-center justify-center mx-auto mb-4">
             <DollarSign className="w-8 h-8 text-brand-gold" />

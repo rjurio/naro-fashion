@@ -355,11 +355,11 @@ export default function ChecklistsPage() {
 
       {/* Create/Edit Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="absolute inset-0 bg-black/50" onClick={() => setShowModal(false)} />
-          <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-[hsl(var(--card))] rounded-2xl shadow-xl border border-[hsl(var(--border))] mx-4">
+          <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-[hsl(var(--card))] rounded-2xl shadow-xl border border-[hsl(var(--border))]">
             {/* Modal Header */}
-            <div className="sticky top-0 flex items-center justify-between p-6 pb-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--card))] rounded-t-2xl z-10">
+            <div className="sticky top-0 flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--card))] rounded-t-2xl z-10">
               <h2 className="text-xl font-bold text-[hsl(var(--foreground))]">
                 {editingId ? 'Edit Template' : 'New Checklist Template'}
               </h2>
@@ -372,7 +372,7 @@ export default function ChecklistsPage() {
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 space-y-5">
+            <div className="p-4 sm:p-6 space-y-5">
               {/* Template Name */}
               <div>
                 <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1.5">
@@ -402,7 +402,7 @@ export default function ChecklistsPage() {
               </div>
 
               {/* Type & Default */}
-              <div className="flex gap-4">
+              <div className="flex flex-col sm:flex-row gap-4">
                 <div className="flex-1">
                   <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1.5">
                     Type <span className="text-red-500">*</span>
@@ -523,11 +523,11 @@ export default function ChecklistsPage() {
             </div>
 
             {/* Modal Footer */}
-            <div className="sticky bottom-0 flex items-center justify-between p-6 pt-4 border-t border-[hsl(var(--border))] bg-[hsl(var(--card))] rounded-b-2xl">
+            <div className="sticky bottom-0 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-[hsl(var(--border))] bg-[hsl(var(--card))] rounded-b-2xl">
               <p className="text-xs text-[hsl(var(--muted-foreground))]">
                 {form.items.filter((i) => i.label.trim()).length} item(s) will be saved
               </p>
-              <div className="flex gap-3">
+              <div className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-3">
                 <button
                   onClick={() => setShowModal(false)}
                   className="px-4 py-2 rounded-lg border border-[hsl(var(--border))] text-sm font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] transition-colors"

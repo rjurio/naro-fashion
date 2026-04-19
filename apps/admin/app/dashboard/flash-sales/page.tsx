@@ -248,7 +248,7 @@ export default function FlashSalesPage() {
 
       {/* Create Form */}
       {showForm && (
-        <div className="rounded-lg border border-brand-gold bg-[hsl(var(--card))] p-5 space-y-4">
+        <div className="rounded-lg border border-brand-gold bg-[hsl(var(--card))] p-4 sm:p-5 md:p-6 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">
               New Flash Sale
@@ -383,13 +383,13 @@ export default function FlashSalesPage() {
             ))}
           </div>
 
-          <div className="flex items-center gap-3 pt-2">
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center gap-2 sm:gap-3 pt-2">
+            <Button variant="ghost" size="sm" onClick={resetForm}>
+              Cancel
+            </Button>
             <Button size="sm" onClick={handleCreate} disabled={submitting}>
               {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
               Create Flash Sale
-            </Button>
-            <Button variant="ghost" size="sm" onClick={resetForm}>
-              Cancel
             </Button>
           </div>
         </div>

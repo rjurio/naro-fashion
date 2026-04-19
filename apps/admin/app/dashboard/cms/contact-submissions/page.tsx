@@ -346,12 +346,12 @@ export default function ContactSubmissionsPage() {
                 placeholder="Type your reply to the customer..."
                 className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground outline-none focus:border-gold-500 focus:ring-2 focus:ring-gold-500/20 resize-y placeholder:text-muted-foreground/60"
               />
-              <div className="flex items-center gap-3 mt-3">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mt-3">
                 <button
                   type="button"
                   onClick={handleReply}
                   disabled={!replyText.trim() || replying}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gold-500 text-white text-sm font-medium hover:bg-gold-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gold-500 text-white text-sm font-medium hover:bg-gold-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {replying ? (
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />

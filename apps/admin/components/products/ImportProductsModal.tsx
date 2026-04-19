@@ -204,7 +204,7 @@ export default function ImportProductsModal({ isOpen, onClose, onSuccess }: Prop
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 px-6 py-4 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
           <button
             type="button"
             onClick={handleClose}

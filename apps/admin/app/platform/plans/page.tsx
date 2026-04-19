@@ -79,24 +79,24 @@ export default function PlansPage() {
 
       {/* Plan Form Modal */}
       {showForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-[hsl(var(--card-bg))] rounded-lg p-6 w-full max-w-md max-h-[80vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-2 sm:p-4">
+          <div className="bg-[hsl(var(--card-bg))] rounded-lg p-4 sm:p-5 md:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h2 className="text-lg font-bold text-[hsl(var(--foreground))] mb-4">{editPlan ? 'Edit' : 'Create'} Plan</h2>
             <form onSubmit={handleSubmit} className="space-y-3">
               <input type="text" placeholder="Plan Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full px-3 py-2 bg-[hsl(var(--input-bg))] border border-[hsl(var(--input-border))] rounded text-[hsl(var(--foreground))]" required />
               <input type="text" placeholder="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full px-3 py-2 bg-[hsl(var(--input-bg))] border border-[hsl(var(--input-border))] rounded text-[hsl(var(--foreground))]" />
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input type="number" placeholder="Monthly Price (TZS)" value={form.priceMonthly} onChange={(e) => setForm({ ...form, priceMonthly: e.target.value })} className="w-full px-3 py-2 bg-[hsl(var(--input-bg))] border border-[hsl(var(--input-border))] rounded text-[hsl(var(--foreground))]" required />
                 <input type="number" placeholder="Yearly Price (TZS)" value={form.priceYearly} onChange={(e) => setForm({ ...form, priceYearly: e.target.value })} className="w-full px-3 py-2 bg-[hsl(var(--input-bg))] border border-[hsl(var(--input-border))] rounded text-[hsl(var(--foreground))]" />
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 <input type="number" placeholder="Max Products" value={form.maxProducts} onChange={(e) => setForm({ ...form, maxProducts: e.target.value })} className="w-full px-3 py-2 bg-[hsl(var(--input-bg))] border border-[hsl(var(--input-border))] rounded text-[hsl(var(--foreground))]" />
                 <input type="number" placeholder="Max Admins" value={form.maxAdminUsers} onChange={(e) => setForm({ ...form, maxAdminUsers: e.target.value })} className="w-full px-3 py-2 bg-[hsl(var(--input-bg))] border border-[hsl(var(--input-border))] rounded text-[hsl(var(--foreground))]" />
                 <input type="number" placeholder="Storage GB" value={form.maxStorageGB} onChange={(e) => setForm({ ...form, maxStorageGB: e.target.value })} className="w-full px-3 py-2 bg-[hsl(var(--input-bg))] border border-[hsl(var(--input-border))] rounded text-[hsl(var(--foreground))]" required />
               </div>
-              <div className="flex gap-3 mt-4">
-                <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
+              <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 mt-4">
                 <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 border border-[hsl(var(--card-border))] rounded text-[hsl(var(--foreground))]">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
               </div>
             </form>
           </div>

@@ -98,7 +98,7 @@ export default function TenantDetailPage() {
       </div>
 
       {/* Module Management */}
-      <div className="bg-[hsl(var(--card-bg))] border border-[hsl(var(--card-border))] rounded-lg p-6">
+      <div className="bg-[hsl(var(--card-bg))] border border-[hsl(var(--card-border))] rounded-lg p-4 sm:p-5 md:p-6">
         <h2 className="text-lg font-semibold text-[hsl(var(--foreground))] mb-4">Module Management</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {Object.entries(PLATFORM_MODULES).map(([code, info]) => {
@@ -131,7 +131,7 @@ export default function TenantDetailPage() {
       </div>
 
       {/* Payment History */}
-      <div className="bg-[hsl(var(--card-bg))] border border-[hsl(var(--card-border))] rounded-lg p-6">
+      <div className="bg-[hsl(var(--card-bg))] border border-[hsl(var(--card-border))] rounded-lg p-4 sm:p-5 md:p-6">
         <h2 className="text-lg font-semibold text-[hsl(var(--foreground))] mb-4">Payment History</h2>
         {tenant.payments?.length > 0 ? (
           <table className="w-full">

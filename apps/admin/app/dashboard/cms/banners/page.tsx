@@ -139,7 +139,7 @@ export default function BannersPage() {
 
       {/* Banner Form */}
       {showForm && (
-        <form onSubmit={handleSubmit} className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
+        <form onSubmit={handleSubmit} className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 sm:p-5 md:p-6 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))]">
               {editingId ? 'Edit Banner' : 'Create New Banner'}
@@ -148,7 +148,7 @@ export default function BannersPage() {
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="grid md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className={labelClass}>Title (English) *</label>
               <input type="text" required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g., Summer Collection 2026" className={inputClass} />
@@ -178,11 +178,11 @@ export default function BannersPage() {
               <input type="number" value={form.sortOrder} onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })} className={inputClass} />
             </div>
           </div>
-          <div className="flex items-center gap-3 mt-5">
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center gap-2 sm:gap-3 mt-5">
+            <Button variant="ghost" size="sm" onClick={() => setShowForm(false)} type="button">Cancel</Button>
             <Button type="submit" size="sm" disabled={saving}>
               {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</> : editingId ? 'Update Banner' : 'Create Banner'}
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setShowForm(false)} type="button">Cancel</Button>
           </div>
         </form>
       )}

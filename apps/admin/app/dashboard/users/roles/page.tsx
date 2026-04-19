@@ -144,7 +144,7 @@ export default function RolesPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-5 md:p-6 space-y-6">
       <PageHeader
         title="Roles & Permissions"
         subtitle="Define what each role can do in the system"

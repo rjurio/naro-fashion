@@ -112,7 +112,7 @@ export default function CMSPagesPage() {
       </div>
 
       {showForm && (
-        <form onSubmit={handleSubmit} className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-4 sm:p-5 md:p-6 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-[hsl(var(--foreground))]">{editingId ? 'Edit Page' : 'New Page'}</h2>
             <button type="button" onClick={() => setShowForm(false)} className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"><X className="w-5 h-5" /></button>
@@ -162,7 +162,7 @@ export default function CMSPagesPage() {
             </label>
             <span className="text-sm text-[hsl(var(--foreground))]">Published</span>
           </div>
-          <div className="flex justify-end gap-3">
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
             <Button variant="ghost" size="sm" onClick={() => setShowForm(false)} type="button">Cancel</Button>
             <Button type="submit" size="sm" disabled={saving}>
               {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</> : editingId ? 'Update Page' : 'Create Page'}

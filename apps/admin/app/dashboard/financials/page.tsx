@@ -229,7 +229,7 @@ export default function FinancialsPage() {
   ];
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-5 md:p-6 space-y-6">
       <PageHeader
         title="Financial Management"
         subtitle="Income statements, expenses, and financial analysis"
@@ -249,7 +249,7 @@ export default function FinancialsPage() {
 
         {/* Income Statement */}
         {activeTab === 'income' && (
-          <div className="p-6 space-y-4">
+          <div className="p-4 sm:p-5 md:p-6 space-y-4">
             {/* Period selector */}
             <div className="flex items-center gap-3">
               <select value={period.split('-')[0]} onChange={e => setPeriod(`${e.target.value}-${period.split('-')[1]}`)}
@@ -360,7 +360,7 @@ export default function FinancialsPage() {
 
         {/* Revenue vs Expenses Chart */}
         {activeTab === 'chart' && (
-          <div className="p-6 space-y-4">
+          <div className="p-4 sm:p-5 md:p-6 space-y-4">
             <div className="flex items-center gap-3">
               <select value={chartYear} onChange={e => setChartYear(Number(e.target.value))}
                 className="px-3 py-2 text-sm bg-background border border-border rounded-lg">
@@ -473,7 +473,7 @@ export default function FinancialsPage() {
               {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </FormField>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FormField label="Amount (TZS)" required>
               <input type="number" value={expForm.amount} onChange={e => setExpForm(f => ({ ...f, amount: e.target.value }))}
                 className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-gold/50" />

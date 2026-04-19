@@ -35,8 +35,8 @@ export default function CloseShiftModal({ sessionId, onClose, onShiftClosed }: P
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-[hsl(var(--card))] rounded-2xl p-6 w-full max-w-lg shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4">
+      <div className="bg-[hsl(var(--card))] rounded-2xl p-4 sm:p-5 md:p-6 w-full max-w-lg max-h-[95vh] overflow-y-auto shadow-2xl">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold text-[hsl(var(--foreground))]">Close Shift</h2>
           <button onClick={onClose} className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">

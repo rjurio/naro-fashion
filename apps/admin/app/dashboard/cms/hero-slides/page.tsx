@@ -223,7 +223,7 @@ export default function HeroSlidesPage() {
 
       {/* Form */}
       {showForm && (
-        <form onSubmit={handleSubmit} className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
+        <form onSubmit={handleSubmit} className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 sm:p-5 md:p-6 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))]">
               {editingId ? 'Edit Hero Slide' : 'Add New Hero Slide'}
@@ -233,7 +233,7 @@ export default function HeroSlidesPage() {
             </button>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className={labelClass}>Title (optional)</label>
               <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g., Summer Fashion 2026" className={inputClass} />
@@ -296,11 +296,11 @@ export default function HeroSlidesPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 mt-5">
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center gap-2 sm:gap-3 mt-5">
+            <Button variant="ghost" size="sm" onClick={() => { setShowForm(false); resetForm(); }} type="button">Cancel</Button>
             <Button type="submit" size="sm" disabled={saving}>
               {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</> : editingId ? 'Update Slide' : 'Create Slide'}
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => { setShowForm(false); resetForm(); }} type="button">Cancel</Button>
           </div>
         </form>
       )}
@@ -336,7 +336,7 @@ export default function HeroSlidesPage() {
                 className="flex-1 h-1.5 accent-brand-gold"
               />
             </div>
-            <div className="flex justify-end gap-3">
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
               <button
                 onClick={() => setShowCrop(false)}
                 className="px-4 py-2 text-sm rounded-lg border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))]"
@@ -346,7 +346,7 @@ export default function HeroSlidesPage() {
               <button
                 onClick={handleCropAndUpload}
                 disabled={uploading}
-                className="px-4 py-2 text-sm rounded-lg bg-brand-gold text-black font-medium hover:bg-brand-gold/90 disabled:opacity-50 flex items-center gap-2"
+                className="px-4 py-2 text-sm rounded-lg bg-brand-gold text-black font-medium hover:bg-brand-gold/90 disabled:opacity-50 flex items-center gap-2 justify-center"
               >
                 {uploading ? <><Loader2 className="w-4 h-4 animate-spin" /> Uploading...</> : 'Crop & Upload'}
               </button>

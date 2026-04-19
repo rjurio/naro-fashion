@@ -177,7 +177,7 @@ export default function InventoryPage() {
   ];
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-5 md:p-6 space-y-6">
       <PageHeader
         title="Inventory"
         subtitle="Manage stock levels, costs, and movements"
@@ -263,7 +263,7 @@ export default function InventoryPage() {
         {(activeTab === 'stock' || activeTab === 'low-stock') && (
           <div>
             {activeTab === 'stock' && (
-              <div className="flex gap-3 p-4 border-b border-border">
+              <div className="flex flex-col sm:flex-row gap-3 p-4 border-b border-border">
                 <input
                   type="text"
                   placeholder="Search products..."
@@ -364,7 +364,7 @@ export default function InventoryPage() {
         {/* Transaction History */}
         {activeTab === 'transactions' && (
           <div>
-            <div className="flex gap-3 p-4 border-b border-border">
+            <div className="flex flex-col sm:flex-row gap-3 p-4 border-b border-border">
               <select
                 value={selectedProductId}
                 onChange={(e) => {

@@ -220,7 +220,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
       {/* Basic Info */}
       <section className="bg-[hsl(var(--card))] rounded-xl border border-[hsl(var(--border))] p-5 space-y-4">
         <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Basic Information</h3>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <InfoLabel label="Product Name (English)" tooltip="The main product name displayed to customers on the storefront." required />
             <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} placeholder="e.g. Elegant Evening Gown" />
@@ -234,7 +234,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
           <InfoLabel label="URL Slug" tooltip="The URL-friendly version of the product name used in the web address (e.g. /products/elegant-evening-gown). Auto-generated from the English name." />
           <input value={slug} readOnly className={`${inputCls} bg-[hsl(var(--muted))] cursor-not-allowed`} placeholder="Auto-generated from name" />
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <InfoLabel label="Description (English)" tooltip="Detailed product description shown on the product page. Include materials, features, and care instructions." />
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className={inputCls} placeholder="Product description..." />
@@ -249,7 +249,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
       {/* Pricing & Organization */}
       <section className="bg-[hsl(var(--card))] rounded-xl border border-[hsl(var(--border))] p-5 space-y-4">
         <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Pricing & Organization</h3>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           <div>
             <InfoLabel label="Base Price (TZS)" tooltip="The selling price of this product in Tanzanian Shillings. This is the price customers will pay." required />
             <input type="number" min={0} value={price || ''} onChange={(e) => setPrice(Number(e.target.value))} className={inputCls} />
@@ -263,7 +263,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
             <input value={sku} onChange={(e) => setSku(e.target.value)} className={inputCls} placeholder="Auto-generated" />
           </div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <InfoLabel label="Category" tooltip="The product category this item belongs to (e.g. Gowns, Suits, Accessories). Helps customers find products." required />
             <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={inputCls}>
@@ -304,7 +304,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
       {showRental && (
         <section className="bg-[hsl(var(--card))] rounded-xl border border-[hsl(var(--border))] p-5 space-y-4">
           <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Rental Settings</h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             <div>
               <InfoLabel label="Price per Day (TZS)" tooltip="The daily rental fee charged to the customer for borrowing this product." />
               <input type="number" min={0} value={rentalPricePerDay ?? ''} onChange={(e) => setRentalPricePerDay(e.target.value ? Number(e.target.value) : null)} className={inputCls} />
@@ -318,7 +318,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
               <input type="number" min={0} value={bufferDaysOverride ?? ''} onChange={(e) => setBufferDaysOverride(e.target.value ? Number(e.target.value) : null)} className={inputCls} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <InfoLabel label="Min Rental Days" tooltip="The minimum number of days a customer must rent this product." />
               <input type="number" min={1} value={minRentalDays ?? ''} onChange={(e) => setMinRentalDays(e.target.value ? Number(e.target.value) : null)} className={inputCls} />
@@ -377,7 +377,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
                 </button>
               )}
             </div>
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
                 <InfoLabel label="Name" tooltip="A descriptive name for this variant, e.g. 'Red / Large' or 'Size M - Black'." required />
                 <input value={v.name} onChange={(e) => updateVariant(i, 'name', e.target.value)} className={inputCls} placeholder="e.g. Red / Large" />
@@ -395,7 +395,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
                 <input type="number" min={0} value={v.price || ''} onChange={(e) => updateVariant(i, 'price', Number(e.target.value))} className={inputCls} />
               </div>
             </div>
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
                 <InfoLabel label="Size" tooltip="Size of this variant (e.g. S, M, L, XL, or numeric sizes like 38, 40, 42)." />
                 <input value={v.size} onChange={(e) => updateVariant(i, 'size', e.target.value)} className={inputCls} placeholder="S, M, L, XL" />
@@ -421,7 +421,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
       </section>
 
       {/* Actions */}
-      <div className="flex items-center justify-end gap-3 pb-8">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 pb-8">
         <button
           type="button"
           onClick={() => window.history.back()}

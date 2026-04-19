@@ -156,8 +156,8 @@ export default function ProductCard({
           )}
         </button>
 
-        {/* Quick Add to Cart - shows on hover */}
-        <div className="absolute bottom-3 left-3 right-3 z-20 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300">
+        {/* Quick Add to Cart — always visible on mobile, hover-reveal on desktop */}
+        <div className="absolute bottom-3 left-3 right-3 z-20 opacity-100 translate-y-0 md:opacity-0 md:translate-y-2 md:group-hover:opacity-100 md:group-hover:translate-y-0 transition-all duration-300">
           <Button
             size="sm"
             className="w-full gap-2"

@@ -44,7 +44,7 @@ export default function ProfilePage() {
       <h1 className="text-2xl font-bold text-[hsl(var(--foreground))]">My Profile</h1>
 
       {/* Profile header card */}
-      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6">
+      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 sm:p-5 md:p-6">
         <div className="flex items-center gap-4">
           <div className="w-16 h-16 rounded-full bg-brand-gold flex items-center justify-center">
             <span className="text-white text-2xl font-bold">{initials}</span>

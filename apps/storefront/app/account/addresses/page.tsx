@@ -160,7 +160,7 @@ export default function AddressesPage() {
 
         {/* Add / Edit Form */}
         {showForm && (
-          <div className="rounded-2xl border border-border bg-card p-6 mb-6">
+          <div className="rounded-2xl border border-border bg-card p-4 sm:p-5 md:p-6 mb-6">
             <h2 className="text-base font-semibold text-foreground mb-5">
               {editing ? t("account.editAddress") : t("account.newAddress")}
             </h2>
@@ -266,21 +266,21 @@ export default function AddressesPage() {
 
               {error && <p className="text-sm text-red-500">{error}</p>}
 
-              <div className="flex gap-3 pt-1">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gold-500 text-[#1A1A1A] text-sm font-semibold hover:bg-gold-600 disabled:opacity-50 transition-colors"
-                >
-                  {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                  {saving ? t("account.saving") : editing ? t("account.saveChanges") : t("account.addAddress")}
-                </button>
+              <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 pt-1">
                 <button
                   type="button"
                   onClick={() => setShowForm(false)}
                   className="px-5 py-2.5 rounded-xl border border-border text-sm text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
                 >
                   {t("common.cancel")}
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-gold-500 text-[#1A1A1A] text-sm font-semibold hover:bg-gold-600 disabled:opacity-50 transition-colors"
+                >
+                  {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {saving ? t("account.saving") : editing ? t("account.saveChanges") : t("account.addAddress")}
                 </button>
               </div>
             </form>

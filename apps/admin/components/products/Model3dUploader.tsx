@@ -117,7 +117,7 @@ export default function Model3dUploader({ modelUrl, posterUrl, onModelChange, on
           <button
             type="button"
             onClick={handleRemove}
-            className="absolute top-2 right-2 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
+            className="absolute top-2 right-2 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity hover:bg-red-600"
           >
             <Trash2 className="w-3.5 h-3.5" />
             Remove

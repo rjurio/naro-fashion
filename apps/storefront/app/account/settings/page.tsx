@@ -124,7 +124,7 @@ export default function SettingsPage() {
 
         <div className="space-y-8">
           {/* Profile Info */}
-          <section className="rounded-xl border border-border bg-card p-6">
+          <section className="rounded-xl border border-border bg-card p-4 sm:p-5 md:p-6">
             <h2 className="text-lg font-bold text-foreground mb-4">{t("account.profileInformation")}</h2>
             <div className="space-y-4">
               <div>
@@ -162,7 +162,7 @@ export default function SettingsPage() {
           </section>
 
           {/* Change Password */}
-          <section className="rounded-xl border border-border bg-card p-6">
+          <section className="rounded-xl border border-border bg-card p-4 sm:p-5 md:p-6">
             <h2 className="text-lg font-bold text-foreground mb-4">{t("account.changePassword")}</h2>
             {passwordMsg && (
               <div className={`mb-4 p-3 rounded-lg text-sm ${passwordMsg.type === "success" ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-red-50 border border-red-200 text-red-700"}`}>
@@ -208,7 +208,7 @@ export default function SettingsPage() {
           </section>
 
           {/* Theme */}
-          <section className="rounded-xl border border-border bg-card p-6">
+          <section className="rounded-xl border border-border bg-card p-4 sm:p-5 md:p-6">
             <h2 className="text-lg font-bold text-foreground mb-4">{t("account.themePreference")}</h2>
             <div className="grid grid-cols-3 gap-3">
               {themes.map((t) => (
@@ -229,7 +229,7 @@ export default function SettingsPage() {
           </section>
 
           {/* Language */}
-          <section className="rounded-xl border border-border bg-card p-6">
+          <section className="rounded-xl border border-border bg-card p-4 sm:p-5 md:p-6">
             <h2 className="text-lg font-bold text-foreground mb-4">{t("common.language")}</h2>
             <div className="grid grid-cols-2 gap-3">
               <button
@@ -254,7 +254,7 @@ export default function SettingsPage() {
           </section>
 
           {/* Danger Zone */}
-          <section className="rounded-xl border-2 border-red-200 bg-red-50/50 p-6">
+          <section className="rounded-xl border-2 border-red-200 bg-red-50/50 p-4 sm:p-5 md:p-6">
             <div className="flex items-center gap-2 mb-2">
               <AlertTriangle className="h-5 w-5 text-red-500" />
               <h2 className="text-lg font-bold text-red-700">{t("account.dangerZone")}</h2>

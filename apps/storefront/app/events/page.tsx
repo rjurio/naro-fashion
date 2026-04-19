@@ -179,7 +179,7 @@ export default function EventsPage() {
                       </div>
 
                       {/* Hover arrow indicator */}
-                      <div className="absolute top-3 right-3 w-8 h-8 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="absolute top-3 right-3 w-8 h-8 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                         <ArrowRight className="h-4 w-4 text-white" />
                       </div>
                     </div>

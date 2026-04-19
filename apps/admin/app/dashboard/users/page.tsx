@@ -157,7 +157,7 @@ export default function AdminUsersPage() {
     admin.lockedUntil && new Date(admin.lockedUntil) > new Date();
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-5 md:p-6 space-y-6">
       <PageHeader
         title="Admin Users"
         subtitle="Manage staff accounts and access"
@@ -208,7 +208,7 @@ export default function AdminUsersPage() {
 
       {/* Table */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">
-        <div className="flex gap-3 p-4 border-b border-border">
+        <div className="flex flex-col sm:flex-row gap-3 p-4 border-b border-border">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <input
@@ -414,7 +414,7 @@ export default function AdminUsersPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <FormField label="First Name" required>
                 <input
                   type="text"
@@ -497,7 +497,7 @@ export default function AdminUsersPage() {
         }
       >
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FormField label="First Name">
               <input
                 type="text"

@@ -150,7 +150,7 @@ export default function PaymentMethodsPage() {
   const inputClass = 'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all';
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-5 md:p-6 space-y-6">
       <PageHeader
         title="Payment Methods"
         subtitle="Manage accepted payment methods and their integration settings"
@@ -255,7 +255,7 @@ export default function PaymentMethodsPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FormField label="Name *" hint="Display name, e.g. M-Pesa">
               <input required value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className={inputClass} placeholder="M-Pesa" />
             </FormField>
@@ -268,7 +268,7 @@ export default function PaymentMethodsPage() {
             <input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} className={inputClass} placeholder="Pay with M-Pesa mobile money" />
           </FormField>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FormField label="Integration Key" hint="Merchant ID, API key, or shortcode">
               <div className="relative">
                 <Key className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
@@ -293,12 +293,12 @@ export default function PaymentMethodsPage() {
             <span className="text-sm text-foreground">Active (visible to customers)</span>
           </label>
 
-          <div className="flex gap-3 pt-2 border-t border-border">
-            <button type="submit" disabled={saving} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-gold text-white text-sm font-medium hover:bg-brand-gold-dark hover:shadow-md disabled:opacity-50 transition-all cursor-pointer">
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 pt-2 border-t border-border">
+            <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:border-foreground hover:text-foreground transition-colors cursor-pointer">Cancel</button>
+            <button type="submit" disabled={saving} className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-brand-gold text-white text-sm font-medium hover:bg-brand-gold-dark hover:shadow-md disabled:opacity-50 transition-all cursor-pointer">
               {saving && <Loader2 className="h-4 w-4 animate-spin" />}
               {saving ? 'Saving...' : editing ? 'Save Changes' : 'Create Method'}
             </button>
-            <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:border-foreground hover:text-foreground transition-colors cursor-pointer">Cancel</button>
           </div>
         </form>
       </Modal>

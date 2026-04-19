@@ -260,7 +260,7 @@ export default function InstagramPostsPage() {
 
       {/* Form */}
       {showForm && (
-        <form onSubmit={handleSubmit} className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
+        <form onSubmit={handleSubmit} className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 sm:p-5 md:p-6 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))]">
               {editingId ? 'Edit Instagram Post' : 'Add New Instagram Post'}
@@ -269,7 +269,7 @@ export default function InstagramPostsPage() {
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="grid md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="md:col-span-2">
               <label className={labelClass}>Image URL *</label>
               <input type="text" required value={form.imageUrl} onChange={(e) => setForm({ ...form, imageUrl: e.target.value })} placeholder="/uploads/products/photo.jpg or https://..." className={inputClass} />
@@ -282,7 +282,7 @@ export default function InstagramPostsPage() {
               <label className={labelClass}>Instagram Post URL</label>
               <input type="text" value={form.postUrl} onChange={(e) => setForm({ ...form, postUrl: e.target.value })} placeholder="https://www.instagram.com/p/..." className={inputClass} />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className={labelClass}>Likes</label>
                 <input type="number" min="0" value={form.likes} onChange={(e) => setForm({ ...form, likes: Number(e.target.value) })} className={inputClass} />
@@ -302,11 +302,11 @@ export default function InstagramPostsPage() {
               </div>
             </div>
           )}
-          <div className="flex items-center gap-3 mt-5">
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center gap-2 sm:gap-3 mt-5">
+            <Button variant="ghost" size="sm" onClick={() => setShowForm(false)} type="button">Cancel</Button>
             <Button type="submit" size="sm" disabled={saving}>
               {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</> : editingId ? 'Update Post' : 'Create Post'}
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setShowForm(false)} type="button">Cancel</Button>
           </div>
         </form>
       )}
@@ -352,7 +352,7 @@ export default function InstagramPostsPage() {
                   </div>
                 )}
                 {/* Hover overlay with actions */}
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-all duration-200 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                <div className="absolute inset-0 bg-black/50 md:bg-black/0 md:group-hover:bg-black/50 transition-all duration-200 flex items-center justify-center gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100">
                   <button onClick={() => handlePin(post)} disabled={pinningId === post.id} className="p-2 rounded-full bg-white/90 hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed" title={post.isPinned ? 'Unpin' : 'Pin'}>
                     {pinningId === post.id ? <Loader2 className="w-4 h-4 animate-spin text-brand-gold" /> : <Pin className={`w-4 h-4 ${post.isPinned ? 'text-brand-gold fill-brand-gold' : 'text-gray-600'}`} />}
                   </button>

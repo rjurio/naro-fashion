@@ -89,7 +89,7 @@ export default function InstagramFeed() {
               />
 
               {/* Hover overlay */}
-              <div className="absolute inset-0 bg-dark-500/0 group-hover:bg-dark-500/70 transition-all duration-300 flex items-center justify-center opacity-0 group-hover:opacity-100">
+              <div className="absolute inset-0 bg-dark-500/70 md:bg-dark-500/0 md:group-hover:bg-dark-500/70 transition-all duration-300 flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100">
                 <div className="text-center text-white transform scale-95 group-hover:scale-100 transition-transform">
                   {post.likes > 0 && (
                     <div className="flex items-center justify-center gap-1 mb-1">

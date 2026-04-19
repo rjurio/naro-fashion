@@ -226,7 +226,7 @@ export default function ComposeNewsletterPage() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <Button
             variant="outline"
             size="sm"
@@ -256,7 +256,7 @@ export default function ComposeNewsletterPage() {
       </div>
 
       {/* Template Type Selector */}
-      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
+      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 sm:p-5 md:p-6 shadow-sm">
         <h3 className="text-sm font-semibold text-[hsl(var(--foreground))] mb-4">Template Type</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {templateOptions.map((opt) => (
@@ -296,7 +296,7 @@ export default function ComposeNewsletterPage() {
 
       {/* New Arrivals Preview */}
       {templateType === 'NEW_ARRIVALS' && (
-        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 sm:p-5 md:p-6 shadow-sm">
           <h3 className="text-sm font-semibold text-[hsl(var(--foreground))] mb-4">
             New Arrivals Preview
           </h3>
@@ -357,7 +357,7 @@ export default function ComposeNewsletterPage() {
         {/* Editor */}
         <div className="space-y-4">
           {/* Subject */}
-          <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
+          <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 sm:p-5 md:p-6 shadow-sm">
             <label className="block text-sm font-semibold text-[hsl(var(--foreground))] mb-2">
               Subject Line
             </label>
@@ -371,7 +371,7 @@ export default function ComposeNewsletterPage() {
           </div>
 
           {/* Body */}
-          <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-sm">
+          <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 sm:p-5 md:p-6 shadow-sm">
             <label className="block text-sm font-semibold text-[hsl(var(--foreground))] mb-2">
               Body
             </label>
@@ -394,7 +394,7 @@ export default function ComposeNewsletterPage() {
                 Subject: {subject || '(no subject)'}
               </p>
             </div>
-            <div className="p-6">
+            <div className="p-4 sm:p-5 md:p-6">
               {body ? (
                 <div
                   className="prose prose-sm dark:prose-invert max-w-none"

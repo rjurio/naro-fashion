@@ -231,7 +231,7 @@ export default function NewsletterDashboardPage() {
                     >
                       {nl.status}
                     </span>
-                    <Eye className="w-4 h-4 text-[hsl(var(--muted-foreground))] opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <Eye className="w-4 h-4 text-[hsl(var(--muted-foreground))] opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity" />
                   </div>
                 </Link>
               ))}

@@ -181,11 +181,11 @@ export default function AdminSettingsPage() {
 
       {/* Profile */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
           <User className="w-5 h-5 text-brand-gold" />
           <h2 className="font-semibold text-[hsl(var(--foreground))]">Profile</h2>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-5 md:p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1">First Name</label>
@@ -224,7 +224,7 @@ export default function AdminSettingsPage() {
 
           <div className="pt-4 border-t border-[hsl(var(--border))]">
             <h3 className="text-sm font-semibold text-[hsl(var(--foreground))] mb-3">Change Password</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {[
                 { label: 'Current Password', key: 'current' as const },
                 { label: 'New Password', key: 'newPassword' as const },
@@ -265,11 +265,11 @@ export default function AdminSettingsPage() {
 
       {/* Security */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
           <Shield className="w-5 h-5 text-brand-gold" />
           <h2 className="font-semibold text-[hsl(var(--foreground))]">Security</h2>
         </div>
-        <div className="p-6 space-y-5">
+        <div className="p-4 sm:p-5 md:p-6 space-y-5">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-[hsl(var(--foreground))]">Two-Factor Authentication</p>
@@ -302,11 +302,11 @@ export default function AdminSettingsPage() {
 
       {/* Theme */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
           <Palette className="w-5 h-5 text-brand-gold" />
           <h2 className="font-semibold text-[hsl(var(--foreground))]">Appearance</h2>
         </div>
-        <div className="p-6">
+        <div className="p-4 sm:p-5 md:p-6">
           <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Choose the admin panel theme</p>
           <div className="grid grid-cols-3 gap-3 max-w-md">
             {[
@@ -333,11 +333,11 @@ export default function AdminSettingsPage() {
 
       {/* Notifications */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
           <Bell className="w-5 h-5 text-brand-gold" />
           <h2 className="font-semibold text-[hsl(var(--foreground))]">Notifications</h2>
         </div>
-        <div className="p-6">
+        <div className="p-4 sm:p-5 md:p-6">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>

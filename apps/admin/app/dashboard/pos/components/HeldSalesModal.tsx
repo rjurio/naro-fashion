@@ -54,7 +54,7 @@ export default function HeldSalesModal({ onClose, onResume }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4">
       <div className="bg-[hsl(var(--card))] rounded-xl w-full max-w-md shadow-2xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-[hsl(var(--border))]">
           <h3 className="font-semibold text-[hsl(var(--foreground))] flex items-center gap-2">

@@ -139,7 +139,7 @@ export default function IDVerificationPage() {
         )}
 
         {/* Info Card */}
-        <section className="rounded-xl border border-border bg-card p-6 mb-6">
+        <section className="rounded-xl border border-border bg-card p-4 sm:p-5 md:p-6 mb-6">
           <h2 className="text-lg font-bold text-foreground mb-3">{t("whyNeeded")}</h2>
           <p className="text-sm text-muted-foreground mb-4">{t("whyNeededDesc")}</p>
           <ul className="space-y-2">
@@ -154,7 +154,7 @@ export default function IDVerificationPage() {
 
         {/* Upload Section */}
         {(status === "unverified" || status === "rejected") && (
-          <section className="rounded-xl border border-border bg-card p-6 space-y-6">
+          <section className="rounded-xl border border-border bg-card p-4 sm:p-5 md:p-6 space-y-6">
             <h2 className="text-lg font-bold text-foreground">{t("uploadID")}</h2>
 
             {/* Front of ID */}

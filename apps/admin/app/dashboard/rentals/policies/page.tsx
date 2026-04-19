@@ -99,7 +99,7 @@ export default function RentalPoliciesPage() {
 
       <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] divide-y divide-[hsl(var(--border))]">
         {fields.map((field) => (
-          <div key={field.key} className="p-5 space-y-3">
+          <div key={field.key} className="p-4 sm:p-5 md:p-6 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div className="flex-1">
                 <label className="text-sm font-semibold text-[hsl(var(--foreground))]">{field.label}</label>
@@ -119,7 +119,7 @@ export default function RentalPoliciesPage() {
         ))}
       </div>
 
-      <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))] p-5">
+      <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))] p-4 sm:p-5 md:p-6">
         <h3 className="text-sm font-semibold text-[hsl(var(--foreground))] mb-3">Current Policy Summary</h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
           <div><p className="text-[hsl(var(--muted-foreground))]">Buffer</p><p className="font-medium text-[hsl(var(--foreground))]">{values.bufferDays} days</p></div>

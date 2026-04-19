@@ -50,7 +50,7 @@ export default function EditProductPage() {
   }
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-5 md:p-6">
       <PageHeader
         title={`Edit: ${product.name}`}
         breadcrumbs={[

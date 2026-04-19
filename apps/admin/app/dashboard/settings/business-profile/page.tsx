@@ -312,11 +312,11 @@ export default function BusinessProfilePage() {
 
       {/* Business Identity */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
           <Building2 className="w-5 h-5 text-brand-gold" />
           <h2 className="font-semibold text-[hsl(var(--foreground))]">Business Identity</h2>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-5 md:p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {IDENTITY_FIELDS.map((field) => (
               <div key={field.key}>
@@ -333,11 +333,11 @@ export default function BusinessProfilePage() {
 
       {/* Branding */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
           <Palette className="w-5 h-5 text-brand-gold" />
           <h2 className="font-semibold text-[hsl(var(--foreground))]">Branding</h2>
         </div>
-        <div className="p-6 space-y-6">
+        <div className="p-4 sm:p-5 md:p-6 space-y-6">
           {IMAGE_SETTINGS.map((img) => (
             <ImageUploadField
               key={img.key}
@@ -356,11 +356,11 @@ export default function BusinessProfilePage() {
 
       {/* Contact Information */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
           <Phone className="w-5 h-5 text-brand-gold" />
           <h2 className="font-semibold text-[hsl(var(--foreground))]">Contact Information</h2>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-5 md:p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {CONTACT_FIELDS.map((field) => (
               <div key={field.key}>
@@ -377,11 +377,11 @@ export default function BusinessProfilePage() {
 
       {/* Business Location */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
           <MapPin className="w-5 h-5 text-brand-gold" />
           <h2 className="font-semibold text-[hsl(var(--foreground))]">Business Location</h2>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-5 md:p-6 space-y-4">
           <p className="text-sm text-[hsl(var(--muted-foreground))]">
             Enter your business GPS coordinates to display a map on your Contact Us page.
             You can find your coordinates from{' '}
@@ -465,11 +465,11 @@ export default function BusinessProfilePage() {
 
       {/* Social Media */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
           <Share2 className="w-5 h-5 text-brand-gold" />
           <h2 className="font-semibold text-[hsl(var(--foreground))]">Social Media</h2>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-5 md:p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {SOCIAL_FIELDS.map((field) => (
               <div key={field.key}>
@@ -483,11 +483,11 @@ export default function BusinessProfilePage() {
 
       {/* Website */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
           <Globe className="w-5 h-5 text-brand-gold" />
           <h2 className="font-semibold text-[hsl(var(--foreground))]">Website</h2>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-5 md:p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {WEBSITE_FIELDS.map((field) => (
               <div key={field.key}>
