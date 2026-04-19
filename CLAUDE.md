@@ -89,6 +89,8 @@ GitHub: https://github.com/rjurio/naro-fashion
 - **Platform Payments Page**: `/platform/payments` shows all tenant billing payments across the platform with summary cards (Completed/Pending totals), status filter, search, and CSV export. Powered by `GET /tenants/payments?status=` (platform-admin-only).
 - **Customer Admin Endpoints**: `GET /users` (admin) lists all tenant customers with order/rental counts and total spent (aggregated). `PATCH /users/:id/suspend` and `PATCH /users/:id/activate` manage customer status.
 - **Homepage CMS Content**: All homepage section text is admin-editable via `/dashboard/cms/settings` with English + Swahili variants. Rental section perks (e.g. "Designer gowns", "Cleaning included") live in `rental_section_features` SiteSetting as newline-separated items — each line becomes a pill on the storefront.
+- **Hero Slides**: Admin-managed at `/dashboard/cms/hero-slides`; stored in `HeroSlide` table per tenant (`{ id, tenantId, title, imageUrl, sortOrder, isActive, deletedAt }`). Storefront renders a two-layer hero: a blurred, zoomed `backdrop` (filter: blur(42px) brightness(0.55) saturate(1.25) + scale 1.15) fills the viewport and a **sharp `foreground` card at natural aspect-[3/4]** sits on top. This keeps portrait bridal photos looking intentional even when the hero is wide landscape — never stretch a gown with `object-cover` over an aspect-[16/9] box. The foreground card has rotating orbit rings (`animate-hero-orbit`), a pulsing gold ring (`animate-hero-ring-pulse`), and the image uses Ken Burns zoom on the active slide only.
+- **Shop by Category tiles**: `GET /api/v1/categories` returns `fallbackImageUrl` (first product image from the category or any descendant, in `imageByCategoryId` map keyed by categoryId) and `totalProductCount` (direct + descendant products rolled up). Parent categories like "Wedding Dresses" have 0 direct products — products live in `Ball Gown` / `Mermaid` / `Plus-Size` subcategories — so the storefront shows a real gown photo + "14 items" by surfacing those through the fallback. Tiles sort by `totalProductCount` desc before slicing top 4. When no image is resolvable, the tile renders a gold-on-dark gradient placeholder with the category initial instead of a broken `<img>`. **Never use `/uploads/categories/<slug>.jpg` as a fallback path** — those stock files were deleted from the VPS, referencing them produces 404s.
 
 ## API Modules
 analytics, audit, auth, cart, categories, cms, events, flash-sales, id-verification, newsletter, notifications, orders, payment-methods, payments, products, promo-codes, referrals, rental-checklists, rental-policies, rentals, reviews, scheduler, shipping, size-guides, upload, users, wishlist, permissions, roles, admin-users, expense-categories, expenses, inventory, reports, pos, tenants
@@ -148,6 +150,20 @@ All documentation lives in `docs/` with Markdown source and PDF/DOCX/PPTX export
 - DOCX conversion: `pandoc <file>.md -o <file>.docx` (globally installed)
 - PPTX conversion: `marp <file>.md --pptx` (globally installed via @marp-team/marp-cli)
 
+## Env File Sprawl (Production Gotcha)
+Three `.env` files are loaded on the API at boot and they do NOT merge cleanly:
+1. `/var/www/naro-fashion/.env` (root)
+2. `/var/www/naro-fashion/apps/api/.env`
+3. `/var/www/naro-fashion/packages/database/.env`
+
+Prisma's internal `dotenv` call runs FIRST (when `PrismaClient` is imported), and `dotenv` never overrides an already-set env var. So any value Prisma's `.env` sets wins, and the later `@nestjs/config` call is a no-op for that key. This burned a www-CORS fix: `STOREFRONT_URL` was correct in two of three `.env` files but the `packages/database/.env` still had the apex-only value, so `https://www.narofashion.co.tz` requests got no `Access-Control-Allow-Origin` header.
+
+**Rules of thumb**:
+- Duplicated env keys must be consistent across all three files.
+- `STOREFRONT_URL` supports comma-separated origins for multi-origin CORS: `STOREFRONT_URL="https://narofashion.co.tz,https://www.narofashion.co.tz"`.
+- When CORS or env behavior looks wrong after a deploy and `pm2 restart` doesn't fix it, hot-patch `dist/main.js` with a `console.log(process.env.FOO)` to see the actual runtime value before blaming the code.
+- PM2's `ecosystem.config.js` only sets `NODE_ENV` + `PORT` — don't assume it provides app env vars.
+
 ## Known Issues
 - Global Prisma CLI is v7.4.2 which has breaking changes — always use local Prisma v6.19.2 via `pnpm prisma` from `packages/database/`
 - OneDrive sync can cause EPERM errors during `prisma generate` — retry usually works, or use `prisma db push` which also triggers generate
@@ -158,5 +174,6 @@ All documentation lives in `docs/` with Markdown source and PDF/DOCX/PPTX export
 - `tenantId` is currently nullable (`String?`) in schema — will be made required after full migration. All services already treat it as required via `TenantContext.requireId`
 - Storefront API calls that bypass the API client (raw `fetch`) must manually include `X-Tenant-Id` header from the `tenantId` cookie
 - Prisma `_count` must be included at **every** nesting level of a nested relation query — declaring it only at the parent returns 0 at deeper levels. Example: `categories.findAll()` includes `_count: { products: ... }` on parent, children, and grandchildren. Always also filter the counted relation by `deletedAt: null` so soft-deleted rows don't inflate counts.
+- For rolled-up counts and descendant fallbacks (e.g. "parent category with no direct products needs the subcategory count + first product photo"), don't try to do it inside the Prisma query. Collect all descendant IDs with a small recursive walker, run one extra `product.findMany({ where: { categoryId: { in: allIds } } })` sorted by `createdAt desc`, build a `Map<categoryId, firstImageUrl>`, then recursively attach `fallbackImageUrl` + `totalProductCount` in application code. See `CategoriesService.findAll()` for the canonical pattern.
 - Admin UI must tolerate both legacy and Prisma-native field names when the API passes the Prisma response through unchanged (e.g. category `name` / `nameSwahili` vs older `nameEn` / `nameSw`, and `_count.products` vs `productCount`). Use `a ?? b` fallbacks.
 - `<model-viewer>` web component requires `types/model-viewer.d.ts` type declaration in both admin and storefront. Must be dynamically imported (never SSR'd). Use `next/dynamic` with `ssr: false` on storefront.
