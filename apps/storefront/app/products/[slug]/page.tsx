@@ -548,7 +548,7 @@ export default function ProductDetailPage() {
                   })}
                 </div>
               </div>
-            ) : variants.length > 0 ? (
+            ) : variants.length > 1 ? (
               <div className="mt-6">
                 <h3 className="text-sm font-semibold text-foreground mb-3">{t("product.selectVariant")}</h3>
                 <div className="flex flex-wrap gap-2">
