@@ -44,17 +44,29 @@ export default function Header() {
   const [hasFlashSales, setHasFlashSales] = useState(false);
   const [hasEvents, setHasEvents] = useState(false);
 
-  // Fetch cart count + nav visibility checks
+  // Cart count: refresh on route change (Header doesn't unmount between pages,
+  // so a single mount-time fetch goes stale the moment the user adds an item)
+  // and on a custom "cart:updated" window event for instant same-page updates
+  // after add-to-cart elsewhere in the app.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = localStorage.getItem("token");
-    if (token) {
+    const refresh = () => {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        setCartCount(0);
+        return;
+      }
       cartApi.get()
         .then((cart) => setCartCount((cart?.items ?? []).length))
         .catch(() => {});
-    }
+    };
+    refresh();
+    window.addEventListener("cart:updated", refresh);
+    return () => window.removeEventListener("cart:updated", refresh);
+  }, [pathname]);
 
-    // Lightweight checks — fetch minimal data to see if content exists
+  // Nav visibility checks (one-shot — content catalog doesn't change per-route)
+  useEffect(() => {
     categoriesApi.getAll()
       .then((cats) => setHasCategories(Array.isArray(cats) && cats.length > 0))
       .catch(() => {});

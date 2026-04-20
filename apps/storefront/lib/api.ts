@@ -106,14 +106,37 @@ export const categoriesApi = {
   getBySlug: (slug: string) => api.get<any>(`/categories/${slug}`),
 };
 
+// Broadcast so the Header badge (and anything else subscribed) refreshes
+// without waiting for a route change. Centralized here so every cart
+// mutation fires it — callers don't need to remember.
+function notifyCartUpdated() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('cart:updated'));
+  }
+}
+
 export const cartApi = {
   get: () => api.get<any>('/cart'),
-  addItem: (data: { productId: string; variantId: string; quantity: number }) =>
-    api.post<any>('/cart/items', data),
-  updateItem: (itemId: string, data: { quantity: number }) =>
-    api.patch<any>(`/cart/items/${itemId}`, data),
-  removeItem: (itemId: string) => api.delete<any>(`/cart/items/${itemId}`),
-  clear: () => api.delete<any>('/cart'),
+  addItem: async (data: { productId: string; variantId: string; quantity: number }) => {
+    const res = await api.post<any>('/cart/items', data);
+    notifyCartUpdated();
+    return res;
+  },
+  updateItem: async (itemId: string, data: { quantity: number }) => {
+    const res = await api.patch<any>(`/cart/items/${itemId}`, data);
+    notifyCartUpdated();
+    return res;
+  },
+  removeItem: async (itemId: string) => {
+    const res = await api.delete<any>(`/cart/items/${itemId}`);
+    notifyCartUpdated();
+    return res;
+  },
+  clear: async () => {
+    const res = await api.delete<any>('/cart');
+    notifyCartUpdated();
+    return res;
+  },
 };
 
 export const wishlistApi = {
