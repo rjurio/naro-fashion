@@ -724,14 +724,19 @@ export default function HomePage() {
 
           {/* Features row */}
           {rentalFeatures.length > 0 && (
-            <div className="flex flex-wrap justify-center gap-3 mb-12">
+            <div className="grid grid-cols-2 gap-2.5 max-w-md mx-auto mb-12 sm:flex sm:flex-wrap sm:justify-center sm:gap-3 sm:max-w-none">
               {rentalFeatures.map((text, i) => {
                 const icons = [Crown, Star, Sparkles, Shield, Heart, Star, Crown, Sparkles];
                 const Icon = icons[i % icons.length];
+                const isOrphan =
+                  rentalFeatures.length % 2 === 1 && i === rentalFeatures.length - 1;
                 return (
-                  <div key={text} className="flex items-center gap-2.5 bg-white/5 rounded-xl px-4 py-3 border border-white/10">
+                  <div
+                    key={text}
+                    className={`flex items-center justify-center gap-2 bg-white/5 rounded-xl px-3 py-2.5 border border-white/10 sm:justify-start sm:gap-2.5 sm:px-4 sm:py-3 ${isOrphan ? 'col-span-2 sm:col-span-1' : ''}`}
+                  >
                     <Icon className="h-4 w-4 text-[#D4AF37] flex-shrink-0" />
-                    <span className="text-sm text-gray-300">{text}</span>
+                    <span className="text-xs sm:text-sm text-gray-300">{text}</span>
                   </div>
                 );
               })}
