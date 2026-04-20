@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 
@@ -25,11 +26,11 @@ export class WishlistService {
         variants: {
           where: { isActive: true },
           select: { id: true, name: true, stock: true, price: true },
-          orderBy: { createdAt: 'asc' },
+          orderBy: { createdAt: 'asc' as const },
         },
       },
     },
-  };
+  } satisfies Prisma.WishlistItemInclude;
 
   async getWishlist(userId: string) {
     const items = await this.prisma.wishlistItem.findMany({
