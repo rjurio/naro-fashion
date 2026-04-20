@@ -552,7 +552,11 @@
     "confirmed": "Imethibitishwa",
     "processing": "Inashughulikiwa",
     "shipped": "Imetumwa",
-    "delivered": "Imepokelewa"
+    "delivered": "Imepokelewa",
+    "orderPlacedTitle": "Agizo limewekwa kikamilifu!",
+    "orderPlacedMsg": "Asante kwa ununuzi wako. Tutakutumia taarifa mara tu agizo lako litakapotumwa.",
+    "orderNotFound": "Agizo halijapatikana",
+    "orderNotFoundMsg": "Hatukuweza kupata agizo hilo — huenda limeondolewa au ni la akaunti nyingine."
   },
   "auth": {
     "login": "Ingia",

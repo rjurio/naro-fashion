@@ -202,6 +202,7 @@ export default function CheckoutPage() {
       // Step 1: Create the order
       const order = await ordersApi.create({
         paymentMethod: paymentMethodEnum,
+        shippingFee: shippingCost,
         notes: `Delivery: ${deliveryMethod}. Address: ${shipping.name}, ${shipping.street}, ${shipping.city}, ${shipping.region}. Phone: ${shipping.phone}`,
       });
 

@@ -55,7 +55,10 @@ export class OrdersService {
       return sum + price * item.quantity;
     }, 0);
 
-    const shippingCost = 0; // Can be calculated based on shipping zone later
+    // Trust the client's quoted shipping fee for now — it's derived from the
+    // storefront's delivery-method selector. Once zone-based rates are live,
+    // recompute server-side and reject mismatches.
+    const shippingCost = Number(dto.shippingFee ?? 0);
     const discount = 0;
     const total = subtotal + shippingCost - discount;
 

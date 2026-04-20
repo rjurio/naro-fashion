@@ -552,7 +552,11 @@
     "confirmed": "Confirmed",
     "processing": "Processing",
     "shipped": "Shipped",
-    "delivered": "Delivered"
+    "delivered": "Delivered",
+    "orderPlacedTitle": "Order placed successfully!",
+    "orderPlacedMsg": "Thank you for your purchase. We'll send you an update as soon as your order ships.",
+    "orderNotFound": "Order not found",
+    "orderNotFoundMsg": "We couldn't find that order — it may have been removed or belong to a different account."
   },
   "auth": {
     "login": "Sign In",
