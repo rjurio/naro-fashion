@@ -3,18 +3,19 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+import { IsString } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { NotificationsService } from '../notifications/notifications.service';
 
 export class SubmitIdVerificationDto {
-  frontImageUrl: string;
-  backImageUrl: string;
-  idNumber: string;
+  @IsString() frontImageUrl: string;
+  @IsString() backImageUrl: string;
+  @IsString() idNumber: string;
 }
 
 export class RejectVerificationDto {
-  reason: string;
+  @IsString() reason: string;
 }
 
 @Injectable()

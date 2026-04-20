@@ -3,29 +3,38 @@ import {
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
+import {
+  IsBoolean,
+  IsInt,
+  IsObject,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 
 export class CreatePaymentMethodDto {
-  name: string;
-  code: string;
-  description?: string;
-  iconUrl?: string;
-  isActive?: boolean;
-  sortOrder?: number;
-  integrationKey?: string;
-  integrationParams?: Record<string, unknown>;
+  @IsString() name: string;
+  @IsString() code: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() iconUrl?: string;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+  @IsOptional() @IsInt() @Min(0) @Type(() => Number) sortOrder?: number;
+  @IsOptional() @IsString() integrationKey?: string;
+  @IsOptional() @IsObject() integrationParams?: Record<string, unknown>;
 }
 
 export class UpdatePaymentMethodDto {
-  name?: string;
-  code?: string;
-  description?: string;
-  iconUrl?: string;
-  isActive?: boolean;
-  sortOrder?: number;
-  integrationKey?: string;
-  integrationParams?: Record<string, unknown>;
+  @IsOptional() @IsString() name?: string;
+  @IsOptional() @IsString() code?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() iconUrl?: string;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+  @IsOptional() @IsInt() @Min(0) @Type(() => Number) sortOrder?: number;
+  @IsOptional() @IsString() integrationKey?: string;
+  @IsOptional() @IsObject() integrationParams?: Record<string, unknown>;
 }
 
 @Injectable()

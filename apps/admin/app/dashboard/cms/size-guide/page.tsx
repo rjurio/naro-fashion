@@ -214,7 +214,7 @@ export default function SizeGuidePage() {
         </div>
         <div className="flex items-center gap-2">
           <a
-            href="http://localhost:3000/pages/size-guide"
+            href={`${process.env.NEXT_PUBLIC_STOREFRONT_URL || ''}/pages/size-guide`}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] transition-colors"

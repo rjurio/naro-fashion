@@ -4,57 +4,68 @@ import {
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
+import {
+  IsArray,
+  IsBoolean,
+  IsDateString,
+  IsInt,
+  IsObject,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 
 export class CreateEventDto {
-  title: string;
-  titleSwahili?: string;
-  description?: string;
-  descriptionSwahili?: string;
-  eventDate: string;
-  location?: string;
-  customerName?: string;
-  socialLinks?: Record<string, string>;
-  coverImageUrl?: string;
-  productId?: string;
-  isFeatured?: boolean;
+  @IsString() title: string;
+  @IsOptional() @IsString() titleSwahili?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() descriptionSwahili?: string;
+  @IsDateString() eventDate: string;
+  @IsOptional() @IsString() location?: string;
+  @IsOptional() @IsString() customerName?: string;
+  @IsOptional() @IsObject() socialLinks?: Record<string, string>;
+  @IsOptional() @IsString() coverImageUrl?: string;
+  @IsOptional() @IsString() productId?: string;
+  @IsOptional() @IsBoolean() isFeatured?: boolean;
 }
 
 export class UpdateEventDto {
-  title?: string;
-  titleSwahili?: string;
-  description?: string;
-  descriptionSwahili?: string;
-  eventDate?: string;
-  location?: string;
-  customerName?: string;
-  socialLinks?: Record<string, string>;
-  coverImageUrl?: string;
-  productId?: string;
-  isFeatured?: boolean;
-  status?: string;
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() titleSwahili?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() descriptionSwahili?: string;
+  @IsOptional() @IsDateString() eventDate?: string;
+  @IsOptional() @IsString() location?: string;
+  @IsOptional() @IsString() customerName?: string;
+  @IsOptional() @IsObject() socialLinks?: Record<string, string>;
+  @IsOptional() @IsString() coverImageUrl?: string;
+  @IsOptional() @IsString() productId?: string;
+  @IsOptional() @IsBoolean() isFeatured?: boolean;
+  @IsOptional() @IsString() status?: string;
 }
 
 export class CustomerSubmitEventDto {
-  title: string;
-  description?: string;
-  eventDate: string;
-  location?: string;
-  socialLinks?: Record<string, string>;
-  productId: string;
+  @IsString() title: string;
+  @IsOptional() @IsString() description?: string;
+  @IsDateString() eventDate: string;
+  @IsOptional() @IsString() location?: string;
+  @IsOptional() @IsObject() socialLinks?: Record<string, string>;
+  @IsString() productId: string;
 }
 
 export class AddMediaDto {
-  url: string;
-  thumbnailUrl?: string;
-  mediaType?: string;
-  altText?: string;
-  sortOrder?: number;
+  @IsString() url: string;
+  @IsOptional() @IsString() thumbnailUrl?: string;
+  @IsOptional() @IsString() mediaType?: string;
+  @IsOptional() @IsString() altText?: string;
+  @IsOptional() @IsInt() @Min(0) @Type(() => Number) sortOrder?: number;
 }
 
 export class ReorderMediaDto {
-  mediaIds: string[];
+  @IsArray() @IsString({ each: true }) mediaIds: string[];
 }
 
 @Injectable()

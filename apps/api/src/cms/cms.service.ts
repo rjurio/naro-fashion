@@ -1,48 +1,54 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { IsString, IsOptional, IsEmail } from 'class-validator';
+import { IsString, IsOptional, IsEmail, IsBoolean, IsInt, IsNumber } from 'class-validator';
+import { Type } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../notifications/email.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 
+// IMPORTANT: NestJS global ValidationPipe uses whitelist:true which strips
+// ALL properties not declared via class-validator decorators. Plain TypeScript
+// types are erased at runtime. Every field that should be accepted MUST have
+// a class-validator decorator (@IsString, @IsBoolean, @IsInt, @IsOptional).
+
 export class CreateBannerDto {
-  title: string;
-  titleSwahili?: string;
-  subtitle?: string;
-  subtitleSwahili?: string;
-  imageUrl?: string;
-  linkUrl?: string;
-  sortOrder?: number;
-  isActive?: boolean;
+  @IsString() title: string;
+  @IsOptional() @IsString() titleSwahili?: string;
+  @IsOptional() @IsString() subtitle?: string;
+  @IsOptional() @IsString() subtitleSwahili?: string;
+  @IsOptional() @IsString() imageUrl?: string;
+  @IsOptional() @IsString() linkUrl?: string;
+  @IsOptional() @IsInt() @Type(() => Number) sortOrder?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
 export class UpdateBannerDto {
-  title?: string;
-  titleSwahili?: string;
-  subtitle?: string;
-  subtitleSwahili?: string;
-  imageUrl?: string;
-  linkUrl?: string;
-  sortOrder?: number;
-  isActive?: boolean;
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() titleSwahili?: string;
+  @IsOptional() @IsString() subtitle?: string;
+  @IsOptional() @IsString() subtitleSwahili?: string;
+  @IsOptional() @IsString() imageUrl?: string;
+  @IsOptional() @IsString() linkUrl?: string;
+  @IsOptional() @IsInt() @Type(() => Number) sortOrder?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
 export class CreatePageDto {
-  title: string;
-  titleSwahili?: string;
-  slug: string;
-  content: string;
-  contentSwahili?: string;
-  isPublished?: boolean;
+  @IsString() title: string;
+  @IsOptional() @IsString() titleSwahili?: string;
+  @IsString() slug: string;
+  @IsString() content: string;
+  @IsOptional() @IsString() contentSwahili?: string;
+  @IsOptional() @IsBoolean() isPublished?: boolean;
 }
 
 export class UpdatePageDto {
-  title?: string;
-  titleSwahili?: string;
-  slug?: string;
-  content?: string;
-  contentSwahili?: string;
-  isPublished?: boolean;
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() titleSwahili?: string;
+  @IsOptional() @IsString() slug?: string;
+  @IsOptional() @IsString() content?: string;
+  @IsOptional() @IsString() contentSwahili?: string;
+  @IsOptional() @IsBoolean() isPublished?: boolean;
 }
 
 export class UpdateSettingDto {
@@ -55,27 +61,27 @@ export class UpdateSettingDto {
 }
 
 export class CreateHeroSlideDto {
-  title?: string;
-  imageUrl: string;
-  sortOrder?: number;
-  isActive?: boolean;
+  @IsOptional() @IsString() title?: string;
+  @IsString() imageUrl: string;
+  @IsOptional() @IsInt() @Type(() => Number) sortOrder?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
 export class UpdateHeroSlideDto {
-  title?: string;
-  imageUrl?: string;
-  sortOrder?: number;
-  isActive?: boolean;
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() imageUrl?: string;
+  @IsOptional() @IsInt() @Type(() => Number) sortOrder?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
 export class CreateInstagramPostDto {
-  caption?: string;
-  imageUrl: string;
-  postUrl?: string;
-  likes?: number;
-  sortOrder?: number;
-  isActive?: boolean;
-  isPinned?: boolean;
+  @IsOptional() @IsString() caption?: string;
+  @IsString() imageUrl: string;
+  @IsOptional() @IsString() postUrl?: string;
+  @IsOptional() @IsInt() @Type(() => Number) likes?: number;
+  @IsOptional() @IsInt() @Type(() => Number) sortOrder?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+  @IsOptional() @IsBoolean() isPinned?: boolean;
 }
 
 export class SubmitContactDto {
@@ -112,13 +118,13 @@ export class ReplyContactDto {
 }
 
 export class UpdateInstagramPostDto {
-  caption?: string;
-  imageUrl?: string;
-  postUrl?: string;
-  likes?: number;
-  sortOrder?: number;
-  isActive?: boolean;
-  isPinned?: boolean;
+  @IsOptional() @IsString() caption?: string;
+  @IsOptional() @IsString() imageUrl?: string;
+  @IsOptional() @IsString() postUrl?: string;
+  @IsOptional() @IsInt() @Type(() => Number) likes?: number;
+  @IsOptional() @IsInt() @Type(() => Number) sortOrder?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+  @IsOptional() @IsBoolean() isPinned?: boolean;
 }
 
 @Injectable()

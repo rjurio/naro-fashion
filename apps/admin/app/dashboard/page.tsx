@@ -216,7 +216,7 @@ export default function DashboardPage() {
           >
             Download Report
           </Button>
-          <a href="http://localhost:3000" target="_blank" rel="noopener noreferrer">
+          <a href={process.env.NEXT_PUBLIC_STOREFRONT_URL || '/'} target="_blank" rel="noopener noreferrer">
             <Button size="sm" className="gap-1.5">
               <ArrowUpRight className="w-4 h-4" />
               View Store

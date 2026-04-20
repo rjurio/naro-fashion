@@ -1,24 +1,33 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  IsArray,
+  IsDateString,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 
 export class CreateFlashSaleDto {
-  title: string;
-  description?: string;
-  startDate: string;
-  endDate: string;
-  salePrice: number;
-  productIds: string[];
+  @IsString() title: string;
+  @IsOptional() @IsString() description?: string;
+  @IsDateString() startDate: string;
+  @IsDateString() endDate: string;
+  @IsNumber() @Min(0) @Type(() => Number) salePrice: number;
+  @IsArray() @IsString({ each: true }) productIds: string[];
 }
 
 export class UpdateFlashSaleDto {
-  title?: string;
-  description?: string;
-  startDate?: string;
-  endDate?: string;
-  salePrice?: number;
-  productIds?: string[];
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsDateString() startDate?: string;
+  @IsOptional() @IsDateString() endDate?: string;
+  @IsOptional() @IsNumber() @Min(0) @Type(() => Number) salePrice?: number;
+  @IsOptional() @IsArray() @IsString({ each: true }) productIds?: string[];
 }
 
 @Injectable()

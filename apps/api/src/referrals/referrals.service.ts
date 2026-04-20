@@ -3,12 +3,13 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
+import { IsString } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { randomBytes } from 'crypto';
 
 export class ApplyReferralDto {
-  code: string;
+  @IsString() code: string;
 }
 
 @Injectable()
