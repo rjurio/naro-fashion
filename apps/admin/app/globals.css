@@ -126,6 +126,15 @@ body {
   font-feature-settings: 'rlig' 1, 'calt' 1;
 }
 
+/* Native <select> dropdown: match theme. Browsers only honor color/background
+   on <option>, so set them explicitly — otherwise the OS defaults to white
+   background + black text, which is unreadable over the dark theme. */
+select option,
+select optgroup {
+  background-color: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
