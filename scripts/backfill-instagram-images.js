@@ -21,17 +21,35 @@
 
 const path = require('path');
 const fs = require('fs');
-const axios = require('axios');
 const { pipeline } = require('stream/promises');
 
-// Load .env from apps/api so we get INSTAGRAM_* without depending on the
-// shell export. The root and packages/database .env files may also define
-// these; apps/api/.env wins if all three are loaded sequentially with
-// override: false (dotenv's default).
-require('dotenv').config({ path: path.join(__dirname, '..', 'apps', 'api', '.env') });
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
-
+// axios isn't hoisted to the repo root — resolve it from apps/api where
+// NestJS declares it as a dependency. Same rationale as PrismaClient.
+const axios = require(path.join(__dirname, '..', 'apps', 'api', 'node_modules', 'axios'));
 const { PrismaClient } = require(path.join(__dirname, '..', 'packages', 'database', 'node_modules', '@prisma', 'client'));
+
+// Tiny in-script .env loader so we don't pull in the dotenv package.
+// Loads INSTAGRAM_* (and anything else) from the three .env files into
+// process.env without overriding vars that are already set.
+function loadEnv(envPath) {
+  if (!fs.existsSync(envPath)) return;
+  const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    let val = line.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = val;
+  }
+}
+loadEnv(path.join(__dirname, '..', 'apps', 'api', '.env'));
+loadEnv(path.join(__dirname, '..', '.env'));
+loadEnv(path.join(__dirname, '..', 'packages', 'database', '.env'));
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'apps', 'api', 'uploads', 'instagram');
 
