@@ -2,6 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import axios from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
+import { pipeline } from 'stream/promises';
+
+const INSTAGRAM_UPLOADS_DIR = path.join(process.cwd(), 'uploads', 'instagram');
 
 @Injectable()
 export class InstagramService {
@@ -49,7 +54,10 @@ export class InstagramService {
         params: {
           fields: 'id,caption,media_type,media_url,permalink,thumbnail_url,timestamp',
           access_token: token,
-          limit: 12,
+          // Pull more than the storefront grid renders — the homepage shows 12
+          // tiles but we want older posts' URLs to stay fresh too, so that
+          // pinned/manually-promoted older posts don't rot.
+          limit: 50,
         },
         timeout: 15000,
       });
@@ -62,12 +70,26 @@ export class InstagramService {
 
       for (const post of posts) {
         try {
-          const imageUrl =
+          const remoteUrl =
             post.media_type === 'VIDEO'
               ? post.thumbnail_url || post.media_url
               : post.media_url;
 
-          if (!imageUrl) continue;
+          if (!remoteUrl) continue;
+
+          // Mirror the Instagram CDN image to local disk so it survives the
+          // ~24h signed-URL expiry. If the download fails we fall back to the
+          // remote URL for this cycle — better a temporarily-broken image
+          // than losing the post entirely.
+          let imageUrl: string;
+          try {
+            imageUrl = await this.downloadInstagramMedia(remoteUrl, post.id);
+          } catch (dlErr) {
+            this.logger.warn(
+              `Instagram media download failed for ${post.id}, storing remote URL as fallback: ${dlErr instanceof Error ? dlErr.message : dlErr}`,
+            );
+            imageUrl = remoteUrl;
+          }
 
           await this.prisma.instagramPost.upsert({
             where: { instagramMediaId: post.id },
@@ -108,6 +130,46 @@ export class InstagramService {
     }
 
     return { synced, errors };
+  }
+
+  /**
+   * Download an Instagram CDN media URL to local disk and return a
+   * `/uploads/instagram/<mediaId>.<ext>` path that ServeStaticModule will
+   * serve. Instagram's `scontent.cdninstagram.com` URLs are signed and
+   * expire within ~24h, so hotlinking them results in broken images in
+   * the storefront feed — mirroring them locally pins the asset.
+   *
+   * Idempotent: if the final file already exists we skip the download and
+   * return the local path. Failed downloads leave no .part residue because
+   * we write to a temp file and atomically rename on success.
+   */
+  private async downloadInstagramMedia(remoteUrl: string, mediaId: string): Promise<string> {
+    // Extract a clean extension from the URL path (stripping query string).
+    // Fall back to .jpg — Instagram image media and video thumbnails are
+    // always JPEG even when the extension is missing.
+    const pathPart = remoteUrl.split('?')[0];
+    const extMatch = pathPart.match(/\.(jpe?g|png|webp|gif|mp4)$/i);
+    const ext = extMatch ? extMatch[1].toLowerCase().replace('jpeg', 'jpg') : 'jpg';
+    const fileName = `${mediaId}.${ext}`;
+    const finalPath = path.join(INSTAGRAM_UPLOADS_DIR, fileName);
+    const publicPath = `/uploads/instagram/${fileName}`;
+
+    if (fs.existsSync(finalPath) && fs.statSync(finalPath).size > 0) {
+      return publicPath;
+    }
+
+    fs.mkdirSync(INSTAGRAM_UPLOADS_DIR, { recursive: true });
+    const tmpPath = `${finalPath}.part`;
+
+    const response = await axios.get(remoteUrl, {
+      responseType: 'stream',
+      timeout: 30000,
+      maxContentLength: 15 * 1024 * 1024,
+    });
+    await pipeline(response.data, fs.createWriteStream(tmpPath));
+    fs.renameSync(tmpPath, finalPath);
+
+    return publicPath;
   }
 
   /**
