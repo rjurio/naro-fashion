@@ -25,7 +25,10 @@ const { pipeline } = require('stream/promises');
 
 // axios isn't hoisted to the repo root — resolve it from apps/api where
 // NestJS declares it as a dependency. Same rationale as PrismaClient.
-const axios = require(path.join(__dirname, '..', 'apps', 'api', 'node_modules', 'axios'));
+// Axios' CJS build exports as `{ default, AxiosError, ... }`, so we need
+// `.default` to get the callable instance with `.get`/`.post`.
+const axiosMod = require(path.join(__dirname, '..', 'apps', 'api', 'node_modules', 'axios'));
+const axios = axiosMod.default || axiosMod;
 const { PrismaClient } = require(path.join(__dirname, '..', 'packages', 'database', 'node_modules', '@prisma', 'client'));
 
 // Tiny in-script .env loader so we don't pull in the dotenv package.
