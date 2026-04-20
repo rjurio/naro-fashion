@@ -124,7 +124,7 @@ export const wishlistApi = {
 };
 
 export const ordersApi = {
-  create: (data: { addressId: string; paymentMethod: string; notes?: string }) =>
+  create: (data: { addressId?: string; paymentMethod: string; notes?: string }) =>
     api.post<any>('/orders', data),
   getAll: (params?: Record<string, string | number>) =>
     api.get<any>(`/orders${toQuery(params)}`),

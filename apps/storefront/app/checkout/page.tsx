@@ -102,7 +102,9 @@ export default function CheckoutPage() {
 
   const selectedDelivery = deliveryMethods.find((d) => d.id === deliveryMethod)!;
   const subtotal = orderItems.reduce((sum, item) => {
-    const price = item.product?.price || item.price || 0;
+    const price = Number(
+      item.variant?.price ?? item.product?.basePrice ?? item.product?.price ?? item.price ?? 0,
+    );
     const qty = item.quantity || 1;
     return sum + price * qty;
   }, 0);
@@ -186,10 +188,20 @@ export default function CheckoutPage() {
   const handlePlaceOrder = async () => {
     setPlacing(true);
     try {
+      // UI ids ("mobile"/"card"/"bank"/"cod") → backend enum.
+      // Keep in sync with paymentMethods[] above and the API's PaymentMethod enum.
+      const paymentMethodEnum =
+        paymentMethod === "mobile"
+          ? "MOBILE_MONEY"
+          : paymentMethod === "card"
+            ? "CARD"
+            : paymentMethod === "bank"
+              ? "BANK_TRANSFER"
+              : "CASH_ON_DELIVERY";
+
       // Step 1: Create the order
       const order = await ordersApi.create({
-        addressId: "",
-        paymentMethod,
+        paymentMethod: paymentMethodEnum,
         notes: `Delivery: ${deliveryMethod}. Address: ${shipping.name}, ${shipping.street}, ${shipping.city}, ${shipping.region}. Phone: ${shipping.phone}`,
       });
 
@@ -279,7 +291,8 @@ export default function CheckoutPage() {
   }, [paymentFlowStatus, orderId, router]);
 
   const getItemName = (item: any) => item.product?.name || item.name || t("checkout.items");
-  const getItemPrice = (item: any) => item.product?.price || item.price || 0;
+  const getItemPrice = (item: any) =>
+    Number(item.variant?.price ?? item.product?.basePrice ?? item.product?.price ?? item.price ?? 0);
   const getItemSize = (item: any) => item.variant?.name || item.size || "";
   const getItemImage = (item: any) => item.product?.images?.[0] || item.image || "";
 

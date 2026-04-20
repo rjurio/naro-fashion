@@ -8,8 +8,9 @@ export enum PaymentMethod {
 }
 
 export class CreateOrderDto {
+  @IsOptional()
   @IsString()
-  addressId: string;
+  addressId?: string;
 
   @IsEnum(PaymentMethod)
   paymentMethod: PaymentMethod;

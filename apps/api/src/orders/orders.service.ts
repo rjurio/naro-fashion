@@ -37,13 +37,16 @@ export class OrdersService {
       throw new BadRequestException('Cart is empty');
     }
 
-    // Verify address belongs to user
-    const address = await this.prisma.address.findFirst({
-      where: { id: dto.addressId, userId },
-    });
-
-    if (!address) {
-      throw new NotFoundException('Address not found');
+    // Address is optional — when omitted, shipping details are captured in
+    // notes (current storefront checkout flow). If an addressId is supplied,
+    // it must belong to the user.
+    if (dto.addressId) {
+      const address = await this.prisma.address.findFirst({
+        where: { id: dto.addressId, userId },
+      });
+      if (!address) {
+        throw new NotFoundException('Address not found');
+      }
     }
 
     // Calculate totals
@@ -63,7 +66,7 @@ export class OrdersService {
           tenantId: this.tenantContext.requireId,
           orderNumber: this.generateOrderNumber(),
           userId,
-          addressId: dto.addressId,
+          addressId: dto.addressId || null,
           status: 'PENDING',
           subtotal,
           shippingCost,
