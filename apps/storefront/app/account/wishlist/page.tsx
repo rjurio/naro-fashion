@@ -5,8 +5,10 @@ import Link from "next/link";
 import { Heart, ShoppingCart, X, ArrowLeft, Star, Loader2 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { formatPrice } from "@/lib/utils";
-import { wishlistApi } from "@/lib/api";
+import { wishlistApi, cartApi } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { useRouter } from "next/navigation";
+import { useToast } from "@/contexts/ToastContext";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -26,12 +28,17 @@ interface WishlistItem {
   reviewCount: number;
   inStock: boolean;
   slug?: string;
+  defaultVariantId?: string;
 }
 
 function normalizeItem(raw: any): WishlistItem {
   const product = raw.product || raw;
   const imgRaw = product.images?.[0];
   const imgUrl = typeof imgRaw === 'string' ? imgRaw : imgRaw?.url;
+  // Pick the first in-stock variant; fall back to the first variant so a
+  // 0-stock item still resolves an id and the button can be disabled cleanly.
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  const firstInStock = variants.find((v: any) => (v.stock ?? 0) > 0) || variants[0];
   return {
     id: product.id || raw.productId,
     name: product.name || product.title || "Product",
@@ -40,17 +47,21 @@ function normalizeItem(raw: any): WishlistItem {
     image: resolveImg(imgUrl),
     rating: product.avgRating ?? product.rating ?? 0,
     reviewCount: product.reviewCount ?? 0,
-    // Wishlist API doesn't include stock info; default to active if product is active
-    inStock: product.inStock != null ? product.inStock : (product.isActive !== false),
+    // Prefer variant-stock signal; otherwise respect the product's active flag.
+    inStock: firstInStock ? (firstInStock.stock ?? 0) > 0 : (product.isActive !== false),
     slug: product.slug,
+    defaultVariantId: firstInStock?.id,
   };
 }
 
 export default function WishlistPage() {
   const { t } = useTranslation();
+  const toast = useToast();
+  const router = useRouter();
   const [items, setItems] = useState<WishlistItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [addingId, setAddingId] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchWishlist() {
@@ -66,6 +77,25 @@ export default function WishlistPage() {
     }
     fetchWishlist();
   }, []);
+
+  const addToCart = async (item: WishlistItem) => {
+    // Without a variant id the cart API 400s — send the user to the detail
+    // page to pick a size (or in our current catalog, the "Standard"
+    // default will auto-select on arrival).
+    if (!item.defaultVariantId) {
+      router.push(item.slug ? `/products/${item.slug}` : `/products/${item.id}`);
+      return;
+    }
+    setAddingId(item.id);
+    try {
+      await cartApi.addItem({ productId: item.id, variantId: item.defaultVariantId, quantity: 1 });
+      toast.success(t("common.addedToCart"));
+    } catch {
+      toast.error(t("common.failedToAddToCart"));
+    } finally {
+      setAddingId(null);
+    }
+  };
 
   const removeItem = async (id: string) => {
     setRemovingId(id);
@@ -175,9 +205,14 @@ export default function WishlistPage() {
                     <Button
                       size="sm"
                       className="w-full mt-3 gap-1.5 text-xs"
-                      disabled={!item.inStock}
+                      disabled={!item.inStock || addingId === item.id}
+                      onClick={() => addToCart(item)}
                     >
-                      <ShoppingCart className="h-3.5 w-3.5" />
+                      {addingId === item.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <ShoppingCart className="h-3.5 w-3.5" />
+                      )}
                       {item.inStock ? t("common.addToCart") : t("common.outOfStock")}
                     </Button>
                   </div>

@@ -20,6 +20,13 @@ export class WishlistService {
         images: true,
         isActive: true,
         category: { select: { id: true, name: true, slug: true } },
+        // Surface variants so the wishlist grid's Add-to-Cart button can
+        // resolve a variantId without a second round-trip to /products/:slug.
+        variants: {
+          where: { isActive: true },
+          select: { id: true, name: true, stock: true, price: true },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     },
   };
