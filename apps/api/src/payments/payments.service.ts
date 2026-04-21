@@ -9,7 +9,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { CreatePaymentDto, UpdatePaymentDto } from './dto/create-payment.dto';
 import { InitiatePaymentDto } from './dto/initiate-payment.dto';
-import { SelcomProvider } from './selcom.provider';
+import { PaymentProviderRegistry } from './payment-provider.registry';
+import {
+  PROVIDER_CODES,
+  ProviderCode,
+  ProviderCredentials,
+} from './payment-provider.types';
 
 @Injectable()
 export class PaymentsService {
@@ -17,7 +22,7 @@ export class PaymentsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly selcom: SelcomProvider,
+    private readonly registry: PaymentProviderRegistry,
     private readonly tenantContext: TenantContext,
   ) {}
 
@@ -77,12 +82,13 @@ export class PaymentsService {
   // ─── Gateway payment initiation ───────────────────────────────────────
 
   /**
-   * Initiate a payment through the Selcom gateway.
+   * Initiate a payment through the resolved gateway (Selcom or ClickPesa).
    *
-   * 1. Creates a payment record in PENDING status
-   * 2. Calls Selcom to initiate USSD push or card checkout
-   * 3. Updates payment with gateway reference
-   * 4. Returns payment record + gateway info for the frontend
+   * 1. Resolves the provider from dto.providerCode or the tenant's active PaymentMethod.
+   * 2. Creates a payment record in PENDING status.
+   * 3. Calls the provider to initiate USSD push or card checkout.
+   * 4. Updates payment with gateway reference + provider code.
+   * 5. Returns payment record + gateway info for the frontend.
    */
   async initiateGatewayPayment(dto: InitiatePaymentDto) {
     if (!dto.orderId && !dto.rentalOrderId) {
@@ -126,17 +132,23 @@ export class PaymentsService {
       orderNumber = rental.rentalNumber;
     }
 
-    // Validate amount does not exceed order total (allow partial payments)
     if (dto.amount > orderTotal && orderTotal > 0) {
       throw new BadRequestException(
         `Payment amount (${dto.amount}) exceeds order total (${orderTotal})`,
       );
     }
 
-    // Generate a unique transaction reference
+    // Resolve which provider handles this request.
+    const providerCode = await this.resolveProviderCode(
+      tenantId,
+      dto.method,
+      dto.providerCode,
+    );
+    const provider = this.registry.resolve(providerCode);
+    const creds = await this.loadTenantCredentials(tenantId, providerCode);
+
     const transactionRef = `NARO-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    // Create payment record
     const payment = await this.prisma.payment.create({
       data: {
         tenantId,
@@ -146,6 +158,7 @@ export class PaymentsService {
         method: dto.method,
         status: 'PENDING',
         transactionRef,
+        providerCode,
       },
       include: {
         order: { select: { id: true, orderNumber: true, total: true } },
@@ -155,26 +168,28 @@ export class PaymentsService {
       },
     });
 
-    // Call Selcom to initiate the payment
     this.logger.log(
-      `Initiating ${dto.method} payment for ${orderNumber}: ${dto.amount} TZS (ref: ${transactionRef})`,
+      `Initiating ${dto.method} via ${providerCode} for ${orderNumber}: ${dto.amount} TZS (ref: ${transactionRef})`,
     );
 
-    const gatewayResponse = await this.selcom.initiatePayment({
-      orderId: transactionRef,
-      amount: dto.amount,
-      phoneNumber: dto.phoneNumber,
-      method: dto.method as 'MOBILE_MONEY' | 'CARD',
-      buyerEmail: dto.buyerEmail,
-      buyerName: dto.buyerName,
-    });
+    const gatewayResponse = await provider.initiatePayment(
+      {
+        orderId: transactionRef,
+        amount: dto.amount,
+        phoneNumber: dto.phoneNumber,
+        method: dto.method as 'MOBILE_MONEY' | 'CARD',
+        buyerEmail: dto.buyerEmail,
+        buyerName: dto.buyerName,
+      },
+      creds,
+    );
 
-    // Update payment with gateway response
     if (gatewayResponse.success) {
       await this.prisma.payment.update({
         where: { id: payment.id },
         data: {
           status: 'PROCESSING',
+          providerTransactionId: gatewayResponse.transactionId ?? null,
           gatewayResponse: gatewayResponse.rawResponse ?? {
             transactionId: gatewayResponse.transactionId,
             reference: gatewayResponse.reference,
@@ -182,7 +197,6 @@ export class PaymentsService {
         },
       });
     } else {
-      // Gateway rejected — mark as failed
       await this.prisma.payment.update({
         where: { id: payment.id },
         data: {
@@ -202,17 +216,12 @@ export class PaymentsService {
       gatewayUrl: gatewayResponse.gatewayUrl,
       message: gatewayResponse.message,
       method: dto.method,
+      providerCode,
     };
   }
 
   // ─── Payment status polling ───────────────────────────────────────────
 
-  /**
-   * Check the status of a payment. The frontend polls this endpoint.
-   *
-   * If the payment is still PROCESSING, it also queries the Selcom API
-   * for a real-time status update and syncs it to the database.
-   */
   async pollPaymentStatus(transactionRef: string) {
     const tenantId = this.tenantContext.requireId;
 
@@ -230,74 +239,59 @@ export class PaymentsService {
       );
     }
 
-    // If already in a terminal state, return immediately
     if (['COMPLETED', 'FAILED', 'REFUNDED'].includes(payment.status)) {
-      return {
-        paymentId: payment.id,
-        transactionRef: payment.transactionRef,
-        status: payment.status,
-        amount: payment.amount,
-        method: payment.method,
-        orderId: payment.orderId,
-        rentalOrderId: payment.rentalOrderId,
-      };
+      return this.paymentResponse(payment);
     }
 
-    // If still processing, check with the gateway
-    const gatewayStatus =
-      await this.selcom.checkPaymentStatus(transactionRef);
+    // Dispatch to the right provider.
+    const providerCode =
+      (payment.providerCode as ProviderCode | null) ?? PROVIDER_CODES.SELCOM;
+    const provider = this.registry.resolve(providerCode);
+    const creds = await this.loadTenantCredentials(tenantId, providerCode);
+
+    const gatewayStatus = await provider.checkPaymentStatus(
+      transactionRef,
+      creds,
+    );
 
     if (
       gatewayStatus.success &&
-      gatewayStatus.status !== 'PENDING'
+      gatewayStatus.status !== 'PENDING' &&
+      gatewayStatus.status !== 'PROCESSING'
     ) {
-      // Update payment record with new status
       const updatedPayment = await this.prisma.payment.update({
         where: { id: payment.id },
         data: {
           status: gatewayStatus.status,
-          gatewayResponse: gatewayStatus.rawResponse ?? payment.gatewayResponse,
+          lastPolledAt: new Date(),
+          gatewayResponse:
+            gatewayStatus.rawResponse ?? payment.gatewayResponse ?? undefined,
         },
       });
 
-      // If completed, update order payment status
       if (gatewayStatus.status === 'COMPLETED' && payment.orderId) {
-        await this.updateOrderPaymentStatus(payment.orderId);
+        await this.updateOrderPaymentStatus(payment.orderId, tenantId);
       }
       if (gatewayStatus.status === 'COMPLETED' && payment.rentalOrderId) {
-        await this.updateRentalPaymentStatus(payment.rentalOrderId);
+        await this.updateRentalPaymentStatus(payment.rentalOrderId, tenantId);
       }
 
-      return {
-        paymentId: updatedPayment.id,
-        transactionRef: updatedPayment.transactionRef,
-        status: updatedPayment.status,
-        amount: updatedPayment.amount,
-        method: updatedPayment.method,
-        orderId: updatedPayment.orderId,
-        rentalOrderId: updatedPayment.rentalOrderId,
-      };
+      return this.paymentResponse(updatedPayment);
     }
 
-    // Still pending/processing
-    return {
-      paymentId: payment.id,
-      transactionRef: payment.transactionRef,
-      status: payment.status,
-      amount: payment.amount,
-      method: payment.method,
-      orderId: payment.orderId,
-      rentalOrderId: payment.rentalOrderId,
-    };
+    // Still pending/processing — just update lastPolledAt for reconciliation.
+    await this.prisma.payment.update({
+      where: { id: payment.id },
+      data: { lastPolledAt: new Date() },
+    });
+
+    return this.paymentResponse(payment);
   }
 
-  // ─── Webhook handling (with signature verification) ───────────────────
+  // ─── Webhook handling ─────────────────────────────────────────────────
 
   /**
-   * Handle incoming webhook callbacks from Selcom.
-   *
-   * The controller passes the raw body + signature header so we can
-   * verify authenticity before processing.
+   * Selcom webhook (legacy route; tenant comes from TenantContext).
    */
   async handleWebhook(
     payload: {
@@ -313,21 +307,30 @@ export class PaymentsService {
     },
     rawBody?: string,
     signature?: string,
+    opts?: { tenantId?: string; providerCode?: ProviderCode },
   ) {
-    // Verify webhook signature if Selcom is configured
-    if (rawBody && signature && this.selcom.configured) {
-      const isValid = this.selcom.verifyWebhookSignature(rawBody, signature);
+    const providerCode = opts?.providerCode ?? PROVIDER_CODES.SELCOM;
+    const tenantId = opts?.tenantId ?? this.tenantContext.requireId;
+
+    const provider = this.registry.resolve(providerCode);
+    const creds = await this.loadTenantCredentials(tenantId, providerCode);
+
+    // Verify webhook signature.
+    if (rawBody) {
+      const isValid = provider.verifyWebhookSignature(
+        rawBody,
+        signature,
+        creds,
+      );
       if (!isValid) {
-        this.logger.warn('Webhook rejected: invalid signature');
+        this.logger.warn(
+          `Webhook rejected: invalid signature for ${providerCode}`,
+        );
         throw new ForbiddenException('Invalid webhook signature');
       }
     }
 
-    // Extract the transaction reference — Selcom may use different field names
-    const txnRef =
-      payload.transactionRef ||
-      payload.order_id ||
-      payload.reference;
+    const txnRef = this.extractTransactionRef(payload, providerCode);
 
     if (!txnRef) {
       this.logger.warn('Webhook received without transaction reference');
@@ -336,50 +339,148 @@ export class PaymentsService {
       );
     }
 
-    const tenantId = this.tenantContext.requireId;
-
     const payment = await this.prisma.payment.findFirst({
-      where: { transactionRef: txnRef, tenantId },
+      where: { tenantId, OR: [{ transactionRef: txnRef }, { transactionRef: this.denormalizeClickPesaRef(txnRef) }] },
     });
 
     if (!payment) {
       this.logger.warn(`Webhook: payment not found for ref ${txnRef}`);
-      throw new NotFoundException(
-        `Payment with ref ${txnRef} not found`,
-      );
+      throw new NotFoundException(`Payment with ref ${txnRef} not found`);
     }
 
-    // Map the status from the webhook
     const webhookStatus =
       payload.status ||
       payload.payment_status ||
-      payload.result;
+      payload.result ||
+      payload.event;
 
     const mappedStatus = this.mapWebhookStatus(webhookStatus);
 
     this.logger.log(
-      `Webhook: updating payment ${payment.id} (ref: ${txnRef}) to ${mappedStatus}`,
+      `Webhook (${providerCode}): updating payment ${payment.id} (ref: ${txnRef}) → ${mappedStatus}`,
     );
 
     const updated = await this.prisma.payment.update({
       where: { id: payment.id },
       data: {
         status: mappedStatus,
+        providerCode: payment.providerCode ?? providerCode,
+        providerTransactionId:
+          payment.providerTransactionId ??
+          payload.id ??
+          payload.transid ??
+          null,
         gatewayResponse: payload,
       },
     });
 
-    // Update order/rental payment status based on total paid
     if (mappedStatus === 'COMPLETED') {
       if (updated.orderId) {
-        await this.updateOrderPaymentStatus(updated.orderId);
+        await this.updateOrderPaymentStatus(updated.orderId, tenantId);
       }
       if (updated.rentalOrderId) {
-        await this.updateRentalPaymentStatus(updated.rentalOrderId);
+        await this.updateRentalPaymentStatus(updated.rentalOrderId, tenantId);
       }
     }
 
     return { received: true, paymentId: updated.id, status: updated.status };
+  }
+
+  /**
+   * ClickPesa webhook entry point. Tenant resolved from URL slug.
+   * Deduplicated via WebhookEvent (providerCode + eventId + type).
+   */
+  async handleClickPesaWebhook(args: {
+    tenantSlug: string;
+    payload: any;
+    rawBody: string;
+    signature: string | undefined;
+  }) {
+    const { tenantSlug, payload, rawBody, signature } = args;
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+    });
+    if (!tenant) {
+      throw new NotFoundException(`Tenant ${tenantSlug} not found`);
+    }
+    if (tenant.status !== 'ACTIVE' && tenant.status !== 'TRIAL') {
+      throw new ForbiddenException(`Tenant ${tenantSlug} is not active`);
+    }
+
+    const providerCode: ProviderCode = PROVIDER_CODES.CLICKPESA_MIXX;
+    const creds = await this.loadTenantCredentials(tenant.id, providerCode);
+    const provider = this.registry.resolve(providerCode);
+
+    // Checksum verification
+    const checksum =
+      payload?.checksum ?? (payload?.data && payload.data.checksum);
+    const checksumValid = provider.verifyWebhookSignature(
+      rawBody,
+      typeof checksum === 'string' ? checksum : signature,
+      creds,
+    );
+
+    // Persist the event first (idempotent).
+    const eventType = String(payload?.event ?? 'UNKNOWN');
+    const data = payload?.data ?? payload ?? {};
+    const providerEventId = String(
+      data?.id ?? data?.paymentReference ?? data?.orderReference ?? rawBody.length,
+    );
+    const orderReference = data?.orderReference ?? null;
+
+    try {
+      await this.prisma.webhookEvent.create({
+        data: {
+          tenantId: tenant.id,
+          providerCode,
+          providerEventId,
+          eventType,
+          orderReference,
+          checksumValid,
+          rawPayload: payload,
+          processed: false,
+        },
+      });
+    } catch (err: any) {
+      // Unique constraint = duplicate delivery. Ack and move on.
+      if (err?.code === 'P2002') {
+        this.logger.log(
+          `ClickPesa webhook duplicate (${eventType}/${providerEventId}) — ack`,
+        );
+        return { received: true, duplicate: true };
+      }
+      throw err;
+    }
+
+    if (!checksumValid) {
+      this.logger.warn(
+        `ClickPesa webhook: invalid checksum for event ${eventType}/${providerEventId}`,
+      );
+      throw new ForbiddenException('Invalid webhook checksum');
+    }
+
+    // Hand off to the shared handler with explicit tenantId.
+    const result = await this.handleWebhook(
+      {
+        ...data,
+        event: eventType,
+      },
+      undefined, // signature already verified above
+      undefined,
+      { tenantId: tenant.id, providerCode },
+    );
+
+    await this.prisma.webhookEvent.updateMany({
+      where: {
+        providerCode,
+        providerEventId,
+        eventType,
+      },
+      data: { processed: true },
+    });
+
+    return result;
   }
 
   // ─── Existing query methods ───────────────────────────────────────────
@@ -439,12 +540,11 @@ export class PaymentsService {
       },
     });
 
-    // If payment completed and linked to an order, update order payment status
     if (dto.status === 'COMPLETED' && updated.orderId) {
-      await this.updateOrderPaymentStatus(updated.orderId);
+      await this.updateOrderPaymentStatus(updated.orderId, tenantId);
     }
     if (dto.status === 'COMPLETED' && updated.rentalOrderId) {
-      await this.updateRentalPaymentStatus(updated.rentalOrderId);
+      await this.updateRentalPaymentStatus(updated.rentalOrderId, tenantId);
     }
 
     return updated;
@@ -485,15 +585,145 @@ export class PaymentsService {
 
   // ─── Internal helpers ─────────────────────────────────────────────────
 
+  /**
+   * Figure out which provider runs a given (method, tenant) pair.
+   * Preference: explicit dto.providerCode → tenant's single active mobile-money
+   * PaymentMethod → SELCOM fallback.
+   */
+  private async resolveProviderCode(
+    tenantId: string,
+    method: string,
+    explicitCode?: string,
+  ): Promise<ProviderCode> {
+    if (explicitCode && this.registry.has(explicitCode)) {
+      return explicitCode as ProviderCode;
+    }
+
+    if (method !== 'MOBILE_MONEY') {
+      // Cards: fall through to Selcom (the only card-capable provider today).
+      return PROVIDER_CODES.SELCOM;
+    }
+
+    // Look for an active tenant PaymentMethod with a code the registry knows about.
+    const methods = await this.prisma.paymentMethod.findMany({
+      where: {
+        tenantId,
+        isActive: true,
+        deletedAt: null,
+        code: { in: this.registry.list() },
+      },
+      orderBy: { sortOrder: 'asc' },
+    });
+
+    const clickpesa = methods.find(
+      (m) => m.code === PROVIDER_CODES.CLICKPESA_MIXX,
+    );
+    if (clickpesa) return PROVIDER_CODES.CLICKPESA_MIXX;
+
+    return PROVIDER_CODES.SELCOM;
+  }
+
+  /**
+   * Load per-tenant credentials for a provider from PaymentMethod.integrationParams.
+   * Returns undefined for providers that don't need per-tenant creds (Selcom today).
+   */
+  private async loadTenantCredentials(
+    tenantId: string,
+    providerCode: ProviderCode,
+  ): Promise<ProviderCredentials | undefined> {
+    if (providerCode === PROVIDER_CODES.SELCOM) {
+      // Selcom reads from global env vars; no per-tenant creds needed.
+      return undefined;
+    }
+
+    const pm = await this.prisma.paymentMethod.findFirst({
+      where: {
+        tenantId,
+        code: providerCode,
+        isActive: true,
+        deletedAt: null,
+      },
+    });
+
+    if (!pm || !pm.integrationParams) {
+      throw new BadRequestException(
+        `No active PaymentMethod with code ${providerCode} configured for this tenant.`,
+      );
+    }
+
+    return pm.integrationParams as ProviderCredentials;
+  }
+
+  private extractTransactionRef(
+    payload: any,
+    providerCode: ProviderCode,
+  ): string | undefined {
+    if (providerCode === PROVIDER_CODES.CLICKPESA_MIXX) {
+      return (
+        payload.orderReference ||
+        payload.reference ||
+        payload.order_id ||
+        payload.transactionRef
+      );
+    }
+    return (
+      payload.transactionRef ||
+      payload.order_id ||
+      payload.reference ||
+      payload.orderReference
+    );
+  }
+
+  /**
+   * ClickPesa strips non-alphanumerics from transaction refs, so "NARO-123..."
+   * arrives back as "NARO123...". Undo that to look up our Payment row.
+   */
+  private denormalizeClickPesaRef(sanitized: string): string {
+    const match = sanitized.match(/^NARO(\d+)(.+)$/);
+    if (!match) return sanitized;
+    return `NARO-${match[1]}-${match[2]}`;
+  }
+
+  private paymentResponse(payment: {
+    id: string;
+    transactionRef: string | null;
+    status: string;
+    amount: any;
+    method: string;
+    orderId: string | null;
+    rentalOrderId: string | null;
+  }) {
+    return {
+      paymentId: payment.id,
+      transactionRef: payment.transactionRef,
+      status: payment.status,
+      amount: payment.amount,
+      method: payment.method,
+      orderId: payment.orderId,
+      rentalOrderId: payment.rentalOrderId,
+    };
+  }
+
   private mapWebhookStatus(status: string | undefined): string {
     if (!status) return 'PENDING';
 
     const normalized = status.toUpperCase();
 
-    if (['COMPLETED', 'SUCCESSFUL', 'SUCCESS', 'PAID'].includes(normalized)) {
+    if (
+      [
+        'COMPLETED',
+        'SUCCESSFUL',
+        'SUCCESS',
+        'SETTLED',
+        'PAID',
+        'PAYMENT_RECEIVED',
+      ].includes(normalized)
+    ) {
       return 'COMPLETED';
     }
-    if (['FAILED', 'REJECTED', 'DECLINED'].includes(normalized)) {
+    if (
+      ['FAILED', 'REJECTED', 'DECLINED', 'PAYMENT_FAILED'].includes(normalized)
+    ) {
       return 'FAILED';
     }
     if (['CANCELLED', 'EXPIRED'].includes(normalized)) {
@@ -506,9 +736,10 @@ export class PaymentsService {
     return 'PENDING';
   }
 
-  private async updateOrderPaymentStatus(orderId: string) {
-    const tenantId = this.tenantContext.requireId;
-
+  private async updateOrderPaymentStatus(
+    orderId: string,
+    tenantId: string,
+  ) {
     const order = await this.prisma.order.findFirst({
       where: { id: orderId, tenantId },
     });
@@ -538,15 +769,10 @@ export class PaymentsService {
     });
   }
 
-  /**
-   * Update rental order status based on completed payments.
-   *
-   * RentalOrder uses a `status` field (not a separate `paymentStatus`).
-   * When the down payment is received, move from pending statuses to CONFIRMED.
-   */
-  private async updateRentalPaymentStatus(rentalOrderId: string) {
-    const tenantId = this.tenantContext.requireId;
-
+  private async updateRentalPaymentStatus(
+    rentalOrderId: string,
+    tenantId: string,
+  ) {
     const rental = await this.prisma.rentalOrder.findFirst({
       where: { id: rentalOrderId, tenantId },
     });
@@ -563,15 +789,16 @@ export class PaymentsService {
 
     const downPaymentDue = Number(rental.downPaymentAmount);
 
-    // If the down payment has been received and the rental is still in a
-    // pending state, advance it to CONFIRMED.
     const pendingStatuses = [
       'PENDING_ID_VERIFICATION',
       'PENDING_PAYMENT',
       'PENDING',
     ];
 
-    if (totalPaid >= downPaymentDue && pendingStatuses.includes(rental.status)) {
+    if (
+      totalPaid >= downPaymentDue &&
+      pendingStatuses.includes(rental.status)
+    ) {
       await this.prisma.rentalOrder.update({
         where: { id: rentalOrderId },
         data: { status: 'CONFIRMED' },

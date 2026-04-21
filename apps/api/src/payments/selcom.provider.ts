@@ -1,34 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
+import { normalizePhone } from './phone.util';
+import {
+  GatewayInitiateRequest,
+  GatewayInitiateResult,
+  GatewayStatusResult,
+  PaymentProvider,
+  PROVIDER_CODES,
+  ProviderCode,
+} from './payment-provider.types';
 
-export interface SelcomPaymentRequest {
-  orderId: string;
-  amount: number;
-  phoneNumber?: string;
-  method: 'MOBILE_MONEY' | 'CARD';
-  buyerEmail?: string;
-  buyerName?: string;
-  currency?: string;
-}
-
-export interface SelcomPaymentResponse {
-  success: boolean;
-  transactionId?: string;
-  reference?: string;
-  gatewayUrl?: string;
-  message?: string;
-  rawResponse?: any;
-}
-
-export interface SelcomStatusResponse {
-  success: boolean;
-  status: 'PENDING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
-  transactionId?: string;
-  resultCode?: string;
-  message?: string;
-  rawResponse?: any;
-}
+// Legacy aliases — kept so existing imports compile.
+export type SelcomPaymentRequest = GatewayInitiateRequest;
+export type SelcomPaymentResponse = GatewayInitiateResult;
+export type SelcomStatusResponse = GatewayStatusResult;
 
 /**
  * Selcom Checkout API integration for M-Pesa, Tigo Pesa, and Airtel Money payments in Tanzania.
@@ -39,7 +25,8 @@ export interface SelcomStatusResponse {
  * can be added by implementing the same interface methods.
  */
 @Injectable()
-export class SelcomProvider {
+export class SelcomProvider implements PaymentProvider {
+  readonly code: ProviderCode = PROVIDER_CODES.SELCOM;
   private readonly logger = new Logger(SelcomProvider.name);
   private readonly apiKey: string;
   private readonly apiSecret: string;
@@ -164,7 +151,7 @@ export class SelcomProvider {
       order_id: request.orderId,
       buyer_email: request.buyerEmail || 'customer@narofashion.co.tz',
       buyer_name: request.buyerName || 'Naro Customer',
-      buyer_phone: this.normalizePhone(request.phoneNumber || ''),
+      buyer_phone: normalizePhone(request.phoneNumber || ''),
       amount: request.amount,
       currency: request.currency || 'TZS',
       payment_methods: 'USSDPUSH',
@@ -224,7 +211,7 @@ export class SelcomProvider {
       order_id: request.orderId,
       buyer_email: request.buyerEmail || 'customer@narofashion.co.tz',
       buyer_name: request.buyerName || 'Naro Customer',
-      buyer_phone: this.normalizePhone(request.phoneNumber || ''),
+      buyer_phone: normalizePhone(request.phoneNumber || ''),
       amount: request.amount,
       currency: request.currency || 'TZS',
       payment_methods: 'ALL',
@@ -273,6 +260,7 @@ export class SelcomProvider {
    */
   async initiatePayment(
     request: SelcomPaymentRequest,
+    _creds?: unknown,
   ): Promise<SelcomPaymentResponse> {
     if (request.method === 'MOBILE_MONEY') {
       return this.initiateUssdPush(request);
@@ -285,6 +273,7 @@ export class SelcomProvider {
    */
   async checkPaymentStatus(
     transactionRef: string,
+    _creds?: unknown,
   ): Promise<SelcomStatusResponse> {
     if (!this.isConfigured) {
       this.logger.warn(
@@ -327,12 +316,21 @@ export class SelcomProvider {
    * Selcom sends a signature header that can be verified against the payload
    * using the API secret.
    */
-  verifyWebhookSignature(payload: string, signature: string): boolean {
+  verifyWebhookSignature(
+    payload: string,
+    signature: string | undefined,
+    _creds?: unknown,
+  ): boolean {
     if (!this.isConfigured) {
       this.logger.warn(
         'Selcom not configured — skipping webhook signature verification',
       );
       return true;
+    }
+
+    if (!signature) {
+      this.logger.warn('Selcom webhook: missing signature header');
+      return false;
     }
 
     try {
@@ -362,7 +360,7 @@ export class SelcomProvider {
    */
   private mapSelcomStatus(
     selcomStatus: string | undefined,
-  ): 'PENDING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' {
+  ): GatewayStatusResult['status'] {
     if (!selcomStatus) return 'PENDING';
 
     const normalized = selcomStatus.toUpperCase();
@@ -388,28 +386,11 @@ export class SelcomProvider {
       return 'CANCELLED';
     }
 
+    if (normalized === 'PROCESSING') {
+      return 'PROCESSING';
+    }
+
     return 'PENDING';
-  }
-
-  /**
-   * Normalize Tanzanian phone numbers to international format (255XXXXXXXXX).
-   */
-  private normalizePhone(phone: string): string {
-    let cleaned = phone.replace(/[\s\-\(\)]/g, '');
-
-    if (cleaned.startsWith('+')) {
-      cleaned = cleaned.substring(1);
-    }
-
-    if (cleaned.startsWith('0')) {
-      cleaned = '255' + cleaned.substring(1);
-    }
-
-    if (!cleaned.startsWith('255') && cleaned.length === 9) {
-      cleaned = '255' + cleaned;
-    }
-
-    return cleaned;
   }
 
   /**

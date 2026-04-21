@@ -45,4 +45,13 @@ export class InitiatePaymentDto {
   @IsOptional()
   @IsString()
   buyerName?: string;
+
+  /**
+   * Optional gateway selection. If omitted, the API picks the tenant's default
+   * active mobile-money provider (CLICKPESA_MIXX if configured, else SELCOM).
+   * Allowed values: "SELCOM", "CLICKPESA_MIXX".
+   */
+  @IsOptional()
+  @IsString()
+  providerCode?: string;
 }

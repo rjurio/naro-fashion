@@ -24,7 +24,7 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - `/categories` - Categories index grid
 - `/categories/[slug]` - Category detail with filtered products
 - `/cart` - Shopping cart with promo codes
-- `/checkout` - Multi-step checkout (shipping, delivery, payment, confirm)
+- `/checkout` - Multi-step checkout (shipping, delivery, payment, confirm). The "Mobile Money" option stays a single choice in the UI; the API resolves which gateway actually runs the USSD push based on the tenant's active `PaymentMethod` rows. If the tenant has a `CLICKPESA_MIXX` PaymentMethod active, payments route to ClickPesa's Mixx-by-YAS flow (071/065/067/077 prefixes only); otherwise they fall through to Selcom. The frontend keeps posting `method: "MOBILE_MONEY"` + `phoneNumber` and polling `GET /payments/status/:transactionRef` — no storefront code change is needed to switch providers. Plan: `C:\Users\rjurio\.claude\plans\groovy-painting-pudding.md`.
 - `/flash-sales` - Active flash sales with countdown
 - `/rentals` - Browse rentable items
 - `/rentals/[slug]` - Rental detail with date picker and booking
@@ -32,6 +32,7 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - `/auth/login` - Login (with logo branding panel)
 - `/auth/register` - Register (with logo branding panel)
 - `/auth/forgot-password` - Password reset (with logo branding panel)
+- `/orders/[id]` - Order confirmation / detail page. This is the redirect target from checkout (`/orders/:id?success=true`) — distinct from `/account/orders` (which is the history list). Shows success banner when `?success=true`, line items with resolved image URLs (via `API_ORIGIN` + `resolveImg()`), totals breakdown (subtotal, shipping, total), payment method (PaymentMethod enum value with underscores replaced), notes, "Not Found" fallback state, and "Browse Products" CTA. Fetches via `ordersApi.getOne(id)`.
 - `/account` - Dashboard (orders, rentals, wishlist stats)
 - `/account/orders` - Order history
 - `/account/rentals` - Active and past rentals
@@ -92,3 +93,6 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - **Interactive hover/press states**: Global `cursor: pointer` on `a`, `button`, `select`, `[role="button"]`. Buttons have `active:scale-[0.97]` press feedback. Cards have `hover:shadow-xl`. Footer links have `hover:translate-x-1`. Social icons have `hover:scale-110`. Header icon buttons have `active:scale-95`.
 - API product fields: use `basePrice` (not `price`), `compareAtPrice` (not `originalPrice`), `avgRating` (not `rating`), `images[0].url` (object, not string)
 - Image URL resolution: define `API_ORIGIN = NEXT_PUBLIC_API_URL.replace('/api/v1', '')` and prefix `/uploads/...` paths before use in `<img>` src — use a `resolveImg()` helper
+- **Native `<select>` option theming** (`app/globals.css`): browsers render the dropdown panel with OS defaults and only honor `background-color` + `color` on `<option>` elements — no border radius, no padding, no font override. A global rule (`select option, select optgroup { background-color: var(--color-card); color: var(--color-foreground); }`) themes all ~29 selects across the app at once. Don't inline-style each `<option>` and don't try to replace the native control with a custom listbox unless the design really demands it.
+- **Header cart badge refresh pattern**: `Header.tsx` lives in the root layout and never unmounts across route changes, so `useEffect(…, [])` only fires once at app mount — adding an item to the cart from a product page leaves the badge stuck at its initial count. Fix: the cart-count effect depends on `[pathname]` AND subscribes to a `window.addEventListener('cart:updated', …)` custom event. `lib/api.ts` has a `notifyCartUpdated()` helper that every `cartApi` mutation (`addItem`, `updateItem`, `removeItem`, `clear`) calls after the successful API response. New code that mutates the cart through any path other than `cartApi` must dispatch `new CustomEvent('cart:updated')` itself, or the badge will go stale again.
+- **Checkout → /orders/:id shippingFee**: the `ordersApi.create` call MUST include `shippingFee: shippingCost` in its payload or the order is persisted with `total = subtotal` (shipping fee silently dropped), and the payment gateway then rejects with `Payment amount (X) exceeds order total (Y)` when the storefront charges subtotal + delivery. The DTO on the API side accepts `shippingFee?: number` — threading it end-to-end is required.

@@ -531,18 +531,21 @@ model OrderItem {
 }
 
 model Payment {
-  id              String   @id @default(cuid())
-  tenantId        String?
-  orderId         String?
-  rentalOrderId   String?
-  layawayId       String?
-  amount          Decimal  @db.Decimal(12, 2)
-  method          String
-  status          String   @default("PENDING")
-  transactionRef  String?  @unique
-  gatewayResponse Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                    String    @id @default(cuid())
+  tenantId              String?
+  orderId               String?
+  rentalOrderId         String?
+  layawayId             String?
+  amount                Decimal   @db.Decimal(12, 2)
+  method                String
+  status                String    @default("PENDING")
+  transactionRef        String?   @unique
+  providerCode          String?
+  providerTransactionId String?
+  lastPolledAt          DateTime?
+  gatewayResponse       Json?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   order       Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   rentalOrder RentalOrder? @relation(fields: [rentalOrderId], references: [id], onDelete: SetNull, onUpdate: Cascade)
@@ -553,6 +556,25 @@ model Payment {
   @@index([rentalOrderId])
   @@index([layawayId])
   @@index([transactionRef])
+  @@index([providerCode, status])
+  @@index([providerTransactionId])
+}
+
+model WebhookEvent {
+  id              String   @id @default(cuid())
+  tenantId        String?
+  providerCode    String
+  providerEventId String
+  eventType       String
+  orderReference  String?
+  checksumValid   Boolean?
+  rawPayload      Json
+  processed       Boolean  @default(false)
+  receivedAt      DateTime @default(now())
+
+  @@unique([providerCode, providerEventId, eventType])
+  @@index([tenantId, orderReference])
+  @@index([providerCode, processed])
 }
 
 model Shipment {

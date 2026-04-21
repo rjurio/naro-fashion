@@ -28,7 +28,7 @@ export class PaymentsController {
   }
 
   /**
-   * Initiate a payment through the Selcom gateway.
+   * Initiate a payment through the resolved gateway (Selcom or ClickPesa).
    *
    * For MOBILE_MONEY: sends a USSD push to the customer's phone.
    * For CARD: returns a gateway URL for card checkout.
@@ -44,9 +44,6 @@ export class PaymentsController {
   /**
    * Poll payment status. The frontend calls this every few seconds
    * after initiating a payment to check if it completed.
-   *
-   * If the payment is still PROCESSING, this also queries the Selcom API
-   * for a real-time status update.
    */
   @UseGuards(JwtAuthGuard)
   @Get('status/:transactionRef')
@@ -96,8 +93,8 @@ export class PaymentsController {
   /**
    * Webhook endpoint for Selcom payment callbacks.
    *
-   * This is publicly accessible (no JWT) but protected by HMAC signature verification.
-   * Selcom sends the payment result here when a transaction completes or fails.
+   * Publicly accessible (no JWT) but protected by HMAC signature verification.
+   * Tenant resolved from TenantContext / X-Tenant-Id header.
    */
   @Public()
   @Post('webhook')
@@ -105,11 +102,30 @@ export class PaymentsController {
     @Body() payload: any,
     @Headers('digest') signature?: string,
   ) {
-    // Use stringified payload for signature verification.
-    // For production with strict HMAC verification, enable rawBody
-    // in NestFactory.create() and use RawBodyRequest instead.
     const rawBody = JSON.stringify(payload);
-
     return this.paymentsService.handleWebhook(payload, rawBody, signature);
+  }
+
+  /**
+   * Webhook endpoint for ClickPesa (Mixx by YAS) payment callbacks.
+   *
+   * ClickPesa cannot send an X-Tenant-Id header, so the tenant is encoded
+   * in the URL path. Per-tenant credentials — including the checksumSecret
+   * used to verify the HMAC — come from PaymentMethod.integrationParams.
+   */
+  @Public()
+  @Post('webhook/clickpesa/:tenantSlug')
+  handleClickPesaWebhook(
+    @Param('tenantSlug') tenantSlug: string,
+    @Body() payload: any,
+    @Headers('x-clickpesa-signature') signature?: string,
+  ) {
+    const rawBody = JSON.stringify(payload);
+    return this.paymentsService.handleClickPesaWebhook({
+      tenantSlug,
+      payload,
+      rawBody,
+      signature,
+    });
   }
 }

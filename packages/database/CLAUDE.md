@@ -58,6 +58,14 @@ Many fields changed from `@unique` to `@@unique([tenantId, field])`: Category.sl
 - `pnpm prisma studio` - Open Prisma Studio GUI
 - `pnpm prisma db seed` - Run seed script
 
+## Payment gateway additions (planned — ClickPesa integration)
+Plan file: `C:\Users\rjurio\.claude\plans\groovy-painting-pudding.md`.
+- `Payment.providerCode String?` — identifies which gateway handled the payment (e.g. `SELCOM`, `CLICKPESA_MIXX`). Indexed alongside `status` for the reconciliation cron scan.
+- `Payment.providerTransactionId String?` — the gateway's own payment id (ClickPesa's `id`, Selcom's `transid`). First-class column so we can query without unwrapping `gatewayResponse` JSON.
+- `Payment.lastPolledAt DateTime?` — throttles the reconciliation cron: re-poll only if null or older than `CLICKPESA_POLL_INTERVAL_SECONDS`.
+- New `WebhookEvent` model for idempotent webhook replay — fields: `id`, `tenantId`, `providerCode`, `providerEventId`, `eventType`, `orderReference?`, `checksumValid?`, `rawPayload Json`, `processed Boolean`, `receivedAt`. `@@unique([providerCode, providerEventId, eventType])` catches duplicate deliveries; index `[tenantId, orderReference]` for lookups.
+- `PaymentMethod.integrationParams` JSON for code `CLICKPESA_MIXX` holds `{ clientId, apiKey, checksumSecret, usePreview, webhookIpAllowlist[] }` per tenant — ClickPesa credentials live here, not in `.env`.
+
 ## RentalOrder additions (2026-03)
 - `pickupTime`, `weddingDate`, `weddingLocation`, `weddingRegion` - Event details
 - `deliveryModality` (HAND_PICKED/SHIPPED), `shippingDate`, `shippingAddress` - Delivery logistics

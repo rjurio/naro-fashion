@@ -56,7 +56,7 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 - `/dashboard/reviews` - Review moderation
 - `/dashboard/recycle-bin` - Recycle bin with tabs: Products, Categories, Flash Sales, Checklists, Banners, Pages — restore soft-deleted items
 - `/dashboard/settings` - Profile edit, password change, 2FA toggle, appearance, notifications
-- `/dashboard/settings/payment-methods` - Payment Methods CRUD (name, code, uploaded+cropped icon, description, integration key/params, active toggle, sort order)
+- `/dashboard/settings/payment-methods` - Payment Methods CRUD (name, code, uploaded+cropped icon, description, integration key/params, active toggle, sort order). The generic `integrationParams` JSON textarea is how tenants configure each gateway — no gateway-specific UI needed. Supported codes today: `SELCOM` (global env creds; `integrationParams` empty/optional). Supported code planned: **`CLICKPESA_MIXX`** — paste `{ "clientId": "…", "apiKey": "…", "checksumSecret": "…", "usePreview": true, "webhookIpAllowlist": [] }` from the ClickPesa Dashboard → Settings → Developers → Applications. When active with the `MOBILE_MONEY` method, the API resolves this PaymentMethod per tenant and routes USSD pushes through ClickPesa's Mixx-by-YAS channel (prefixes 071/065/067/077). Plan: `C:\Users\rjurio\.claude\plans\groovy-painting-pudding.md`.
 - `/dashboard/settings/business-profile` - Business Profile with identity, branding, contact, **location** (map_latitude/map_longitude with validation + browser geolocation auto-detect + live map preview), social media, website settings
 - `/dashboard/profile` - Admin profile view/edit
 - `/dashboard/reports/rentals` - Rental reports (per-item rental count, cumulative income, rental history modal)
@@ -129,3 +129,4 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 - Image uploads: local storage via API at `/uploads/products/`, served via ServeStaticModule
 - Tailwind v4: No tailwind.config.ts — theme defined via @theme in globals.css
 - `cropperjs` must be pinned to v1.6.2 in admin (v2 breaks react-cropper CSS import)
+- **Native `<select>` option theming** (`app/globals.css`): browsers only honor `background-color` + `color` on `<option>` elements — no border-radius, padding, or font overrides apply. A single global rule (`select option, select optgroup { background-color: hsl(var(--card)); color: hsl(var(--card-foreground)); }`) themes every select in the admin at once (forms, filters, stock adjust modal, expense filters, etc.). Don't inline-style per `<option>` and don't swap for a custom listbox unless the design requires rich rows.
