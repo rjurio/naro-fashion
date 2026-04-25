@@ -67,6 +67,31 @@ Many fields changed from `@unique` to `@@unique([tenantId, field])`: Category.sl
 - `pnpm prisma studio` - Open Prisma Studio GUI
 - `pnpm prisma db seed` - Run seed script
 
+## PostgreSQL ownership (production gotcha)
+Prisma's `db push` runs `ALTER TABLE` statements, which require **table ownership** — not just `GRANT ALL PRIVILEGES`. If a table is owned by `postgres` (the install superuser) but the runtime user is `naro_admin`, `db push` fails with `ERROR: must be owner of table <Name>` mid-deploy. The deploy script then aborts under `set -e` before `pm2 restart`, leaving prod on stale code.
+
+**One-time fix on any new DB or after restoring a backup as a different user:**
+
+```sql
+-- Grant access (read/write) — needed for the runtime user even when not owner
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO naro_admin;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO naro_admin;
+
+-- Reassign ownership — required for Prisma db push / ALTER TABLE
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+    EXECUTE format('ALTER TABLE public.%I OWNER TO naro_admin', r.tablename);
+  END LOOP;
+  FOR r IN SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = 'public' LOOP
+    EXECUTE format('ALTER SEQUENCE public.%I OWNER TO naro_admin', r.sequence_name);
+  END LOOP;
+END $$;
+```
+
+Run as `postgres` superuser (`sudo -u postgres psql -d naro_fashion -c "..."`). Tables/sequences created later by Prisma `db push` are auto-owned by `naro_admin` since it's the connection user, so this only needs to run once per DB.
+
 ## Payment gateway additions (planned — ClickPesa integration)
 Plan file: `C:\Users\rjurio\.claude\plans\groovy-painting-pudding.md`.
 - `Payment.providerCode String?` — identifies which gateway handled the payment (e.g. `SELCOM`, `CLICKPESA_MIXX`). Indexed alongside `status` for the reconciliation cron scan.
