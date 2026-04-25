@@ -59,31 +59,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string, rememberMe = false) => {
     const res = await adminApi.login(email, password);
     const token = res.access_token || res.accessToken || res.token;
+    const refreshToken = res.refresh_token || res.refreshToken;
     if (!token) throw new Error('No token received');
-    if (rememberMe) {
-      localStorage.setItem('token', token);
-    } else {
-      sessionStorage.setItem('token', token);
-    }
+    const store = rememberMe ? localStorage : sessionStorage;
+    store.setItem('token', token);
+    if (refreshToken) store.setItem('refreshToken', refreshToken);
     adminApi.setToken(token);
     await fetchProfile();
   };
 
   const platformLogin = async (email: string, password: string) => {
-    const res = await adminApi.post<{ accessToken: string; user: any }>('/auth/platform-login', {
+    const res = await adminApi.post<{ accessToken: string; refreshToken?: string; user: any }>('/auth/platform-login', {
       email,
       password,
     });
     const token = res.accessToken;
     if (!token) throw new Error('No token received');
     localStorage.setItem('token', token);
+    if (res.refreshToken) localStorage.setItem('refreshToken', res.refreshToken);
     adminApi.setToken(token);
     await fetchProfile();
   };
 
   const logout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem('refreshToken');
     sessionStorage.removeItem('token');
+    sessionStorage.removeItem('refreshToken');
     adminApi.clearToken();
     setUser(null);
     if (user?.isPlatformAdmin) {
