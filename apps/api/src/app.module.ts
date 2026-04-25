@@ -44,6 +44,7 @@ import { SizeGuidesModule } from './size-guides/size-guides.module';
 import { PaymentMethodsModule } from './payment-methods/payment-methods.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { AuditModule } from './audit/audit.module';
+import { ProductSizesModule } from './product-sizes/product-sizes.module';
 
 @Module({
   imports: [
@@ -84,6 +85,7 @@ import { AuditModule } from './audit/audit.module';
     AdminUsersModule,
     ExpenseCategoriesModule,
     ExpensesModule,
+    ProductSizesModule,
     InventoryModule,
     ReportsModule,
     EventsModule,

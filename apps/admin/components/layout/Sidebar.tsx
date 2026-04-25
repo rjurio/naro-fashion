@@ -45,6 +45,7 @@ import {
   MessageSquare,
   CreditCard,
   ScrollText,
+  Ruler,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -84,6 +85,7 @@ const navItems: NavItem[] = [
       { label: 'All Products', href: '/dashboard/products', icon: Package },
       { label: 'Add Product', href: '/dashboard/products/new', icon: Plus },
       { label: 'Categories', href: '/dashboard/products/categories', icon: FolderTree },
+      { label: 'Sizes', href: '/dashboard/products/sizes', icon: Ruler },
     ],
   },
   { label: 'Orders', href: '/dashboard/orders', icon: ShoppingCart },

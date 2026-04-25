@@ -974,6 +974,27 @@ model SizeGuide {
   @@index([deletedAt])
 }
 
+// ProductSize — centrally-managed size options used in ProductVariant.size
+// to enforce consistency across all products (e.g. "XS", "S", "M", "L", "XL"
+// or numeric sizes like "38", "40", "42"). Admin manages via /dashboard/products/sizes.
+model ProductSize {
+  id          String    @id @default(cuid())
+  tenantId    String?
+  name        String    // The size label shown to customers, e.g. "S", "M", "42"
+  description String?   // Optional helper, e.g. "Small / 36 EU"
+  category    String?   // Optional grouping, e.g. "clothing", "shoe", "ring"
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
 model SiteSetting {
   id       String  @id @default(cuid())
   tenantId String?

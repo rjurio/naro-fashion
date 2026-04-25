@@ -79,6 +79,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
   const { toast } = useToast();
   const [categories, setCategories] = useState<any[]>([]);
   const [sizeGuides, setSizeGuides] = useState<{ id: string; name: string }[]>([]);
+  const [productSizes, setProductSizes] = useState<{ id: string; name: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [showRental, setShowRental] = useState(false);
   const [showVariants, setShowVariants] = useState(true);
@@ -114,6 +115,9 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
     }).catch(() => {});
     adminApi.getSizeGuides().then((guides) => {
       setSizeGuides((Array.isArray(guides) ? guides : []).filter((g: any) => g.isActive));
+    }).catch(() => {});
+    adminApi.getProductSizesActive().then((items) => {
+      setProductSizes(Array.isArray(items) ? items : []);
     }).catch(() => {});
   }, []);
 
@@ -429,8 +433,24 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
-                <InfoLabel label="Size" tooltip="Size of this variant (e.g. S, M, L, XL, or numeric sizes like 38, 40, 42)." />
-                <input value={v.size} onChange={(e) => updateVariant(i, 'size', e.target.value)} className={inputCls} placeholder="S, M, L, XL" />
+                <div className="flex items-center justify-between gap-2">
+                  <InfoLabel label="Size" tooltip="Size of this variant. Pick from the list managed under Products → Sizes." />
+                  <a href="/dashboard/products/sizes" target="_blank" rel="noopener noreferrer" className="text-[10px] text-brand-gold hover:underline whitespace-nowrap">
+                    Manage sizes →
+                  </a>
+                </div>
+                <select
+                  value={v.size}
+                  onChange={(e) => updateVariant(i, 'size', e.target.value)}
+                  className={inputCls}
+                  aria-label={`Variant ${i + 1} size`}
+                  title="Select size"
+                >
+                  <option value="">Select size...</option>
+                  {productSizes.map((s) => (
+                    <option key={s.id} value={s.name}>{s.name}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <InfoLabel label="Color" tooltip="Color name for this variant (e.g. Red, Navy Blue, Ivory). Displayed to customers on the storefront." />

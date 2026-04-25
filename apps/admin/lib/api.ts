@@ -269,6 +269,29 @@ class AdminApiClient {
     return this.patch<any>(`/categories/${id}/restore`, {});
   }
 
+  // ===== Product Sizes =====
+  getProductSizes() {
+    return this.get<any[]>('/product-sizes/admin');
+  }
+  getProductSizesActive() {
+    return this.get<any[]>('/product-sizes');
+  }
+  createProductSize(data: any) {
+    return this.post<any>('/product-sizes', data);
+  }
+  updateProductSize(id: string, data: any) {
+    return this.patch<any>(`/product-sizes/${id}`, data);
+  }
+  toggleProductSize(id: string) {
+    return this.patch<any>(`/product-sizes/${id}/toggle-active`, {});
+  }
+  deleteProductSize(id: string) {
+    return this.delete<any>(`/product-sizes/${id}`);
+  }
+  restoreProductSize(id: string) {
+    return this.patch<any>(`/product-sizes/${id}/restore`, {});
+  }
+
   // ===== Orders =====
   getOrders(params?: Record<string, string>) {
     return this.get<any>('/orders/admin', { params });
