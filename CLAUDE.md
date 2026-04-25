@@ -58,6 +58,7 @@ GitHub: https://github.com/rjurio/naro-fashion
 - Token storage depends on "Remember me" checkbox: checked → `localStorage` (persists), unchecked → `sessionStorage` (cleared on browser close). API client checks both.
 - Admin also supports cookies (httpOnly access_token + refresh_token)
 - Default credentials: Admin `admin@narofashion.co.tz` / `admin123`, Platform `platform@naro.co.tz` / `Admin123`
+- **Session expiration is configurable per-tenant**: Admin UI at `/dashboard/settings` → Security → Session Timing lets each tenant override JWT lifetimes via SiteSetting keys `auth_access_token_expires` and `auth_refresh_token_expires`. Falls back to env vars `JWT_ACCESS_EXPIRES` (default 15m) and `JWT_REFRESH_EXPIRES` (default 7d). Cookie `maxAge` is computed from the same value as the JWT `exp` claim via `parseDurationMs()` — they can never drift. Caps: access 30s–24h, refresh 1m–90d. Admin frontend auto-refreshes on 401 transparently (single in-flight refresh promise shared by parallel requests).
 
 ## Tenant Data Scoping
 - `TenantContext` (request-scoped injectable in `apps/api/src/tenant/tenant.context.ts`) — provides `tenantId` to all services

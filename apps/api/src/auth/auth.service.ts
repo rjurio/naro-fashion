@@ -13,9 +13,46 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RegisterDto } from './dto/register.dto';
 
+// Setting keys used to override JWT lifetimes per-tenant via the CMS settings UI.
+export const ACCESS_EXPIRES_SETTING_KEY = 'auth_access_token_expires';
+export const REFRESH_EXPIRES_SETTING_KEY = 'auth_refresh_token_expires';
+
+// Caps applied at the API + UI layer so an admin can't lock everyone out
+// (or open a security hole) with absurd values.
+export const MAX_ACCESS_EXPIRES_MS = 24 * 60 * 60 * 1000; // 24h
+export const MAX_REFRESH_EXPIRES_MS = 90 * 24 * 60 * 60 * 1000; // 90d
+export const MIN_ACCESS_EXPIRES_MS = 30 * 1000; // 30s — anything shorter just thrashes the refresh endpoint
+
+/**
+ * Parse a duration string (e.g. "15m", "2h", "30d", "30s") into milliseconds.
+ * Matches the format @nestjs/jwt's expiresIn already accepts so the same
+ * string can drive both JWT signing and HTTP cookie maxAge.
+ * Returns null if the input is invalid.
+ */
+export function parseDurationMs(input: string | null | undefined): number | null {
+  if (!input || typeof input !== 'string') return null;
+  const m = input.trim().match(/^(\d+)\s*(s|m|h|d)$/i);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const unit = m[2].toLowerCase();
+  const multipliers: Record<string, number> = {
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+  };
+  return n * multipliers[unit];
+}
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+
+  // 30-second tenant-keyed cache so the SiteSetting lookup doesn't run on
+  // every login. Empty string key = global (no tenant).
+  private expiryCache = new Map<string, { access: string; refresh: string; at: number }>();
+  private readonly EXPIRY_CACHE_TTL_MS = 30 * 1000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -23,6 +60,53 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly notifications: NotificationsService,
   ) {}
+
+  /**
+   * Resolve the access/refresh token lifetimes for a given tenant.
+   * Precedence: tenant SiteSetting > env var > hardcoded default.
+   * Returns the duration strings (e.g. "15m", "7d") so they can be passed
+   * directly to JwtService.sign() AND parsed for cookie maxAge.
+   */
+  async resolveTokenExpirations(tenantId?: string | null): Promise<{ access: string; refresh: string }> {
+    const cacheKey = tenantId || '';
+    const cached = this.expiryCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < this.EXPIRY_CACHE_TTL_MS) {
+      return { access: cached.access, refresh: cached.refresh };
+    }
+
+    const envAccess = this.configService.get<string>('JWT_ACCESS_EXPIRES', '15m');
+    const envRefresh = this.configService.get<string>('JWT_REFRESH_EXPIRES', '7d');
+
+    let access = envAccess;
+    let refresh = envRefresh;
+
+    if (tenantId) {
+      try {
+        const settings = await this.prisma.siteSetting.findMany({
+          where: {
+            tenantId,
+            key: { in: [ACCESS_EXPIRES_SETTING_KEY, REFRESH_EXPIRES_SETTING_KEY] },
+          },
+          select: { key: true, value: true },
+        });
+        for (const s of settings) {
+          // Only honour the override if it parses cleanly — bad data falls back to env
+          if (s.key === ACCESS_EXPIRES_SETTING_KEY && parseDurationMs(s.value)) access = s.value;
+          if (s.key === REFRESH_EXPIRES_SETTING_KEY && parseDurationMs(s.value)) refresh = s.value;
+        }
+      } catch {
+        // SiteSetting lookup failure must never block login — keep env defaults
+      }
+    }
+
+    this.expiryCache.set(cacheKey, { access, refresh, at: Date.now() });
+    return { access, refresh };
+  }
+
+  /** Drop cached expiries for a tenant — call this from settings update handlers. */
+  invalidateExpiryCache(tenantId?: string | null) {
+    this.expiryCache.delete(tenantId || '');
+  }
 
   async register(dto: RegisterDto, tenantId?: string) {
     // If tenantId provided, check uniqueness within tenant
@@ -138,23 +222,26 @@ export class AuthService {
     return { ...result, isPlatformAdmin: true };
   }
 
-  generateTokens(user: {
+  async generateTokens(user: {
     id: string;
     email: string | null;
     tenantId?: string | null;
     isAdmin?: boolean;
     isPlatformAdmin?: boolean;
     role?: string;
-  }) {
+  }): Promise<{ accessToken: string; refreshToken: string; accessExpiresIn: string; refreshExpiresIn: string }> {
     const payload: Record<string, any> = { sub: user.id, email: user.email };
     if (user.tenantId) payload.tenantId = user.tenantId;
     if (user.isAdmin) payload.isAdmin = true;
     if (user.isPlatformAdmin) payload.isPlatformAdmin = true;
     if (user.role) payload.role = user.role;
 
+    const { access: accessExpiresIn, refresh: refreshExpiresIn } =
+      await this.resolveTokenExpirations(user.tenantId);
+
     const accessToken = this.jwtService.sign(payload, {
       secret: this.configService.get('JWT_SECRET', 'naro-secret-key'),
-      expiresIn: this.configService.get('JWT_ACCESS_EXPIRES', '15m'),
+      expiresIn: accessExpiresIn,
     });
 
     const refreshToken = this.jwtService.sign(payload, {
@@ -162,10 +249,10 @@ export class AuthService {
         'JWT_REFRESH_SECRET',
         'naro-refresh-secret-key',
       ),
-      expiresIn: this.configService.get('JWT_REFRESH_EXPIRES', '7d'),
+      expiresIn: refreshExpiresIn,
     });
 
-    return { accessToken, refreshToken };
+    return { accessToken, refreshToken, accessExpiresIn, refreshExpiresIn };
   }
 
   async refreshTokens(refreshToken: string) {

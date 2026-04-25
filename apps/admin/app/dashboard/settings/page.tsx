@@ -25,6 +25,12 @@ export default function AdminSettingsPage() {
   const [twoFA, setTwoFA] = useState(false);
   const [selectedTheme, setSelectedTheme] = useState<string>('light');
 
+  // Session timing — backed by SiteSetting keys auth_access_token_expires
+  // and auth_refresh_token_expires. Empty = use platform defaults (15m / 7d).
+  const [accessExpires, setAccessExpires] = useState<string>('');
+  const [refreshExpires, setRefreshExpires] = useState<string>('');
+  const [savingTiming, setSavingTiming] = useState(false);
+
   const [notifications, setNotifications] = useState({
     emailOrders: true,
     smsOrders: false,
@@ -58,6 +64,10 @@ export default function AdminSettingsPage() {
         if (notifSetting) {
           try { setNotifications(JSON.parse(notifSetting.value)); } catch {}
         }
+        const access = settings.find((s: any) => s.key === 'auth_access_token_expires');
+        if (access?.value) setAccessExpires(access.value);
+        const refresh = settings.find((s: any) => s.key === 'auth_refresh_token_expires');
+        if (refresh?.value) setRefreshExpires(refresh.value);
       } catch {}
       try {
         const profile: any = await adminApi.get('/auth/me');
@@ -125,6 +135,39 @@ export default function AdminSettingsPage() {
       showMsg('Failed to update 2FA setting.', 'error');
     }
   };
+
+  // Format like "15m", "2h", "8h", "7d"
+  const isValidDuration = (v: string) => /^(\d+)\s*(s|m|h|d)$/i.test(v.trim());
+
+  const handleSaveTiming = async () => {
+    if (accessExpires && !isValidDuration(accessExpires)) {
+      showMsg('Session timeout: use a value like "15m", "2h", "8h".', 'error');
+      return;
+    }
+    if (refreshExpires && !isValidDuration(refreshExpires)) {
+      showMsg('Stay-signed-in duration: use a value like "1d", "7d", "30d".', 'error');
+      return;
+    }
+    setSavingTiming(true);
+    try {
+      // Empty string clears the override and falls back to platform defaults.
+      // The API endpoint accepts the value verbatim; backend re-validates ranges.
+      if (accessExpires.trim()) {
+        await adminApi.patch('/cms/settings/auth_access_token_expires', { value: accessExpires.trim() });
+      }
+      if (refreshExpires.trim()) {
+        await adminApi.patch('/cms/settings/auth_refresh_token_expires', { value: refreshExpires.trim() });
+      }
+      showMsg('Session timing saved. Changes apply on next login.', 'success');
+    } catch (err: any) {
+      showMsg(err?.message || 'Failed to save session timing.', 'error');
+    } finally {
+      setSavingTiming(false);
+    }
+  };
+
+  const ACCESS_PRESETS = ['15m', '30m', '1h', '2h', '4h', '8h', '24h'];
+  const REFRESH_PRESETS = ['1d', '7d', '14d', '30d', '90d'];
 
   const handleThemeChange = (value: string) => {
     setSelectedTheme(value);
@@ -276,6 +319,102 @@ export default function AdminSettingsPage() {
               <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Add an extra layer of security to your account</p>
             </div>
             <Toggle checked={twoFA} onChange={handleToggle2FA} />
+          </div>
+
+          {/* Session Timing — adjustable JWT expiration */}
+          <div className="pt-4 border-t border-[hsl(var(--border))] space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Session Timing</h3>
+              <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">
+                How long admin sessions stay valid. Changes apply on the next login — your current session keeps its existing timing.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Access token / Session timeout */}
+              <div>
+                <label className="block text-xs font-medium text-[hsl(var(--foreground))] mb-1.5">
+                  Session Timeout
+                </label>
+                <p className="text-[11px] text-[hsl(var(--muted-foreground))] mb-2">
+                  Time before the access token expires (silently refreshes in the background).
+                </p>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {ACCESS_PRESETS.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setAccessExpires(p)}
+                      className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                        accessExpires === p
+                          ? 'bg-brand-gold text-black border-brand-gold font-semibold'
+                          : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:border-brand-gold hover:text-brand-gold'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  value={accessExpires}
+                  onChange={(e) => setAccessExpires(e.target.value)}
+                  placeholder="Custom (e.g. 15m, 2h, 8h) — leave empty for default"
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-brand-gold/30"
+                  aria-label="Session timeout custom duration"
+                />
+              </div>
+
+              {/* Refresh token / Stay-signed-in */}
+              <div>
+                <label className="block text-xs font-medium text-[hsl(var(--foreground))] mb-1.5">
+                  Stay-Signed-In Duration
+                </label>
+                <p className="text-[11px] text-[hsl(var(--muted-foreground))] mb-2">
+                  Time before the user must fully log in again with email + password.
+                </p>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {REFRESH_PRESETS.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setRefreshExpires(p)}
+                      className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                        refreshExpires === p
+                          ? 'bg-brand-gold text-black border-brand-gold font-semibold'
+                          : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:border-brand-gold hover:text-brand-gold'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  value={refreshExpires}
+                  onChange={(e) => setRefreshExpires(e.target.value)}
+                  placeholder="Custom (e.g. 1d, 7d, 30d) — leave empty for default"
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-brand-gold/30"
+                  aria-label="Stay-signed-in custom duration"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-[11px] text-[hsl(var(--muted-foreground))]">
+              <span>Limits:</span>
+              <span>Session ≤ 24h</span>
+              <span>•</span>
+              <span>Stay-signed-in ≤ 90d</span>
+              <span>•</span>
+              <span>Allowed units: s, m, h, d</span>
+            </div>
+
+            <div className="flex justify-end">
+              <Button onClick={handleSaveTiming} disabled={savingTiming}>
+                {savingTiming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Save Timing
+              </Button>
+            </div>
           </div>
 
           <div className="pt-4 border-t border-[hsl(var(--border))]">

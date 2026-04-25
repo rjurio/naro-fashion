@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { IsString, IsOptional, IsEmail, IsBoolean, IsInt, IsNumber } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../notifications/email.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
+import { parseDurationMs as parseDuration } from '../auth/auth.service';
 
 // IMPORTANT: NestJS global ValidationPipe uses whitelist:true which strips
 // ALL properties not declared via class-validator decorators. Plain TypeScript
@@ -259,6 +260,35 @@ export class CmsService {
 
   async updateSetting(key: string, dto: UpdateSettingDto) {
     const tenantId = this.tenantContext.requireId;
+
+    // Validate security-sensitive duration settings before writing them.
+    // Prevents an admin from accidentally setting expiration to "garbage"
+    // or values that would lock everyone out / leave sessions open forever.
+    if (key === 'auth_access_token_expires' || key === 'auth_refresh_token_expires') {
+      const ms = parseDuration(dto.value);
+      if (ms === null) {
+        throw new BadRequestException(
+          'Use a duration like "15m", "2h", "8h", "7d". Allowed units: s, m, h, d.',
+        );
+      }
+      if (key === 'auth_access_token_expires') {
+        if (ms < 30 * 1000) {
+          throw new BadRequestException('Session timeout must be at least 30 seconds.');
+        }
+        if (ms > 24 * 60 * 60 * 1000) {
+          throw new BadRequestException('Session timeout cannot exceed 24 hours.');
+        }
+      }
+      if (key === 'auth_refresh_token_expires') {
+        if (ms < 60 * 1000) {
+          throw new BadRequestException('Stay-signed-in duration must be at least 1 minute.');
+        }
+        if (ms > 90 * 24 * 60 * 60 * 1000) {
+          throw new BadRequestException('Stay-signed-in duration cannot exceed 90 days.');
+        }
+      }
+    }
+
     // Use findFirst + create/update since composite unique requires tenantId
     const existing = await this.prisma.siteSetting.findFirst({
       where: { tenantId, key },

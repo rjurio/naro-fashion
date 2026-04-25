@@ -25,12 +25,13 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - Three-tier auth: `PlatformAdmin` (platform) → `AdminUser` (tenant staff) → `User` (customers)
 - `validateUser()` checks User (with tenantId from header) then AdminUser (globally unique email)
 - `validatePlatformAdmin()` checks PlatformAdmin table separately
-- `generateTokens()` includes `tenantId`, `isAdmin`, `isPlatformAdmin`, `role` in JWT payload
+- `generateTokens()` (async) includes `tenantId`, `isAdmin`, `isPlatformAdmin`, `role` in JWT payload. Returns `{ accessToken, refreshToken, accessExpiresIn, refreshExpiresIn }` so the controller can size cookie maxAge from the same source as the JWT `exp` claim (no drift).
 - `JwtStrategy.validate()` checks: isPlatformAdmin → AdminUser (isAdmin) → User → AdminUser fallback
-- Endpoints: `POST /auth/login`, `POST /auth/platform-login`, `POST /auth/register`, `POST /auth/refresh`, `POST /auth/logout`
+- Endpoints: `POST /auth/login`, `POST /auth/platform-login`, `POST /auth/register`, `POST /auth/refresh`, `POST /auth/logout`. `/auth/refresh` accepts refresh token from either `refresh_token` cookie OR JSON body field — admin SPA uses the body path (localStorage-based flow).
 - Profile: `GET /auth/me` returns `enabledModules[]` for tenant admins
 - Password reset: `POST /auth/forgot-password`, `POST /auth/reset-password`
 - Account lockout: 5 failed attempts → lockedUntil = +30min; logged to LoginAttempt table
+- **Configurable session expiration**: `resolveTokenExpirations(tenantId?)` looks up SiteSetting keys `auth_access_token_expires` and `auth_refresh_token_expires` (per-tenant overrides) → falls back to env vars `JWT_ACCESS_EXPIRES` (default `15m`) and `JWT_REFRESH_EXPIRES` (default `7d`). 30-second in-memory cache keyed by tenantId. `parseDurationMs('15m'|'2h'|'7d'|'30s')` exported helper turns the same string into milliseconds for cookie `maxAge`. `cms.service.updateSetting()` enforces caps before saving (access: 30s–24h, refresh: 1m–90d) and rejects unparseable values with a `BadRequestException`. Admin UI: `/dashboard/settings` Security card has a "Session Timing" section with preset chips and a custom input.
 
 ## Modules (all fully implemented)
 - **auth** - Login, register, JWT access/refresh tokens, profile, password change, 2FA toggle, forgot/reset password, account lockout
@@ -54,7 +55,7 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - **cms** - Banners (soft delete/restore), pages (soft delete/restore), site settings CRUD. `GET /cms/settings/business-profile` returns all business profile fields including `mapLatitude`, `mapLongitude` (from SiteSetting key-value store). `GET /cms/storefront-stats` (public, tenant-scoped) returns `{ productCount, rentalCount, customerCount }` for live hero stats on the storefront homepage
 - **analytics** - Dashboard stats, revenue charts (daily/weekly/monthly)
 - **notifications** - Email + SMS sending
-- **upload** - Local file upload. `POST /upload/product-image` → `uploads/products/` (JPEG/PNG/WebP, 5MB). `POST /upload/payment-icon` → `uploads/payment-methods/` (JPEG/PNG/WebP/SVG, 2MB). ServeStaticModule serves all `/uploads` paths.
+- **upload** - Local file upload. `POST /upload/product-image` → `uploads/products/` (JPEG/PNG/WebP, 5MB). `POST /upload/payment-icon` → `uploads/payment-methods/` (JPEG/PNG/WebP/SVG, 2MB). `POST /upload/category` → `uploads/categories/` (JPEG/PNG/WebP, 5MB). ServeStaticModule serves all `/uploads` paths.
 - **pos** - POS shift management and sales
 - **scheduler** - Cron jobs for rental prep reminders (8am daily), overdue rental alerts (9am daily), pending return reminders (8:30am daily, 3-day window)
 - **permissions** - 40+ granular permissions, seeded on startup via OnModuleInit

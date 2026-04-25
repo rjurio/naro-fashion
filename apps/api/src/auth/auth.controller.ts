@@ -12,8 +12,13 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { AuthService } from './auth.service';
+import { AuthService, parseDurationMs } from './auth.service';
 import { RegisterDto, LoginDto } from './dto';
+
+// Fallback maxAge if the configured JWT expiration string is somehow unparseable
+// (shouldn't happen — defaults are valid — but cookies need a number).
+const FALLBACK_ACCESS_COOKIE_MS = 15 * 60 * 1000;
+const FALLBACK_REFRESH_COOKIE_MS = 7 * 24 * 60 * 60 * 1000;
 import { LocalAuthGuard } from './guards/local-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { Public } from './decorators/public.decorator';
@@ -47,24 +52,29 @@ export class AuthController {
       isPlatformAdmin?: boolean;
       role?: string;
     };
-    const tokens = this.authService.generateTokens(user);
+    const tokens = await this.authService.generateTokens(user);
 
     res.cookie('access_token', tokens.accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 15 * 60 * 1000, // 15 minutes
+      maxAge: parseDurationMs(tokens.accessExpiresIn) ?? FALLBACK_ACCESS_COOKIE_MS,
     });
 
     res.cookie('refresh_token', tokens.refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      maxAge: parseDurationMs(tokens.refreshExpiresIn) ?? FALLBACK_REFRESH_COOKIE_MS,
       path: '/api/v1/auth/refresh',
     });
 
-    return { message: 'Login successful', user, accessToken: tokens.accessToken };
+    return {
+      message: 'Login successful',
+      user,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
   }
 
   @Public()
@@ -72,27 +82,34 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async refresh(
     @Req() req: Request,
+    @Body() body: { refreshToken?: string },
     @Res({ passthrough: true }) res: Response,
   ) {
-    const refreshToken = req.cookies?.refresh_token;
+    // Accept the refresh token from either an httpOnly cookie (browser) OR
+    // a JSON body field (the SPA's localStorage-based flow uses this path).
+    const refreshToken = req.cookies?.refresh_token || body?.refreshToken;
     const tokens = await this.authService.refreshTokens(refreshToken);
 
     res.cookie('access_token', tokens.accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 15 * 60 * 1000,
+      maxAge: parseDurationMs(tokens.accessExpiresIn) ?? FALLBACK_ACCESS_COOKIE_MS,
     });
 
     res.cookie('refresh_token', tokens.refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: parseDurationMs(tokens.refreshExpiresIn) ?? FALLBACK_REFRESH_COOKIE_MS,
       path: '/api/v1/auth/refresh',
     });
 
-    return { message: 'Tokens refreshed' };
+    return {
+      message: 'Tokens refreshed',
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
   }
 
   @Post('logout')
@@ -114,24 +131,29 @@ export class AuthController {
     if (!admin) {
       throw new UnauthorizedException('Invalid credentials');
     }
-    const tokens = this.authService.generateTokens(admin);
+    const tokens = await this.authService.generateTokens(admin);
 
     res.cookie('access_token', tokens.accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 15 * 60 * 1000,
+      maxAge: parseDurationMs(tokens.accessExpiresIn) ?? FALLBACK_ACCESS_COOKIE_MS,
     });
 
     res.cookie('refresh_token', tokens.refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: parseDurationMs(tokens.refreshExpiresIn) ?? FALLBACK_REFRESH_COOKIE_MS,
       path: '/api/v1/auth/refresh',
     });
 
-    return { message: 'Login successful', user: admin, accessToken: tokens.accessToken };
+    return {
+      message: 'Login successful',
+      user: admin,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
   }
 
   @UseGuards(JwtAuthGuard)
