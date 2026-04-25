@@ -51,6 +51,74 @@ export class UploadController {
     return this.uploadService.uploadToFolder(file, 'hero-slides');
   }
 
+  @Post('category')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+          cb(null, true);
+        } else {
+          cb(new BadRequestException('Only JPEG, PNG, and WebP images are allowed'), false);
+        }
+      },
+    }),
+  )
+  uploadCategory(@UploadedFile() file: any) {
+    return this.uploadService.uploadToFolder(file, 'categories');
+  }
+
+  @Post('banner')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+          cb(null, true);
+        } else {
+          cb(new BadRequestException('Only JPEG, PNG, and WebP images are allowed'), false);
+        }
+      },
+    }),
+  )
+  uploadBanner(@UploadedFile() file: any) {
+    return this.uploadService.uploadToFolder(file, 'banners');
+  }
+
+  @Post('instagram-post')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+          cb(null, true);
+        } else {
+          cb(new BadRequestException('Only JPEG, PNG, and WebP images are allowed'), false);
+        }
+      },
+    }),
+  )
+  uploadInstagramPost(@UploadedFile() file: any) {
+    return this.uploadService.uploadToFolder(file, 'instagram-posts');
+  }
+
+  @Post('event')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+          cb(null, true);
+        } else {
+          cb(new BadRequestException('Only JPEG, PNG, and WebP images are allowed'), false);
+        }
+      },
+    }),
+  )
+  uploadEvent(@UploadedFile() file: any) {
+    return this.uploadService.uploadToFolder(file, 'events');
+  }
+
   @Post('branding')
   @UseInterceptors(
     FileInterceptor('file', {

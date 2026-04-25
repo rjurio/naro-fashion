@@ -5,6 +5,7 @@ import {
   Plus, ChevronRight, ChevronDown, Pencil, Trash2, X, FolderOpen, Loader2,
 } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import PresetImageUploadField from '@/components/ui/PresetImageUploadField';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { adminApi } from '@/lib/api';
@@ -203,8 +204,13 @@ export default function CategoriesPage() {
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-[hsl(var(--foreground))] mb-1">Image URL</label>
-              <input type="text" value={formImage} onChange={(e) => setFormImage(e.target.value)} placeholder="/uploads/categories/..." className={inputClass} />
+              <label className="block text-xs font-medium text-[hsl(var(--foreground))] mb-1">Category Image</label>
+              <PresetImageUploadField
+                presetKey="category"
+                value={formImage || null}
+                onChange={(u) => setFormImage(u || '')}
+                hint="Leave blank to fall back to the first product photo automatically."
+              />
             </div>
             <div>
               <label className="block text-xs font-medium text-[hsl(var(--foreground))] mb-1">Size Guide</label>

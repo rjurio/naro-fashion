@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Pencil, Trash2, Power, Image as ImageIcon, Loader2, GripVertical, Key, Code } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Modal } from '@/components/ui/Modal';
 import { FormField } from '@/components/ui/FormField';
+import PresetImageUploadField from '@/components/ui/PresetImageUploadField';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import adminApi from '@/lib/api';
@@ -44,9 +45,7 @@ export default function PaymentMethodsPage() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
-  const [uploadingIcon, setUploadingIcon] = useState(false);
   const [jsonError, setJsonError] = useState('');
-  const fileRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
     try {
@@ -78,20 +77,6 @@ export default function PaymentMethodsPage() {
     });
     setJsonError('');
     setShowModal(true);
-  };
-
-  const handleIconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadingIcon(true);
-    try {
-      const res = await adminApi.uploadPaymentIcon(file);
-      setForm((f) => ({ ...f, iconUrl: res.url }));
-      showToast('Icon uploaded', 'success');
-    } catch { showToast('Upload failed', 'error'); } finally {
-      setUploadingIcon(false);
-      if (fileRef.current) fileRef.current.value = '';
-    }
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -232,27 +217,12 @@ export default function PaymentMethodsPage() {
           {/* Icon upload */}
           <div>
             <label className="block text-xs font-medium text-foreground mb-2">Icon</label>
-            <div className="flex items-center gap-4">
-              {form.iconUrl ? (
-                <img src={resolveImg(form.iconUrl)} alt="icon" className="w-16 h-11 object-contain rounded-lg border border-border bg-muted" />
-              ) : (
-                <div className="w-16 h-11 rounded-lg border border-dashed border-border bg-muted flex items-center justify-center">
-                  <ImageIcon className="h-5 w-5 text-muted-foreground" />
-                </div>
-              )}
-              <div className="flex flex-col gap-1">
-                <button type="button" onClick={() => fileRef.current?.click()} disabled={uploadingIcon}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-xs font-medium hover:border-brand-gold hover:text-brand-gold cursor-pointer transition-colors disabled:opacity-50">
-                  {uploadingIcon ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
-                  {uploadingIcon ? 'Uploading...' : 'Upload Icon'}
-                </button>
-                {form.iconUrl && (
-                  <button type="button" onClick={() => setForm((f) => ({ ...f, iconUrl: '' }))} className="text-xs text-red-500 hover:underline text-left">Remove</button>
-                )}
-                <p className="text-[10px] text-muted-foreground">JPEG, PNG, WebP or SVG. Max 2MB.</p>
-              </div>
-              <input ref={fileRef} type="file" accept="image/*" aria-label="Upload payment method icon" title="Upload payment method icon" className="hidden" onChange={handleIconUpload} />
-            </div>
+            <PresetImageUploadField
+              presetKey="paymentIcon"
+              value={form.iconUrl || null}
+              onChange={(u) => setForm((f) => ({ ...f, iconUrl: u || '' }))}
+              hint="JPEG, PNG, WebP or SVG. Max 2 MB. SVG uploads pass through unmodified."
+            />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

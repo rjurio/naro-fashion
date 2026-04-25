@@ -7,6 +7,7 @@ import { Modal } from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { FormField } from '@/components/ui/FormField';
+import PresetImageUploadField from '@/components/ui/PresetImageUploadField';
 import { useToast } from '@/contexts/ToastContext';
 import { Skeleton } from '@/components/ui/Skeleton';
 import {
@@ -624,12 +625,11 @@ export default function EventsPage() {
             </FormField>
           </div>
 
-          <FormField label="Cover Image URL">
-            <input
-              className={inputClass}
-              value={form.coverImageUrl}
-              onChange={(e) => updateField('coverImageUrl', e.target.value)}
-              placeholder="https://..."
+          <FormField label="Cover Image">
+            <PresetImageUploadField
+              presetKey="eventCover"
+              value={form.coverImageUrl || null}
+              onChange={(u) => updateField('coverImageUrl', u || '')}
             />
           </FormField>
 
@@ -696,26 +696,37 @@ export default function EventsPage() {
               </div>
 
               {showMediaForm && (
-                <div className="flex flex-col sm:flex-row sm:items-end gap-3 mb-4 p-3 bg-muted/50 rounded-lg">
-                  <FormField label="URL">
-                    <input
-                      className={inputClass}
-                      value={mediaUrl}
-                      onChange={(e) => setMediaUrl(e.target.value)}
-                      placeholder="https://..."
-                    />
-                  </FormField>
+                <div className="space-y-3 mb-4 p-3 bg-muted/50 rounded-lg">
                   <FormField label="Type">
                     <select
                       className={inputClass}
                       value={mediaType}
                       onChange={(e) => setMediaType(e.target.value as 'IMAGE' | 'VIDEO')}
+                      aria-label="Media type"
                     >
                       <option value="IMAGE">Image</option>
                       <option value="VIDEO">Video</option>
                     </select>
                   </FormField>
-                  <Button size="sm" onClick={handleAddMedia} disabled={addingMedia}>
+                  {mediaType === 'IMAGE' ? (
+                    <FormField label="Image">
+                      <PresetImageUploadField
+                        presetKey="eventGallery"
+                        value={mediaUrl || null}
+                        onChange={(u) => setMediaUrl(u || '')}
+                      />
+                    </FormField>
+                  ) : (
+                    <FormField label="Video URL">
+                      <input
+                        className={inputClass}
+                        value={mediaUrl}
+                        onChange={(e) => setMediaUrl(e.target.value)}
+                        placeholder="https://youtube.com/... or https://..."
+                      />
+                    </FormField>
+                  )}
+                  <Button size="sm" onClick={handleAddMedia} disabled={addingMedia || !mediaUrl}>
                     {addingMedia ? 'Adding...' : 'Add'}
                   </Button>
                 </div>

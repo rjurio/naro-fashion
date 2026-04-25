@@ -21,6 +21,8 @@ import {
   UpdateSettingDto,
   CreateHeroSlideDto,
   UpdateHeroSlideDto,
+  CreateParallaxSectionDto,
+  UpdateParallaxSectionDto,
   CreateInstagramPostDto,
   UpdateInstagramPostDto,
   SubmitContactDto,
@@ -198,6 +200,56 @@ export class CmsController {
   @Delete('hero-slides/:id')
   deleteHeroSlide(@Param('id') id: string) {
     return this.cmsService.deleteHeroSlide(id);
+  }
+
+  // --- Parallax Sections ---
+
+  @Public()
+  @Get('parallax-sections')
+  findActiveParallaxSections() {
+    return this.cmsService.findActiveParallaxSections();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('parallax-sections/admin')
+  findAllParallaxSectionsAdmin() {
+    return this.cmsService.findAllParallaxSectionsAdmin();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('parallax-sections/deleted')
+  findDeletedParallaxSections() {
+    return this.cmsService.findDeletedParallaxSections();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('parallax-sections')
+  createParallaxSection(@Body() dto: CreateParallaxSectionDto) {
+    return this.cmsService.createParallaxSection(dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('parallax-sections/:id')
+  updateParallaxSection(@Param('id') id: string, @Body() dto: UpdateParallaxSectionDto) {
+    return this.cmsService.updateParallaxSection(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('parallax-sections/:id/restore')
+  restoreParallaxSection(@Param('id') id: string) {
+    return this.cmsService.restoreParallaxSection(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('parallax-sections/:id/toggle-active')
+  toggleParallaxSectionActive(@Param('id') id: string) {
+    return this.cmsService.toggleParallaxSectionActive(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('parallax-sections/:id')
+  deleteParallaxSection(@Param('id') id: string) {
+    return this.cmsService.deleteParallaxSection(id);
   }
 
   // --- Instagram Posts ---

@@ -6,6 +6,7 @@ import {
   Instagram, ExternalLink, Loader2, X, Heart, Pin, RefreshCw, Settings, Clock,
 } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import PresetImageUploadField from '@/components/ui/PresetImageUploadField';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { adminApi } from '@/lib/api';
@@ -271,8 +272,12 @@ export default function InstagramPostsPage() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="md:col-span-2">
-              <label className={labelClass}>Image URL *</label>
-              <input type="text" required value={form.imageUrl} onChange={(e) => setForm({ ...form, imageUrl: e.target.value })} placeholder="/uploads/products/photo.jpg or https://..." className={inputClass} />
+              <label className={labelClass}>Post Image *</label>
+              <PresetImageUploadField
+                presetKey="instagramPost"
+                value={form.imageUrl || null}
+                onChange={(u) => setForm({ ...form, imageUrl: u || '' })}
+              />
             </div>
             <div className="md:col-span-2">
               <label className={labelClass}>Caption</label>
@@ -293,15 +298,6 @@ export default function InstagramPostsPage() {
               </div>
             </div>
           </div>
-          {/* Image preview */}
-          {form.imageUrl && (
-            <div className="mt-4">
-              <label className={labelClass}>Preview</label>
-              <div className="w-32 h-32 rounded-lg overflow-hidden bg-[hsl(var(--muted))]">
-                <img src={resolveImageUrl(form.imageUrl)} alt="Preview" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-              </div>
-            </div>
-          )}
           <div className="flex flex-col-reverse sm:flex-row sm:items-center gap-2 sm:gap-3 mt-5">
             <Button variant="ghost" size="sm" onClick={() => setShowForm(false)} type="button">Cancel</Button>
             <Button type="submit" size="sm" disabled={saving}>

@@ -344,3 +344,22 @@ select optgroup {
 .animate-hero-sparkle {
   animation: hero-sparkle 2.5s ease-in-out infinite;
 }
+
+/* ===== Parallax: section reveal-on-scroll ===== */
+.reveal-on-scroll {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.8s ease-out, transform 0.8s ease-out;
+  will-change: opacity, transform;
+}
+.reveal-on-scroll.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal-on-scroll {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}

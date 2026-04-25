@@ -4,12 +4,12 @@ import { useState, useEffect } from 'react';
 import { useToast } from '@/contexts/ToastContext';
 import {
   Trash2, RotateCcw, Loader2, Package, FolderTree, Zap,
-  ClipboardList, Image as ImageIcon, FileText, AlertTriangle, Camera,
+  ClipboardList, Image as ImageIcon, FileText, AlertTriangle, Camera, Sparkles,
 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { adminApi } from '@/lib/api';
 
-type TabKey = 'products' | 'categories' | 'flashSales' | 'checklists' | 'banners' | 'pages' | 'events';
+type TabKey = 'products' | 'categories' | 'flashSales' | 'checklists' | 'banners' | 'pages' | 'events' | 'parallaxSections';
 
 interface DeletedItem {
   id: string;
@@ -28,6 +28,7 @@ const tabs: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: 'banners', label: 'Banners', icon: ImageIcon },
   { key: 'pages', label: 'Pages', icon: FileText },
   { key: 'events', label: 'Events', icon: Camera },
+  { key: 'parallaxSections', label: 'Parallax Sections', icon: Sparkles },
 ];
 
 const fetchFns: Record<TabKey, () => Promise<any>> = {
@@ -38,6 +39,7 @@ const fetchFns: Record<TabKey, () => Promise<any>> = {
   banners: () => adminApi.getDeletedBanners(),
   pages: () => adminApi.getDeletedPages(),
   events: () => adminApi.getDeletedEvents(),
+  parallaxSections: () => adminApi.getDeletedParallaxSections(),
 };
 
 const restoreFns: Record<TabKey, (id: string) => Promise<any>> = {
@@ -48,6 +50,7 @@ const restoreFns: Record<TabKey, (id: string) => Promise<any>> = {
   banners: (id) => adminApi.restoreBanner(id),
   pages: (id) => adminApi.restorePage(id),
   events: (id) => adminApi.restoreEvent(id),
+  parallaxSections: (id) => adminApi.restoreParallaxSection(id),
 };
 
 function getItemName(item: DeletedItem): string {
@@ -71,7 +74,7 @@ export default function RecycleBinPage() {
   const [loading, setLoading] = useState(true);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [counts, setCounts] = useState<Record<TabKey, number>>({
-    products: 0, categories: 0, flashSales: 0, checklists: 0, banners: 0, pages: 0, events: 0,
+    products: 0, categories: 0, flashSales: 0, checklists: 0, banners: 0, pages: 0, events: 0, parallaxSections: 0,
   });
 
   useEffect(() => {

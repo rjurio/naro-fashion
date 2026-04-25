@@ -182,6 +182,7 @@ export const cmsApi = {
   getInstagramPosts: () => api.get<any[]>('/cms/instagram-posts'),
   getBusinessProfile: () => api.get<any>('/cms/settings/business-profile'),
   getStorefrontStats: () => api.get<{ productCount: number; rentalCount: number; customerCount: number }>('/cms/storefront-stats'),
+  getParallaxSections: () => api.get<any[]>('/cms/parallax-sections'),
 };
 
 export const sizeGuidesApi = {

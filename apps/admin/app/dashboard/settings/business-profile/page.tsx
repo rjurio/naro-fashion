@@ -83,10 +83,19 @@ const WEBSITE_FIELDS: SettingField[] = [
   { key: 'business_domain', label: 'Business Domain', type: 'text', placeholder: 'narofashion.co.tz' },
 ];
 
-const IMAGE_SETTINGS = [
-  { key: 'company_logo_url', label: 'Company Logo', defaultUrl: '/logo.jpg', size: 140, shape: 'square' as const, hint: 'Full logo used on login pages and branding (recommended: 320×160px)' },
-  { key: 'company_icon_url', label: 'Company Icon', defaultUrl: '/icon.jpg', size: 80, shape: 'circle' as const, hint: 'Small circular icon for header and sidebar (recommended: 64×64px)' },
-  { key: 'company_favicon_url', label: 'Favicon', defaultUrl: '/favicon.jpg', size: 48, shape: 'square' as const, hint: 'Browser tab icon (recommended: 32×32px)' },
+import type { ImagePresetKey } from '@naro/shared';
+const IMAGE_SETTINGS: Array<{
+  key: string;
+  label: string;
+  defaultUrl: string;
+  size: number;
+  shape: 'square' | 'circle';
+  hint: string;
+  presetKey: ImagePresetKey;
+}> = [
+  { key: 'company_logo_url', label: 'Company Logo', defaultUrl: '/logo.jpg', size: 140, shape: 'square', hint: 'Square logo used in header/sidebar/login (output 256×256, PNG)', presetKey: 'logoSquare' },
+  { key: 'company_icon_url', label: 'Company Icon', defaultUrl: '/icon.jpg', size: 80, shape: 'circle', hint: 'Small circular icon (output 256×256, PNG)', presetKey: 'logoSquare' },
+  { key: 'company_favicon_url', label: 'Favicon', defaultUrl: '/favicon.jpg', size: 48, shape: 'square', hint: 'Browser tab icon (output 256×256, PNG)', presetKey: 'favicon' },
 ];
 
 export default function BusinessProfilePage() {
@@ -349,6 +358,7 @@ export default function BusinessProfilePage() {
               previewSize={img.size}
               shape={img.shape}
               hint={img.hint}
+              presetKey={img.presetKey}
             />
           ))}
         </div>

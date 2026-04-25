@@ -3,11 +3,48 @@
 import dynamic from 'next/dynamic';
 import { useMemo, useState, useCallback, useRef } from 'react';
 import { Code, Eye, Upload, ImageIcon, Loader2 } from 'lucide-react';
+import { getImagePreset, formatAllowedMimesForToast } from '@naro/shared';
+import { useToast } from '@/contexts/ToastContext';
 import 'react-quill-new/dist/quill.snow.css';
 
 const ReactQuill = dynamic(() => import('react-quill-new'), { ssr: false });
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
+const NEWSLETTER_PRESET = getImagePreset('newsletterInline');
+
+async function loadImage(file: File): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new window.Image();
+    img.src = url;
+    await img.decode();
+    return img;
+  } finally {
+    // keep URL alive — caller revokes
+  }
+}
+
+async function resizeToWidth(file: File, targetW: number, quality: number): Promise<Blob> {
+  const img = await loadImage(file);
+  const ratio = img.naturalHeight / img.naturalWidth;
+  const w = Math.min(img.naturalWidth, targetW);
+  const h = Math.round(w * ratio);
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D context unavailable');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, w, h);
+  return await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))),
+      'image/jpeg',
+      quality,
+    );
+  });
+}
 
 interface RichTextEditorProps {
   value: string;
@@ -27,6 +64,7 @@ export default function RichTextEditor({
   const [mode, setMode] = useState<'visual' | 'html'>('visual');
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();
 
   const handleImageUpload = useCallback(() => {
     fileInputRef.current?.click();
@@ -36,13 +74,46 @@ export default function RichTextEditor({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) return;
-    if (file.size > 5 * 1024 * 1024) return;
+    // Mime check
+    if (!NEWSLETTER_PRESET.allowedMimes.includes(file.type)) {
+      toast.error(`Allowed formats: ${formatAllowedMimesForToast(NEWSLETTER_PRESET)}`);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+    // Size check
+    if (file.size > NEWSLETTER_PRESET.maxFileSizeMB * 1024 * 1024) {
+      toast.error(`File too large. Max ${NEWSLETTER_PRESET.maxFileSizeMB} MB.`);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
 
     setUploading(true);
     try {
+      // Probe min-source dims, resize-only (no crop UI in RTE flow).
+      const probe = new window.Image();
+      probe.src = URL.createObjectURL(file);
+      await probe.decode();
+      if (
+        probe.naturalWidth < NEWSLETTER_PRESET.minSourceWidth ||
+        probe.naturalHeight < NEWSLETTER_PRESET.minSourceHeight
+      ) {
+        toast.error(
+          `Image too small. Minimum ${NEWSLETTER_PRESET.minSourceWidth}×${NEWSLETTER_PRESET.minSourceHeight}. Yours is ${probe.naturalWidth}×${probe.naturalHeight}.`,
+        );
+        URL.revokeObjectURL(probe.src);
+        return;
+      }
+      URL.revokeObjectURL(probe.src);
+
+      const blob = await resizeToWidth(
+        file,
+        NEWSLETTER_PRESET.outputWidth,
+        NEWSLETTER_PRESET.quality,
+      );
+      const resizedFile = new File([blob], `newsletter-${Date.now()}.jpg`, { type: 'image/jpeg' });
+
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('file', resizedFile);
       const token = localStorage.getItem('token') || sessionStorage.getItem('token');
       const res = await fetch(`${API_BASE_URL}/upload/image`, {
         method: 'POST',
@@ -58,13 +129,14 @@ export default function RichTextEditor({
       // Append image to current HTML content
       const imgTag = `<p><img src="${imageUrl}" alt="uploaded image" /></p>`;
       onChange(value + imgTag);
-    } catch {
-      // Silent fail — user can try again
+      toast.success('Image inserted');
+    } catch (err: any) {
+      toast.error(err?.message || 'Upload failed');
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, []);
+  }, [onChange, toast, value]);
 
   const modules = useMemo(
     () => ({

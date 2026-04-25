@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback } from 'react';
 import { Upload, X, Image as ImageIcon } from 'lucide-react';
+import { getImagePreset, formatAllowedMimesForToast } from '@naro/shared';
 import { useToast } from '@/contexts/ToastContext';
 import adminApi from '@/lib/api';
 import ImageCropModal from './ImageCropModal';
@@ -12,8 +13,21 @@ interface Props {
   maxImages?: number;
 }
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
-const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const PRODUCT_PRESET = getImagePreset('product');
+const MAX_FILE_SIZE = PRODUCT_PRESET.maxFileSizeMB * 1024 * 1024;
+const ACCEPTED_TYPES = PRODUCT_PRESET.allowedMimes;
+
+async function probeDimensions(file: File): Promise<{ width: number; height: number }> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new window.Image();
+    img.src = url;
+    await img.decode();
+    return { width: img.naturalWidth, height: img.naturalHeight };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 export default function ImageUploader({ images, onChange, maxImages = 8 }: Props) {
   const toast = useToast();
@@ -22,23 +36,38 @@ export default function ImageUploader({ images, onChange, maxImages = 8 }: Props
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
-  const handleFiles = useCallback((files: FileList | File[]) => {
+  const handleFiles = useCallback(async (files: FileList | File[]) => {
     const file = Array.from(files)[0];
     if (!file) return;
 
     if (!ACCEPTED_TYPES.includes(file.type)) {
-      toast.error('Only JPEG, PNG, and WebP images are allowed');
+      toast.error(`Allowed formats: ${formatAllowedMimesForToast(PRODUCT_PRESET)}`);
       return;
     }
 
     if (file.size > MAX_FILE_SIZE) {
-      toast.error('File size exceeds 5MB limit');
+      toast.error(`File too large. Max ${PRODUCT_PRESET.maxFileSizeMB} MB.`);
       return;
     }
 
     if (images.length >= maxImages) {
       toast.error(`Maximum ${maxImages} images allowed`);
       return;
+    }
+
+    try {
+      const dims = await probeDimensions(file);
+      if (
+        dims.width < PRODUCT_PRESET.minSourceWidth ||
+        dims.height < PRODUCT_PRESET.minSourceHeight
+      ) {
+        toast.error(
+          `Image too small. Minimum ${PRODUCT_PRESET.minSourceWidth}×${PRODUCT_PRESET.minSourceHeight}. Yours is ${dims.width}×${dims.height}.`,
+        );
+        return;
+      }
+    } catch {
+      // probe failed — let server validate
     }
 
     setCropFile(file);
@@ -89,6 +118,8 @@ export default function ImageUploader({ images, onChange, maxImages = 8 }: Props
               <button
                 type="button"
                 onClick={() => removeImage(i)}
+                aria-label={`Remove product image ${i + 1}`}
+                title={`Remove product image ${i + 1}`}
                 className="absolute top-1 right-1 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
               >
                 <X className="w-3 h-3" />
@@ -130,7 +161,7 @@ export default function ImageUploader({ images, onChange, maxImages = 8 }: Props
                   {dragOver ? 'Drop image here' : 'Drag & drop or click to browse'}
                 </p>
                 <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">
-                  JPEG, PNG, WebP • Max 5MB • {images.length}/{maxImages}
+                  JPEG, PNG, WebP • Min {PRODUCT_PRESET.minSourceWidth}×{PRODUCT_PRESET.minSourceHeight} • Max {PRODUCT_PRESET.maxFileSizeMB} MB • {images.length}/{maxImages}
                 </p>
               </div>
             </>
@@ -140,6 +171,8 @@ export default function ImageUploader({ images, onChange, maxImages = 8 }: Props
             ref={fileInputRef}
             type="file"
             accept="image/jpeg,image/png,image/webp"
+            aria-label="Upload product image"
+            title="Upload product image"
             onChange={(e) => {
               if (e.target.files) handleFiles(e.target.files);
               e.target.value = '';
@@ -153,6 +186,7 @@ export default function ImageUploader({ images, onChange, maxImages = 8 }: Props
       {cropFile && (
         <ImageCropModal
           file={cropFile}
+          preset={PRODUCT_PRESET}
           onCropped={handleCropped}
           onCancel={() => setCropFile(null)}
         />

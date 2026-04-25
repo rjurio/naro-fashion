@@ -3,9 +3,12 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { ArrowLeft, Upload, Shield, CheckCircle, Clock, AlertCircle, Camera, X, Loader2 } from "lucide-react";
+import { getImagePreset, formatAllowedMimesForToast } from "@naro/shared";
 import Button from "@/components/ui/Button";
 import { useTranslation } from "@/lib/i18n";
 import { idVerificationApi, uploadApi } from "@/lib/api";
+
+const ID_PRESET = getImagePreset("idDocument");
 
 type VerificationStatus = "unverified" | "pending" | "verified" | "rejected";
 
@@ -38,9 +41,23 @@ export default function IDVerificationPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleFileSelect = (side: "front" | "back") => (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = (side: "front" | "back") => async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Validate against the idDocument preset (no crop, no recompress — evidence integrity).
+    if (!ID_PRESET.allowedMimes.includes(file.type)) {
+      setError(`Allowed formats: ${formatAllowedMimesForToast(ID_PRESET)}`);
+      e.target.value = "";
+      return;
+    }
+    if (file.size > ID_PRESET.maxFileSizeMB * 1024 * 1024) {
+      setError(`File too large. Max ${ID_PRESET.maxFileSizeMB} MB.`);
+      e.target.value = "";
+      return;
+    }
+    setError("");
+
     const url = URL.createObjectURL(file);
     if (side === "front") {
       setFrontImage(url);

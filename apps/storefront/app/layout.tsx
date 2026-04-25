@@ -7,6 +7,7 @@ import { I18nProvider } from "@/lib/i18n";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { SiteSettingsProvider } from "@/contexts/SiteSettingsContext";
 import { ToastProvider } from "@/contexts/ToastContext";
+import { ParallaxProvider } from "@/contexts/ParallaxContext";
 import { getBusinessProfile } from "@/lib/settings-server";
 import Header from "@/components/layout/Header";
 import Footer from "@/components/layout/Footer";
@@ -91,6 +92,7 @@ export default function RootLayout({
           <I18nProvider>
             <ToastProvider>
             <SiteSettingsProvider>
+            <ParallaxProvider>
             <AuthProvider>
               <Suspense fallback={null}>
                 <NavigationProgress />
@@ -100,6 +102,7 @@ export default function RootLayout({
               <Footer />
               <WhatsAppButton />
             </AuthProvider>
+            </ParallaxProvider>
             </SiteSettingsProvider>
             </ToastProvider>
           </I18nProvider>

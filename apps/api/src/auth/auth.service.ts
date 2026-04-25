@@ -241,7 +241,7 @@ export class AuthService {
 
     const accessToken = this.jwtService.sign(payload, {
       secret: this.configService.get('JWT_SECRET', 'naro-secret-key'),
-      expiresIn: accessExpiresIn,
+      expiresIn: accessExpiresIn as any,
     });
 
     const refreshToken = this.jwtService.sign(payload, {
@@ -249,7 +249,7 @@ export class AuthService {
         'JWT_REFRESH_SECRET',
         'naro-refresh-secret-key',
       ),
-      expiresIn: refreshExpiresIn,
+      expiresIn: refreshExpiresIn as any,
     });
 
     return { accessToken, refreshToken, accessExpiresIn, refreshExpiresIn };

@@ -1,14 +1,12 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Plus, Pencil, Trash2, Eye, EyeOff,
   Loader2, X, Upload, GripVertical,
 } from 'lucide-react';
-import Cropper, { ReactCropperElement } from 'react-cropper';
-import 'cropperjs/dist/cropper.css';
 import Button from '@/components/ui/Button';
-import { Modal } from '@/components/ui/Modal';
+import PresetImageUploadField from '@/components/ui/PresetImageUploadField';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { adminApi } from '@/lib/api';
@@ -16,11 +14,6 @@ import { formatDate } from '@/lib/utils';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
 const API_ORIGIN = API_URL.replace('/api/v1', '');
-
-// Pre-defined hero size: 1920×700 (wide hero banner)
-const HERO_WIDTH = 1920;
-const HERO_HEIGHT = 700;
-const HERO_ASPECT = HERO_WIDTH / HERO_HEIGHT;
 
 interface HeroSlide {
   id: string;
@@ -39,19 +32,7 @@ export default function HeroSlidesPage() {
   const [title, setTitle] = useState('');
   const [sortOrder, setSortOrder] = useState(0);
   const [saving, setSaving] = useState(false);
-
-  // Crop state
-  const [showCrop, setShowCrop] = useState(false);
-  const [cropFile, setCropFile] = useState<File | null>(null);
-  const [cropImageUrl, setCropImageUrl] = useState('');
-  const [quality, setQuality] = useState(85);
-  const [uploading, setUploading] = useState(false);
-  const cropperRef = useRef<ReactCropperElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // For editing existing — preview URL
-  const [previewUrl, setPreviewUrl] = useState('');
-  const [uploadedUrl, setUploadedUrl] = useState('');
+  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
 
   const toast = useToast();
   const confirm = useConfirm();
@@ -75,10 +56,7 @@ export default function HeroSlidesPage() {
     setEditingId(null);
     setTitle('');
     setSortOrder(0);
-    setPreviewUrl('');
-    setUploadedUrl('');
-    setCropFile(null);
-    setCropImageUrl('');
+    setUploadedUrl(null);
   };
 
   const openCreate = () => {
@@ -90,60 +68,8 @@ export default function HeroSlidesPage() {
     setEditingId(s.id);
     setTitle(s.title || '');
     setSortOrder(s.sortOrder);
-    setPreviewUrl(s.imageUrl.startsWith('/uploads') ? `${API_ORIGIN}${s.imageUrl}` : s.imageUrl);
-    setUploadedUrl(s.imageUrl);
+    setUploadedUrl(s.imageUrl || null);
     setShowForm(true);
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      toast.error('Only JPEG, PNG, and WebP images are allowed');
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('File size must be under 5MB');
-      return;
-    }
-    setCropFile(file);
-    setCropImageUrl(URL.createObjectURL(file));
-    setShowCrop(true);
-    // Reset input so same file can be re-selected
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const handleCropAndUpload = async () => {
-    const cropper = cropperRef.current?.cropper;
-    if (!cropper) return;
-
-    const canvas = cropper.getCroppedCanvas({
-      width: HERO_WIDTH,
-      height: HERO_HEIGHT,
-      imageSmoothingEnabled: true,
-      imageSmoothingQuality: 'high',
-    });
-
-    canvas.toBlob(
-      async (blob) => {
-        if (!blob) return;
-        setUploading(true);
-        try {
-          const file = new File([blob], cropFile?.name || 'hero-slide.jpg', { type: 'image/jpeg' });
-          const result = await adminApi.uploadHeroSlide(file);
-          setUploadedUrl(result.url);
-          setPreviewUrl(`${API_ORIGIN}${result.url}`);
-          setShowCrop(false);
-          toast.success('Image uploaded');
-        } catch {
-          toast.error('Failed to upload image');
-        } finally {
-          setUploading(false);
-        }
-      },
-      'image/jpeg',
-      quality / 100,
-    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -212,7 +138,10 @@ export default function HeroSlidesPage() {
         <div>
           <h1 className="text-2xl font-bold text-[hsl(var(--foreground))]">Hero Slides</h1>
           <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">
-            Manage homepage hero background images ({HERO_WIDTH}x{HERO_HEIGHT}px)
+            Manage homepage hero images. Output 1200×1600 (3:4 portrait) — matches the storefront foreground card.
+          </p>
+          <p className="text-xs text-amber-500 mt-1">
+            Tip: re-upload existing slides at 3:4 for sharper rendering.
           </p>
         </div>
         <Button size="sm" className="gap-1.5" onClick={openCreate}>
@@ -228,7 +157,13 @@ export default function HeroSlidesPage() {
             <h2 className="text-lg font-semibold text-[hsl(var(--card-foreground))]">
               {editingId ? 'Edit Hero Slide' : 'Add New Hero Slide'}
             </h2>
-            <button type="button" onClick={() => { setShowForm(false); resetForm(); }} className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
+            <button
+              type="button"
+              onClick={() => { setShowForm(false); resetForm(); }}
+              aria-label="Close form"
+              title="Close form"
+              className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+            >
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -240,60 +175,18 @@ export default function HeroSlidesPage() {
             </div>
             <div>
               <label className={labelClass}>Sort Order</label>
-              <input type="number" value={sortOrder} onChange={(e) => setSortOrder(Number(e.target.value))} className={inputClass} />
+              <input type="number" value={sortOrder} onChange={(e) => setSortOrder(Number(e.target.value))} className={inputClass} aria-label="Sort order" />
             </div>
           </div>
 
           {/* Image Upload */}
           <div className="mt-4">
             <label className={labelClass}>Hero Image *</label>
-            <div className="relative">
-              {previewUrl ? (
-                <div className="relative rounded-lg overflow-hidden border border-[hsl(var(--border))]">
-                  <img src={previewUrl} alt="Preview" className="w-full aspect-[1920/700] object-cover" />
-                  <button
-                    type="button"
-                    onClick={() => { setPreviewUrl(''); setUploadedUrl(''); }}
-                    className="absolute top-2 right-2 p-1.5 rounded-full bg-black/60 text-white hover:bg-black/80"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ) : (
-                <label className="flex flex-col items-center justify-center gap-3 py-12 rounded-lg border-2 border-dashed border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 cursor-pointer hover:bg-[hsl(var(--muted))]/50 transition-colors">
-                  <Upload className="w-10 h-10 text-[hsl(var(--muted-foreground))]" />
-                  <div className="text-center">
-                    <p className="text-sm font-medium text-[hsl(var(--foreground))]">Click to upload hero image</p>
-                    <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">
-                      Image will be cropped to {HERO_WIDTH}x{HERO_HEIGHT}px. JPEG, PNG, WebP (max 5MB)
-                    </p>
-                  </div>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={handleFileSelect}
-                    className="hidden"
-                  />
-                </label>
-              )}
-              {previewUrl && (
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="mt-2 text-sm text-brand-gold hover:underline"
-                >
-                  Replace image
-                </button>
-              )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                onChange={handleFileSelect}
-                className="hidden"
-              />
-            </div>
+            <PresetImageUploadField
+              presetKey="heroSlide"
+              value={uploadedUrl}
+              onChange={(u) => setUploadedUrl(u)}
+            />
           </div>
 
           <div className="flex flex-col-reverse sm:flex-row sm:items-center gap-2 sm:gap-3 mt-5">
@@ -303,56 +196,6 @@ export default function HeroSlidesPage() {
             </Button>
           </div>
         </form>
-      )}
-
-      {/* Crop Modal */}
-      {showCrop && cropImageUrl && (
-        <Modal isOpen title="Crop Hero Image" size="xl" onClose={() => setShowCrop(false)}>
-          <div className="space-y-4">
-            <p className="text-xs text-[hsl(var(--muted-foreground))]">
-              Crop to {HERO_WIDTH}x{HERO_HEIGHT}px (wide hero banner). Drag to reposition.
-            </p>
-            <div className="max-h-[55vh] overflow-hidden rounded-lg bg-black">
-              <Cropper
-                ref={cropperRef}
-                src={cropImageUrl}
-                style={{ height: '55vh', width: '100%' }}
-                aspectRatio={HERO_ASPECT}
-                guides
-                viewMode={1}
-                dragMode="move"
-                autoCropArea={0.95}
-                background={false}
-              />
-            </div>
-            <div className="flex items-center gap-3">
-              <label className="text-xs text-[hsl(var(--muted-foreground))] whitespace-nowrap">
-                Quality: {quality}%
-              </label>
-              <input
-                type="range" min={40} max={100} step={5}
-                value={quality}
-                onChange={(e) => setQuality(Number(e.target.value))}
-                className="flex-1 h-1.5 accent-brand-gold"
-              />
-            </div>
-            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
-              <button
-                onClick={() => setShowCrop(false)}
-                className="px-4 py-2 text-sm rounded-lg border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))]"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCropAndUpload}
-                disabled={uploading}
-                className="px-4 py-2 text-sm rounded-lg bg-brand-gold text-black font-medium hover:bg-brand-gold/90 disabled:opacity-50 flex items-center gap-2 justify-center"
-              >
-                {uploading ? <><Loader2 className="w-4 h-4 animate-spin" /> Uploading...</> : 'Crop & Upload'}
-              </button>
-            </div>
-          </div>
-        </Modal>
       )}
 
       {/* Slides List */}
@@ -393,7 +236,12 @@ export default function HeroSlidesPage() {
                 <div className="flex-1 p-4 sm:p-5">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-start gap-3">
-                      <button className="mt-1 cursor-grab text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
+                      <button
+                        type="button"
+                        aria-label="Reorder slide"
+                        title="Reorder slide"
+                        className="mt-1 cursor-grab text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                      >
                         <GripVertical className="w-4 h-4" />
                       </button>
                       <div>
@@ -411,7 +259,6 @@ export default function HeroSlidesPage() {
                         </div>
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-[hsl(var(--muted-foreground))]">
                           <span>Order: #{slide.sortOrder}</span>
-                          <span>Size: {HERO_WIDTH}x{HERO_HEIGHT}px</span>
                           <span>Created: {formatDate(slide.createdAt)}</span>
                         </div>
                       </div>

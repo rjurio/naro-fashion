@@ -635,6 +635,29 @@ class AdminApiClient {
   getDeletedHeroSlides() {
     return this.get<any[]>('/cms/hero-slides/deleted');
   }
+
+  // ===== Parallax Sections =====
+  getParallaxSections() {
+    return this.get<any[]>('/cms/parallax-sections/admin');
+  }
+  getDeletedParallaxSections() {
+    return this.get<any[]>('/cms/parallax-sections/deleted');
+  }
+  createParallaxSection(data: any) {
+    return this.post<any>('/cms/parallax-sections', data);
+  }
+  updateParallaxSection(id: string, data: any) {
+    return this.patch<any>(`/cms/parallax-sections/${id}`, data);
+  }
+  deleteParallaxSection(id: string) {
+    return this.delete<any>(`/cms/parallax-sections/${id}`);
+  }
+  restoreParallaxSection(id: string) {
+    return this.patch<any>(`/cms/parallax-sections/${id}/restore`, {});
+  }
+  toggleParallaxSection(id: string) {
+    return this.patch<any>(`/cms/parallax-sections/${id}/toggle-active`, {});
+  }
   async uploadDocument(file: File): Promise<{ url: string; filename: string; format: string }> {
     const formData = new FormData();
     formData.append('file', file);
@@ -670,6 +693,51 @@ class AdminApiClient {
     formData.append('file', file);
     const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
     const res = await fetch(`${this.baseUrl}/upload/category`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
+      throw new Error(err.message || 'Upload failed');
+    }
+    return res.json();
+  }
+  async uploadBanner(file: File): Promise<{ url: string; filename: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
+    const res = await fetch(`${this.baseUrl}/upload/banner`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
+      throw new Error(err.message || 'Upload failed');
+    }
+    return res.json();
+  }
+  async uploadInstagramPost(file: File): Promise<{ url: string; filename: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
+    const res = await fetch(`${this.baseUrl}/upload/instagram-post`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
+      throw new Error(err.message || 'Upload failed');
+    }
+    return res.json();
+  }
+  async uploadEventImage(file: File): Promise<{ url: string; filename: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
+    const res = await fetch(`${this.baseUrl}/upload/event`, {
       method: 'POST',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: formData,

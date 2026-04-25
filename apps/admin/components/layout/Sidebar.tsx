@@ -46,6 +46,7 @@ import {
   CreditCard,
   ScrollText,
   Ruler,
+  Sparkles,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -109,6 +110,7 @@ const navItems: NavItem[] = [
     icon: PanelLeft,
     children: [
       { label: 'Hero Slides', href: '/dashboard/cms/hero-slides', icon: Layers },
+      { label: 'Parallax Sections', href: '/dashboard/cms/parallax-sections', icon: Sparkles },
       { label: 'Banners', href: '/dashboard/cms/banners', icon: ImageIcon },
       { label: 'Instagram Posts', href: '/dashboard/cms/instagram-posts', icon: Instagram },
       { label: 'Pages', href: '/dashboard/cms/pages', icon: FileEdit },

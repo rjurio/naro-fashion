@@ -930,6 +930,29 @@ model HeroSlide {
   @@index([deletedAt])
 }
 
+model ParallaxSection {
+  id              String    @id @default(cuid())
+  tenantId        String?
+  sectionKey      String                              // HERO_AMBIENT, CATEGORIES, NEW_ARRIVALS, RENTAL, WEDDINGS, INSTAGRAM, FOOTER_BAND
+  title           String?
+  imageUrl        String
+  effectType      String    @default("TRANSLATE_VERTICAL")  // TRANSLATE_VERTICAL, TRANSLATE_HORIZONTAL, FIXED, ZOOM_ON_SCROLL, MIRROR, MOUSE_TILT, STATIC
+  scrollSpeed     Float     @default(0.35)
+  overlayOpacity  Float     @default(0.45)
+  overlayColor    String    @default("#000000")
+  blurPx          Int       @default(0)
+  isActive        Boolean   @default(true)
+  sortOrder       Int       @default(0)
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([tenantId, sectionKey])
+  @@index([tenantId])
+  @@index([isActive, sectionKey])
+  @@index([deletedAt])
+}
+
 model Page {
   id             String   @id @default(cuid())
   tenantId       String?

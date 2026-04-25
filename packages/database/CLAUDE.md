@@ -14,7 +14,16 @@ Prisma schema and client for Naro Fashion multi-tenant SaaS.
 Tenant, PlatformAdmin, TenantBranding, SubscriptionPlan, TenantSubscription, TenantPayment, TenantModule
 
 ## Tenant-Scoped Models (have tenantId field)
-User, AdminUser, AdminActivityLog, LoginAttempt, CustomerIDDocument, Category, Product, ProductVariant, Order, Payment, Shipment, Invoice, ShippingZone, Review, RentalOrder, RentalChecklistTemplate, RentalPolicy, FlashSale, ReferralCode, Banner, HeroSlide, Page, SizeGuide, SiteSetting, InstagramPost, NewsletterSubscriber, Newsletter, PickupPoint, InventoryTransaction, ExpenseCategory, BusinessExpense, FinancialPeriod, Role, PosSession, HeldSale, Layaway, PosExchange, PromoCode, CustomerEvent, AbandonedCartReminder, PaymentMethod, ContactSubmission
+User, AdminUser, AdminActivityLog, LoginAttempt, CustomerIDDocument, Category, Product, ProductVariant, Order, Payment, Shipment, Invoice, ShippingZone, Review, RentalOrder, RentalChecklistTemplate, RentalPolicy, FlashSale, ReferralCode, Banner, HeroSlide, ParallaxSection, Page, SizeGuide, SiteSetting, InstagramPost, NewsletterSubscriber, Newsletter, PickupPoint, InventoryTransaction, ExpenseCategory, BusinessExpense, FinancialPeriod, Role, PosSession, HeldSale, Layaway, PosExchange, PromoCode, CustomerEvent, AbandonedCartReminder, PaymentMethod, ContactSubmission
+
+## ParallaxSection (added 2026-04-13)
+- Per-tenant homepage parallax backgrounds. Composite unique `(tenantId, sectionKey)` so each tenant has at most one row per section.
+- `sectionKey` (string enum, validated by API): HERO_AMBIENT, CATEGORIES, NEW_ARRIVALS, RENTAL, WEDDINGS, INSTAGRAM, FOOTER_BAND.
+- `effectType` (string enum, default `TRANSLATE_VERTICAL`): TRANSLATE_VERTICAL, TRANSLATE_HORIZONTAL, FIXED, ZOOM_ON_SCROLL, MIRROR, MOUSE_TILT, STATIC.
+- `scrollSpeed` Float (default 0.35) — used by TRANSLATE_*/MIRROR effects.
+- `overlayOpacity` Float (default 0.45) + `overlayColor` String (default `#000000`) for darkening over the backdrop.
+- `blurPx` Int (default 0) for mood-wash mode.
+- Soft-deletes via `deletedAt`. Indexes: `tenantId`, `(isActive, sectionKey)`, `deletedAt`.
 
 ## Child Models (no tenantId, inherit scope via parent FK)
 Address, CartItem, WishlistItem, OrderItem, ProductImage, ProductVideo, ShippingRate, ReviewImage, FlashSaleItem, RentalChecklistTemplateItem, RentalChecklistEntry, RentalPreparationReminder, Referral, EventMedia, NewsletterDelivery, NewsletterProduct, PromoCodeUsage, RolePermission, AdminUserRole

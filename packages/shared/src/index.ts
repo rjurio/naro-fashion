@@ -1,5 +1,8 @@
 // Shared types, constants, and utilities for Naro Fashion
 
+// Re-export image upload presets
+export * from './image-presets';
+
 // ============================================================
 // ENUMS
 // ============================================================

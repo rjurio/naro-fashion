@@ -2,6 +2,33 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { join } from 'path';
 import { writeFile, mkdir } from 'fs/promises';
 import { randomBytes } from 'crypto';
+import { imageSize } from 'image-size';
+
+const MAX_DIMENSION = 4000;
+
+function assertDimensionsWithinCap(
+  buffer: Buffer,
+  mimetype: string,
+  logger: Logger,
+): void {
+  if (!mimetype.startsWith('image/')) return;
+  if (mimetype === 'image/svg+xml') return;
+  let dims: { width?: number; height?: number };
+  try {
+    dims = imageSize(buffer);
+  } catch (err) {
+    logger.warn(`[UPLOAD] image-size probe failed: ${(err as Error).message}`);
+    throw new BadRequestException('Invalid image file');
+  }
+  if (!dims.width || !dims.height) {
+    throw new BadRequestException('Could not read image dimensions');
+  }
+  if (dims.width > MAX_DIMENSION || dims.height > MAX_DIMENSION) {
+    throw new BadRequestException(
+      `Image dimensions ${dims.width}×${dims.height} exceed max ${MAX_DIMENSION}×${MAX_DIMENSION}`,
+    );
+  }
+}
 
 @Injectable()
 export class UploadService {
@@ -25,6 +52,9 @@ export class UploadService {
     const maxSize = skipMimeCheck ? 25 * 1024 * 1024 : 5 * 1024 * 1024;
     if (file.buffer.length > maxSize) {
       throw new BadRequestException(`File size exceeds ${skipMimeCheck ? '25MB' : '5MB'} limit`);
+    }
+    if (!skipMimeCheck) {
+      assertDimensionsWithinCap(file.buffer, file.mimetype, this.logger);
     }
     const dir = join(process.cwd(), 'uploads', folder);
     await mkdir(dir, { recursive: true });
@@ -55,6 +85,8 @@ export class UploadService {
       throw new BadRequestException('File size exceeds 5MB limit');
     }
 
+    assertDimensionsWithinCap(file.buffer, file.mimetype, this.logger);
+
     await mkdir(this.uploadsDir, { recursive: true });
 
     const ext = file.mimetype.split('/')[1] === 'jpeg' ? 'jpg' : file.mimetype.split('/')[1];
@@ -76,6 +108,7 @@ export class UploadService {
     side: 'front' | 'back',
   ) {
     // TODO: Replace with actual secure upload (Cloudinary private folder)
+    // ID documents are evidence — DO NOT crop, resize, or recompress.
     this.logger.log(
       `[UPLOAD] ID document (${side}) upload requested: ${file.originalname}`,
     );

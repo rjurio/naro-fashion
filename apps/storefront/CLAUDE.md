@@ -80,6 +80,19 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - Payment methods section fetches active methods from `GET /payment-methods` — shows uploaded icon image or text pill fallback
 - `SiteSettingsContext` provides `settings.businessName` (and all business profile fields including `mapLatitude`, `mapLongitude`) from CMS API
 
+## Parallax Effects
+- **Tenant-toggleable parallax system** — sets `--parallax-y` on `:root` via a single global `requestAnimationFrame`-throttled scroll listener; multiple sections share that one variable, so adding more sections is free.
+- **Master toggle**: `parallax_enabled` SiteSetting (`'true'/'false'`, default `'false'`). Configure at `/dashboard/cms/settings` → Features.
+- **Per-section CRUD**: `/dashboard/cms/parallax-sections` (admin) → `GET /cms/parallax-sections` (public storefront). Each row has its own `effectType` (TRANSLATE_VERTICAL, TRANSLATE_HORIZONTAL, FIXED, ZOOM_ON_SCROLL, MIRROR, MOUSE_TILT, STATIC), scroll speed, overlay color/opacity, blur, sort order, active flag.
+- **Default fallback**: When parallax is on but a section has no uploaded image, `parallax_default_fallback` SiteSetting picks the look — `BRAND_GRADIENT` (linear, default), `BRAND_RADIAL`, `BRAND_MESH`, or `NONE`. The fallback gradient pulls colors from CSS variables `--color-dark-500`, `--color-primary`, `--color-accent` so it adapts to per-tenant branding automatically.
+- **Components** (in `apps/storefront/components/effects/`):
+  - `<ParallaxSection sectionKey="...">` — wrapper that renders the appropriate backdrop (uploaded image OR fallback gradient OR nothing) behind its children. Resolves resolution order: parallax disabled / mobile / reduced-motion → no layer; uploaded config exists → image with effect; fallback != NONE → brand gradient; else nothing.
+  - `<BrandGradientBackdrop style="BRAND_GRADIENT|BRAND_RADIAL|BRAND_MESH" />` — pure-CSS gradient using brand color variables.
+  - `<RevealOnScroll>` — one-shot fade+slide-up on viewport entry via IntersectionObserver, gated by the same toggle. CSS in `globals.css` (`.reveal-on-scroll` / `.is-visible`).
+- **Context**: `ParallaxProvider` in `contexts/ParallaxContext.tsx` mounted in `app/layout.tsx`. Self-contained — fetches its own settings + section configs, manages the global scroll listener lifecycle. Inactive (no listener attached, no CSS-var writes) when toggle is off OR `prefers-reduced-motion: reduce` OR viewport `< 640px`.
+- **iOS Safari quirk**: `effectType: FIXED` is automatically coerced to `TRANSLATE_VERTICAL` at config-load time when iOS Safari is detected (UA-sniff once at mount) — `position: fixed` backgrounds bounce on iOS Safari and look broken.
+- **Homepage sections wrapped**: CATEGORIES, NEW_ARRIVALS, RENTAL, WEDDINGS, INSTAGRAM, FOOTER_BAND. The HERO_AMBIENT key is reserved for the existing hero section — wiring there is intentionally deferred (the hero already has its own complex Ken Burns + orbit ring system; adding parallax there is a follow-up).
+
 ## Conventions
 - Use `@naro/shared` for types/enums, `@naro/ui` for shared components
 - All user-facing strings must support i18n (English + Swahili) via `useTranslation()`

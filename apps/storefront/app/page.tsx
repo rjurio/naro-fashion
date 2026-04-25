@@ -23,6 +23,8 @@ import { formatCountdown } from "@/lib/utils";
 import InstagramFeed from "@/components/social/InstagramFeed";
 import { useTranslation } from "@/lib/i18n";
 import { categoriesApi, productsApi, flashSalesApi, cmsApi } from "@/lib/api";
+import { ParallaxSection } from "@/components/effects/ParallaxSection";
+import { RevealOnScroll } from "@/components/effects/RevealOnScroll";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
 const API_ORIGIN = API_BASE_URL.replace('/api/v1', '');
@@ -573,7 +575,7 @@ export default function HomePage() {
       </section>
 
       {/* Featured Categories */}
-      <section className="py-16 lg:py-20 bg-background">
+      <ParallaxSection sectionKey="CATEGORIES" className="py-16 lg:py-20 bg-background">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-12">
             <h2 className="text-3xl sm:text-4xl font-heading font-bold text-foreground">
@@ -640,10 +642,10 @@ export default function HomePage() {
             </p>
           )}
         </div>
-      </section>
+      </ParallaxSection>
 
       {/* New Arrivals */}
-      <section className="py-16 lg:py-20 bg-muted/30">
+      <ParallaxSection sectionKey="NEW_ARRIVALS" className="py-16 lg:py-20 bg-muted/30">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex items-end justify-between mb-10">
             <div>
@@ -699,11 +701,11 @@ export default function HomePage() {
             </Link>
           </div>
         </div>
-      </section>
+      </ParallaxSection>
 
       {/* Rent a Gown Section */}
       {showRentalSection && (
-      <section className="py-16 lg:py-20 bg-gradient-to-br from-[#1A1A1A] via-[#2d1a2e] to-[#1A1A1A] relative overflow-hidden">
+      <ParallaxSection sectionKey="RENTAL" className="py-16 lg:py-20 bg-gradient-to-br from-[#1A1A1A] via-[#2d1a2e] to-[#1A1A1A] overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 rounded-full bg-[#D4AF37]/8 blur-[100px]" />
         <div className="absolute bottom-0 left-0 w-72 h-72 rounded-full bg-[#D4AF37]/8 blur-[100px]" />
 
@@ -775,12 +777,12 @@ export default function HomePage() {
             </Link>
           </div>
         </div>
-      </section>
+      </ParallaxSection>
       )}
 
       {/* Real Weddings */}
       {realWeddings.length > 0 && (
-        <section className="py-16 lg:py-20 bg-[#FFF8F0] dark:bg-muted/20">
+        <ParallaxSection sectionKey="WEDDINGS" className="py-16 lg:py-20 bg-[#FFF8F0] dark:bg-muted/20">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             <div className="text-center mb-12">
               <span className="inline-flex items-center gap-2 rounded-full bg-[#D4AF37]/10 px-4 py-1.5 text-sm text-[#D4AF37] border border-[#D4AF37]/30 mb-4">
@@ -853,7 +855,7 @@ export default function HomePage() {
               </Link>
             </div>
           </div>
-        </section>
+        </ParallaxSection>
       )}
       {/* Flash Sales — only shown when there are active flash sale products */}
       {!loadingFlashSales && flashSaleProducts.length > 0 && (
@@ -923,7 +925,14 @@ export default function HomePage() {
       )}
 
       {/* Instagram Feed */}
-      {showInstagram && <InstagramFeed />}
+      {showInstagram && (
+        <ParallaxSection sectionKey="INSTAGRAM" as="div" className="overflow-hidden">
+          <InstagramFeed />
+        </ParallaxSection>
+      )}
+
+      {/* Footer parallax band — only renders when configured or fallback enabled */}
+      <ParallaxSection sectionKey="FOOTER_BAND" as="div" className="h-32 sm:h-48" />
 
     </div>
   );

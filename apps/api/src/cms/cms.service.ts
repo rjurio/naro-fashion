@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { IsString, IsOptional, IsEmail, IsBoolean, IsInt, IsNumber } from 'class-validator';
+import { IsString, IsOptional, IsEmail, IsBoolean, IsInt, IsNumber, IsIn, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../notifications/email.service';
@@ -71,6 +71,54 @@ export class CreateHeroSlideDto {
 export class UpdateHeroSlideDto {
   @IsOptional() @IsString() title?: string;
   @IsOptional() @IsString() imageUrl?: string;
+  @IsOptional() @IsInt() @Type(() => Number) sortOrder?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
+// --- Parallax Sections ---
+
+export const PARALLAX_SECTION_KEYS = [
+  'HERO_AMBIENT',
+  'CATEGORIES',
+  'NEW_ARRIVALS',
+  'RENTAL',
+  'WEDDINGS',
+  'INSTAGRAM',
+  'FOOTER_BAND',
+] as const;
+
+export const PARALLAX_EFFECT_TYPES = [
+  'TRANSLATE_VERTICAL',
+  'TRANSLATE_HORIZONTAL',
+  'FIXED',
+  'ZOOM_ON_SCROLL',
+  'MIRROR',
+  'MOUSE_TILT',
+  'STATIC',
+] as const;
+
+export class CreateParallaxSectionDto {
+  @IsString() @IsIn(PARALLAX_SECTION_KEYS as unknown as string[]) sectionKey: string;
+  @IsString() imageUrl: string;
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() @IsIn(PARALLAX_EFFECT_TYPES as unknown as string[]) effectType?: string;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) @Type(() => Number) scrollSpeed?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) @Type(() => Number) overlayOpacity?: number;
+  @IsOptional() @IsString() overlayColor?: string;
+  @IsOptional() @IsInt() @Min(0) @Max(50) @Type(() => Number) blurPx?: number;
+  @IsOptional() @IsInt() @Type(() => Number) sortOrder?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
+export class UpdateParallaxSectionDto {
+  @IsOptional() @IsString() @IsIn(PARALLAX_SECTION_KEYS as unknown as string[]) sectionKey?: string;
+  @IsOptional() @IsString() imageUrl?: string;
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() @IsIn(PARALLAX_EFFECT_TYPES as unknown as string[]) effectType?: string;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) @Type(() => Number) scrollSpeed?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) @Type(() => Number) overlayOpacity?: number;
+  @IsOptional() @IsString() overlayColor?: string;
+  @IsOptional() @IsInt() @Min(0) @Max(50) @Type(() => Number) blurPx?: number;
   @IsOptional() @IsInt() @Type(() => Number) sortOrder?: number;
   @IsOptional() @IsBoolean() isActive?: boolean;
 }
@@ -442,6 +490,90 @@ export class CmsService {
     return this.prisma.heroSlide.findMany({
       where: { tenantId: this.tenantContext.requireId, deletedAt: { not: null } },
       orderBy: { deletedAt: 'desc' },
+    });
+  }
+
+  // --- Parallax Sections ---
+
+  async findActiveParallaxSections() {
+    return this.prisma.parallaxSection.findMany({
+      where: { tenantId: this.tenantContext.requireId, isActive: true, deletedAt: null },
+      orderBy: { sortOrder: 'asc' },
+    });
+  }
+
+  async findAllParallaxSectionsAdmin() {
+    return this.prisma.parallaxSection.findMany({
+      where: { tenantId: this.tenantContext.requireId, deletedAt: null },
+      orderBy: { sortOrder: 'asc' },
+    });
+  }
+
+  async findDeletedParallaxSections() {
+    return this.prisma.parallaxSection.findMany({
+      where: { tenantId: this.tenantContext.requireId, deletedAt: { not: null } },
+      orderBy: { deletedAt: 'desc' },
+    });
+  }
+
+  async createParallaxSection(dto: CreateParallaxSectionDto) {
+    const tenantId = this.tenantContext.requireId;
+    // Block duplicates explicitly with a friendly error before hitting Prisma
+    const existing = await this.prisma.parallaxSection.findFirst({
+      where: { tenantId, sectionKey: dto.sectionKey, deletedAt: null },
+    });
+    if (existing) {
+      throw new BadRequestException('This section already has a parallax background — edit it instead.');
+    }
+    const section = await this.prisma.parallaxSection.create({
+      data: { ...dto, tenantId } as any,
+    });
+    await this.auditService.log('CREATE', 'ParallaxSection', section.id, { sectionKey: dto.sectionKey });
+    return section;
+  }
+
+  async updateParallaxSection(id: string, dto: UpdateParallaxSectionDto) {
+    const section = await this.prisma.parallaxSection.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
+    });
+    if (!section || section.deletedAt) throw new NotFoundException('Parallax section not found');
+    const updated = await this.prisma.parallaxSection.update({ where: { id }, data: dto });
+    await this.auditService.log('UPDATE', 'ParallaxSection', id);
+    return updated;
+  }
+
+  async deleteParallaxSection(id: string) {
+    const section = await this.prisma.parallaxSection.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
+    });
+    if (!section) throw new NotFoundException('Parallax section not found');
+    await this.prisma.parallaxSection.update({
+      where: { id },
+      data: { deletedAt: new Date(), isActive: false },
+    });
+    await this.auditService.log('DELETE', 'ParallaxSection', id);
+    return { message: 'Parallax section moved to recycle bin' };
+  }
+
+  async restoreParallaxSection(id: string) {
+    const section = await this.prisma.parallaxSection.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
+    });
+    if (!section || !section.deletedAt) throw new NotFoundException('Deleted parallax section not found');
+    return this.prisma.parallaxSection.update({
+      where: { id },
+      data: { deletedAt: null, isActive: true },
+    });
+  }
+
+  async toggleParallaxSectionActive(id: string) {
+    const section = await this.prisma.parallaxSection.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId, deletedAt: null },
+    });
+    if (!section) throw new NotFoundException('Parallax section not found');
+    return this.prisma.parallaxSection.update({
+      where: { id },
+      data: { isActive: !section.isActive },
     });
   }
 

@@ -6,6 +6,7 @@ import {
   ImageIcon, ExternalLink, Loader2, X,
 } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import PresetImageUploadField from '@/components/ui/PresetImageUploadField';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { adminApi } from '@/lib/api';
@@ -165,9 +166,13 @@ export default function BannersPage() {
               <label className={labelClass}>Subtitle (Swahili)</label>
               <input type="text" value={form.subtitleSwahili} onChange={(e) => setForm({ ...form, subtitleSwahili: e.target.value })} placeholder="Maelezo mafupi" className={inputClass} />
             </div>
-            <div>
-              <label className={labelClass}>Image URL</label>
-              <input type="text" value={form.imageUrl} onChange={(e) => setForm({ ...form, imageUrl: e.target.value })} placeholder="/uploads/banners/hero.jpg" className={inputClass} />
+            <div className="md:col-span-2">
+              <label className={labelClass}>Banner Image</label>
+              <PresetImageUploadField
+                presetKey="banner"
+                value={form.imageUrl || null}
+                onChange={(u) => setForm({ ...form, imageUrl: u || '' })}
+              />
             </div>
             <div>
               <label className={labelClass}>Link URL</label>

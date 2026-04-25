@@ -25,6 +25,8 @@ const SETTING_DEFINITIONS: SettingDef[] = [
   // Features
   { key: 'instagram_feed_visible', label: 'Show Instagram Feed on Storefront', type: 'select', group: 'Features', options: ['true', 'false'], defaultValue: 'true' },
   { key: 'rental_section_visible', label: 'Show Rental Section on Homepage', type: 'select', group: 'Features', options: ['true', 'false'], defaultValue: 'true' },
+  { key: 'parallax_enabled', label: 'Enable Parallax Scroll Effects', type: 'select', group: 'Features', options: ['true', 'false'], defaultValue: 'false', hint: 'Adds depth via scroll-driven background layers. Configure per-section images at /dashboard/cms/parallax-sections' },
+  { key: 'parallax_default_fallback', label: 'Default Background (no image uploaded)', type: 'select', group: 'Features', options: ['BRAND_GRADIENT', 'BRAND_RADIAL', 'BRAND_MESH', 'NONE'], defaultValue: 'BRAND_GRADIENT', hint: 'Renders for sections without an uploaded parallax image, using your brand colors. Pick NONE to keep those sections flat.' },
   // Homepage — New Arrivals
   { key: 'new_arrivals_title', label: 'New Arrivals Title', type: 'text', group: 'Homepage Sections', defaultValue: 'New Arrivals', bilingual: true },
   { key: 'new_arrivals_subtitle', label: 'New Arrivals Subtitle', type: 'text', group: 'Homepage Sections', defaultValue: 'Fresh styles just dropped this week', bilingual: true },
@@ -107,9 +109,12 @@ export default function SiteSettingsPage() {
   const renderField = (key: string, def: SettingDef, placeholder: string) => {
     if (def.type === 'select') {
       return (
-        <select title={placeholder} value={values[key] || ''} onChange={(e) => setValues({ ...values, [key]: e.target.value })} className={inputClass}>
-          {def.options?.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-        </select>
+        <div>
+          <select title={placeholder} value={values[key] || ''} onChange={(e) => setValues({ ...values, [key]: e.target.value })} className={inputClass}>
+            {def.options?.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+          </select>
+          {def.hint && key === def.key && <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">{def.hint}</p>}
+        </div>
       );
     }
     if (def.type === 'textarea') {

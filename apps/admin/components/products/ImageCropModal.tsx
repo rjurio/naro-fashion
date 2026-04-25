@@ -3,17 +3,32 @@
 import { useState, useRef, useCallback } from 'react';
 import Cropper, { ReactCropperElement } from 'react-cropper';
 import 'cropperjs/dist/cropper.css';
+import type { ImagePreset } from '@naro/shared';
 import { Modal } from '../ui/Modal';
 
 interface Props {
   file: File;
   onCropped: (blob: Blob) => void;
   onCancel: () => void;
+  preset?: ImagePreset;
 }
 
-export default function ImageCropModal({ file, onCropped, onCancel }: Props) {
+const DEFAULT_ASPECT = 3 / 4;
+const DEFAULT_OUTPUT_W = 900;
+const DEFAULT_OUTPUT_H = 1200;
+const DEFAULT_MIME: 'image/jpeg' = 'image/jpeg';
+
+export default function ImageCropModal({ file, onCropped, onCancel, preset }: Props) {
   const cropperRef = useRef<ReactCropperElement>(null);
-  const [quality, setQuality] = useState(80);
+  const aspect = preset?.aspectRatio ?? DEFAULT_ASPECT;
+  const outW = preset?.outputWidth ?? DEFAULT_OUTPUT_W;
+  const outH = preset?.outputHeight ?? DEFAULT_OUTPUT_H;
+  const outputMime: 'image/jpeg' | 'image/png' =
+    preset?.outputMime === 'image/png' ? 'image/png' : DEFAULT_MIME;
+  const isLossless = outputMime === 'image/png';
+
+  const initialQuality = preset ? Math.round(preset.quality * 100) : 80;
+  const [quality, setQuality] = useState(initialQuality);
   const [imageUrl] = useState(() => URL.createObjectURL(file));
 
   const handleCrop = useCallback(() => {
@@ -21,30 +36,39 @@ export default function ImageCropModal({ file, onCropped, onCancel }: Props) {
     if (!cropper) return;
 
     const canvas = cropper.getCroppedCanvas({
-      width: 900,
-      height: 1200,
+      width: outW,
+      height: outH,
       imageSmoothingEnabled: true,
       imageSmoothingQuality: 'high',
     });
 
-    canvas.toBlob(
-      (blob) => {
+    if (isLossless) {
+      canvas.toBlob((blob) => {
         if (blob) onCropped(blob);
-      },
-      'image/jpeg',
-      quality / 100,
-    );
-  }, [quality, onCropped]);
+      }, outputMime);
+    } else {
+      canvas.toBlob(
+        (blob) => {
+          if (blob) onCropped(blob);
+        },
+        outputMime,
+        quality / 100,
+      );
+    }
+  }, [quality, onCropped, outW, outH, outputMime, isLossless]);
+
+  const title = preset?.label ? `Crop ${preset.label}` : 'Crop Image';
+  const dimsLabel = `${outW}×${outH}`;
 
   return (
-    <Modal isOpen title="Crop Image" size="lg" onClose={onCancel}>
+    <Modal isOpen title={title} size="lg" onClose={onCancel}>
       <div className="space-y-4">
         <div className="max-h-[60vh] overflow-hidden rounded-lg bg-black">
           <Cropper
             ref={cropperRef}
             src={imageUrl}
             style={{ height: '60vh', width: '100%' }}
-            aspectRatio={3 / 4}
+            aspectRatio={aspect}
             guides
             viewMode={1}
             dragMode="move"
@@ -53,20 +77,28 @@ export default function ImageCropModal({ file, onCropped, onCancel }: Props) {
           />
         </div>
 
-        <div className="flex items-center gap-3">
-          <label className="text-xs text-[hsl(var(--muted-foreground))] whitespace-nowrap">
-            Quality: {quality}%
-          </label>
-          <input
-            type="range"
-            min={40}
-            max={100}
-            step={5}
-            value={quality}
-            onChange={(e) => setQuality(Number(e.target.value))}
-            className="flex-1 h-1.5 accent-brand-gold"
-          />
-        </div>
+        <p className="text-xs text-[hsl(var(--muted-foreground))]">
+          Output: <span className="font-mono">{dimsLabel}</span>
+          {isLossless ? ' · PNG (lossless)' : ' · JPEG'}
+        </p>
+
+        {!isLossless && (
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-[hsl(var(--muted-foreground))] whitespace-nowrap">
+              Quality: {quality}%
+            </label>
+            <input
+              type="range"
+              min={40}
+              max={100}
+              step={5}
+              value={quality}
+              onChange={(e) => setQuality(Number(e.target.value))}
+              className="flex-1 h-1.5 accent-brand-gold"
+              aria-label="JPEG quality"
+            />
+          </div>
+        )}
 
         <div className="flex justify-end gap-3">
           <button
