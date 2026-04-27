@@ -18,7 +18,19 @@ interface InstagramPost {
   sortOrder: number;
 }
 
-export default function InstagramFeed() {
+interface InstagramFeedProps {
+  /** Hard upper cap on visible posts. Applied after the layout-derived count. */
+  maxPosts?: number;
+  /** 'single_row' = 6 posts (one desktop row). 'multi_row' = `rows` × 6. */
+  layout?: 'single_row' | 'multi_row';
+  /** Row count for multi_row layout (1..5). Ignored when layout is single_row. */
+  rows?: number;
+}
+
+// Desktop grid width — must stay in sync with `lg:grid-cols-6` below.
+const DESKTOP_COLS = 6;
+
+export default function InstagramFeed({ maxPosts, layout = 'single_row', rows = 2 }: InstagramFeedProps) {
   const { t } = useTranslation();
   const { settings } = useSiteSettings();
   const [posts, setPosts] = useState<InstagramPost[]>([]);
@@ -33,6 +45,11 @@ export default function InstagramFeed() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Layout determines slot count; max_posts is a hard cap on top of that.
+  const layoutSlots = layout === 'multi_row' ? Math.max(1, rows) * DESKTOP_COLS : DESKTOP_COLS;
+  const effectiveCap = maxPosts && maxPosts > 0 ? Math.min(layoutSlots, maxPosts) : layoutSlots;
+  const visiblePosts = posts.slice(0, effectiveCap);
+
   const resolveImageUrl = (url: string) =>
     url.startsWith('/uploads') ? `${API_ORIGIN}${url}` : url;
 
@@ -46,7 +63,7 @@ export default function InstagramFeed() {
     );
   }
 
-  if (posts.length === 0) return null;
+  if (visiblePosts.length === 0) return null;
 
   return (
     <section className="py-12 sm:py-16 bg-card">
@@ -74,7 +91,7 @@ export default function InstagramFeed() {
 
         {/* Grid of Instagram Posts */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
-          {posts.map((post) => (
+          {visiblePosts.map((post) => (
             <a
               key={post.id}
               href={post.postUrl || instagramUrl}

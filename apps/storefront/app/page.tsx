@@ -927,7 +927,11 @@ export default function HomePage() {
       {/* Instagram Feed */}
       {showInstagram && (
         <ParallaxSection sectionKey="INSTAGRAM" as="div" className="overflow-hidden">
-          <InstagramFeed />
+          <InstagramFeed
+            maxPosts={Number(cmsSettings.instagram_feed_max_posts) || undefined}
+            layout={cmsSettings.instagram_feed_layout === 'multi_row' ? 'multi_row' : 'single_row'}
+            rows={Number(cmsSettings.instagram_feed_rows) || 2}
+          />
         </ParallaxSection>
       )}
 

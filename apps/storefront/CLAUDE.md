@@ -45,6 +45,12 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 ## Instagram Feed
 - `components/social/InstagramFeed.tsx` fetches from API, shows real IG posts with likes/captions on hover
 - Visibility controlled by `instagram_feed_visible` site setting (fetched in homepage)
+- **Layout knobs** (admin-configurable in `/dashboard/cms/settings` Features group):
+  - `instagram_feed_layout` (`single_row` | `multi_row`, default `single_row`)
+  - `instagram_feed_rows` (2/3/4/5, default `2`) — only used for `multi_row`
+  - `instagram_feed_max_posts` (6/12/18/24/30, default `30`) — hard upper cap
+- Effective visible count = `min(max_posts, layout === 'single_row' ? 6 : rows × 6)`. The constant `DESKTOP_COLS = 6` in `InstagramFeed.tsx` MUST stay in sync with the `lg:grid-cols-6` Tailwind class on the grid — change one, change the other.
+- Homepage parses all three settings and passes them as `maxPosts` / `layout` / `rows` props. When the resulting slice is empty, the whole section hides.
 - Posts ordered: API-fetched (newest) → Pinned → Manual
 
 ## Newsletter

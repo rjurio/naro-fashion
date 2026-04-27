@@ -66,6 +66,9 @@ async function main() {
     { key: 'facebook_app_id', value: '4338851449722487', type: 'string' },
     { key: 'facebook_app_secret', value: '', type: 'string' },
     { key: 'instagram_feed_visible', value: 'true', type: 'boolean' },
+    { key: 'instagram_feed_layout', value: 'single_row', type: 'string' },
+    { key: 'instagram_feed_rows', value: '2', type: 'string' },
+    { key: 'instagram_feed_max_posts', value: '30', type: 'string' },
     { key: 'instagram_last_sync', value: '', type: 'string' },
 
     // Store Features
