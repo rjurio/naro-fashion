@@ -930,6 +930,35 @@ model HeroSlide {
   @@index([deletedAt])
 }
 
+// PageView captures a single storefront page hit. One row per route change.
+// Designed for fast aggregate queries: indexes cover all dashboard slice-and-dice
+// patterns (by tenant + time, by tenant + path, by tenant + country).
+//
+// IP itself is NEVER stored — only the derived country/city. This keeps PII out
+// of the row while still giving useful geographic breakdowns. sessionId is a
+// short opaque cookie generated client-side; ties pageviews from the same browser
+// session together for unique-visitor counts without identifying the person.
+model PageView {
+  id            String    @id @default(cuid())
+  tenantId      String?
+  sessionId     String                              // opaque short ID, set in a cookie by the storefront tracker
+  userId        String?                             // populated when the visitor is logged in (FK to User, no relation to keep it loose)
+  path          String                              // URL pathname only, no querystring
+  referrer      String?                             // document.referrer (cleaned to origin if same-origin)
+  country       String?                             // ISO 3166-1 alpha-2 (e.g. "TZ", "KE", "US")
+  city          String?
+  deviceType    String?                             // "mobile" | "tablet" | "desktop" | "bot" (bots are filtered out before insert; field kept for future)
+  browser       String?                             // "Chrome", "Safari", "Firefox", "Edge", "Other"
+  os            String?                             // "Windows", "macOS", "iOS", "Android", "Linux", "Other"
+  isBot         Boolean   @default(false)           // true rows are NOT inserted today (filter at API), kept for future-proofing
+  createdAt     DateTime  @default(now())
+
+  @@index([tenantId, createdAt])                    // dashboard time-range queries
+  @@index([tenantId, path])                         // top pages
+  @@index([tenantId, country])                      // geographic breakdown
+  @@index([tenantId, sessionId])                    // unique-visitor dedupe
+}
+
 model ParallaxSection {
   id              String    @id @default(cuid())
   tenantId        String?

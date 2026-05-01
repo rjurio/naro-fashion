@@ -223,6 +223,29 @@ class AdminApiClient {
     return this.get<any>('/analytics/products');
   }
 
+  // ===== Visitor Analytics =====
+  getVisitorOverview(params?: Record<string, string>) {
+    return this.get<any>('/analytics/visitors/overview', { params });
+  }
+  getVisitorTimeseries(params?: Record<string, string>) {
+    return this.get<any[]>('/analytics/visitors/timeseries', { params });
+  }
+  getVisitorTopPages(params?: Record<string, string>) {
+    return this.get<any[]>('/analytics/visitors/top-pages', { params });
+  }
+  getVisitorCountries(params?: Record<string, string>) {
+    return this.get<any[]>('/analytics/visitors/countries', { params });
+  }
+  getVisitorDevices(params?: Record<string, string>) {
+    return this.get<any>('/analytics/visitors/devices', { params });
+  }
+  getVisitorReferrers(params?: Record<string, string>) {
+    return this.get<any[]>('/analytics/visitors/referrers', { params });
+  }
+  getVisitorHourly(params?: Record<string, string>) {
+    return this.get<any[]>('/analytics/visitors/hourly', { params });
+  }
+
   // ===== Products =====
   getProducts(params?: Record<string, string>) {
     return this.get<any>('/products/admin', { params });

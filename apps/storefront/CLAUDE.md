@@ -99,6 +99,15 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - **iOS Safari quirk**: `effectType: FIXED` is automatically coerced to `TRANSLATE_VERTICAL` at config-load time when iOS Safari is detected (UA-sniff once at mount) — `position: fixed` backgrounds bounce on iOS Safari and look broken.
 - **Homepage sections wrapped**: CATEGORIES, NEW_ARRIVALS, RENTAL, WEDDINGS, INSTAGRAM, FOOTER_BAND. The HERO_AMBIENT key is reserved for the existing hero section — wiring there is intentionally deferred (the hero already has its own complex Ken Burns + orbit ring system; adding parallax there is a follow-up).
 
+## Visitor Analytics (added 2026-04-25)
+- `<AnalyticsTracker>` (`components/analytics/AnalyticsTracker.tsx`) mounted inside the `<Suspense>` boundary in `app/layout.tsx` — fires a `POST /analytics/track` beacon on every route change via `usePathname()` + `useSearchParams()`.
+- Session ID stored in a `naro_sid` cookie (30-min sliding window). Generated client-side via `crypto.randomUUID()`. Cookie also acts as the unique-visitor key on the dashboard.
+- Tenant ID is read from the existing `tenantId` cookie (set by `middleware.ts` during tenant resolution) and injected as `X-Tenant-Id` header on the track call.
+- `fetch(..., { keepalive: true })` is used so navigation doesn't drop in-flight beacons; failures are silent (tracking never breaks customer flow).
+- Honors `navigator.doNotTrack === '1'` and skips entirely.
+- Bot detection happens server-side (UA regex) — bots are accepted by the endpoint but never persisted.
+- Geographic data: server reads `x-forwarded-for` (nginx populates this), runs `geoip-lite.lookup()`, and persists only the country/city. **Client IP is never stored**.
+
 ## Conventions
 - Use `@naro/shared` for types/enums, `@naro/ui` for shared components
 - All user-facing strings must support i18n (English + Swahili) via `useTranslation()`

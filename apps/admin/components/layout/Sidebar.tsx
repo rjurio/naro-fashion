@@ -47,6 +47,7 @@ import {
   ScrollText,
   Ruler,
   Sparkles,
+  Eye,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -129,7 +130,15 @@ const navItems: NavItem[] = [
       { label: 'Subscribers', href: '/dashboard/newsletter/subscribers', icon: Users },
     ],
   },
-  { label: 'Analytics', href: '/dashboard/analytics', icon: BarChart3, requiredModule: 'analytics' },
+  {
+    label: 'Analytics',
+    icon: BarChart3,
+    requiredModule: 'analytics',
+    children: [
+      { label: 'Business', href: '/dashboard/analytics', icon: BarChart3 },
+      { label: 'Visitors', href: '/dashboard/analytics/visitors', icon: Eye },
+    ],
+  },
   {
     label: 'Reports',
     icon: FileBarChart2,

@@ -13,6 +13,7 @@ import Header from "@/components/layout/Header";
 import Footer from "@/components/layout/Footer";
 import WhatsAppButton from "@/components/ui/WhatsAppButton";
 import NavigationProgress from "@/components/ui/NavigationProgress";
+import AnalyticsTracker from "@/components/analytics/AnalyticsTracker";
 import "./globals.css";
 
 const inter = Inter({
@@ -96,6 +97,7 @@ export default function RootLayout({
             <AuthProvider>
               <Suspense fallback={null}>
                 <NavigationProgress />
+                <AnalyticsTracker />
               </Suspense>
               <Header />
               <main className="flex-1">{children}</main>

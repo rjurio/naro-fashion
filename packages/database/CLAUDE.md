@@ -14,7 +14,16 @@ Prisma schema and client for Naro Fashion multi-tenant SaaS.
 Tenant, PlatformAdmin, TenantBranding, SubscriptionPlan, TenantSubscription, TenantPayment, TenantModule
 
 ## Tenant-Scoped Models (have tenantId field)
-User, AdminUser, AdminActivityLog, LoginAttempt, CustomerIDDocument, Category, Product, ProductVariant, Order, Payment, Shipment, Invoice, ShippingZone, Review, RentalOrder, RentalChecklistTemplate, RentalPolicy, FlashSale, ReferralCode, Banner, HeroSlide, ParallaxSection, Page, SizeGuide, SiteSetting, InstagramPost, NewsletterSubscriber, Newsletter, PickupPoint, InventoryTransaction, ExpenseCategory, BusinessExpense, FinancialPeriod, Role, PosSession, HeldSale, Layaway, PosExchange, PromoCode, CustomerEvent, AbandonedCartReminder, PaymentMethod, ContactSubmission
+User, AdminUser, AdminActivityLog, LoginAttempt, CustomerIDDocument, Category, Product, ProductVariant, Order, Payment, Shipment, Invoice, ShippingZone, Review, RentalOrder, RentalChecklistTemplate, RentalPolicy, FlashSale, ReferralCode, Banner, HeroSlide, ParallaxSection, PageView, Page, SizeGuide, SiteSetting, InstagramPost, NewsletterSubscriber, Newsletter, PickupPoint, InventoryTransaction, ExpenseCategory, BusinessExpense, FinancialPeriod, Role, PosSession, HeldSale, Layaway, PosExchange, PromoCode, CustomerEvent, AbandonedCartReminder, PaymentMethod, ContactSubmission
+
+## PageView (added 2026-04-25)
+- One row per storefront page hit (route change), used for the visitor analytics dashboard.
+- IP is **never persisted** — only derived `country` (ISO 3166-1 alpha-2) and `city`. Lookup happens server-side via `geoip-lite` (bundled MaxMind GeoLite2 DB, no external HTTP).
+- `sessionId` is an opaque short ID set in a `naro_sid` cookie by the storefront tracker (30-min sliding session). Used for unique-visitor counts without identifying the person.
+- `userId` populated when the visitor is logged in; null for anonymous traffic.
+- `deviceType` ("mobile" | "tablet" | "desktop"), `browser`, `os` parsed from user-agent via cheap regex (no third-party UA parser dependency). Bots are filtered at the API and never inserted.
+- Indexes cover the four dashboard query shapes: `(tenantId, createdAt)`, `(tenantId, path)`, `(tenantId, country)`, `(tenantId, sessionId)`.
+- High-write table — expect ~1 row per visitor route change. At 1k visits/day per tenant that's ~365k rows/year. The four indexes keep aggregate queries fast at this scale; daily aggregation rollup is a future optimization.
 
 ## ParallaxSection (added 2026-04-13)
 - Per-tenant homepage parallax backgrounds. Composite unique `(tenantId, sectionKey)` so each tenant has at most one row per section.
