@@ -66,6 +66,8 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - API client reads `tenantId` from cookie and injects `X-Tenant-Id` header on all API requests
 - If tenant is SUSPENDED, middleware returns 503. If not found, returns 404.
 - **IMPORTANT**: Any raw `fetch()` calls to the API (outside the api client) MUST manually include the `X-Tenant-Id` header from `document.cookie`
+- **SSR fetches must inject the tenant header explicitly**: server components don't auto-forward cookies, so any `fetch` from a server component or `manifest.ts`/`robots.ts`/etc. must read the `tenantId` cookie via `cookies()` from `next/headers` (async in Next 15) and pass `X-Tenant-Id` in the request headers — see the `tenantHeader()` helper in `lib/settings-server.ts`. Use `cache: 'no-store'` for tenant-scoped SSR fetches because Next's URL-keyed cache would otherwise return tenant A's payload to tenant B's first request after revalidation. Without this, every tenant gets the default branding/PWA name on first paint.
+- **The API rejects mismatched JWT vs X-Tenant-Id with 403**: if a customer's JWT carries tenant A but the request includes `X-Tenant-Id: B`, the API responds `403 X-Tenant-Id does not match authenticated tenant`. Drift is bounded to one request because middleware overwrites the cookie every time, but if you're seeing 403s on legitimate flows, check that the cookie hasn't gone stale.
 - **CORS**: Production API must accept both apex and www origins. Set `STOREFRONT_URL="https://narofashion.co.tz,https://www.narofashion.co.tz"` in ALL three `.env` files (root, `apps/api/.env`, `packages/database/.env`) — Prisma's dotenv loads first and never overrides, so a stale value in `packages/database/.env` silently wins.
 
 ## Data Flow
