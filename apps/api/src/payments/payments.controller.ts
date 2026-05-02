@@ -12,6 +12,8 @@ import { PaymentsService } from './payments.service';
 import { CreatePaymentDto, UpdatePaymentDto } from './dto/create-payment.dto';
 import { InitiatePaymentDto } from './dto/initiate-payment.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 
 @Controller('payments')
@@ -21,7 +23,7 @@ export class PaymentsController {
   /**
    * Create a payment record (manual/admin use).
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Post()
   create(@Body() dto: CreatePaymentDto) {
     return this.paymentsService.create(dto);
@@ -37,8 +39,8 @@ export class PaymentsController {
    */
   @UseGuards(JwtAuthGuard)
   @Post('initiate')
-  initiatePayment(@Body() dto: InitiatePaymentDto) {
-    return this.paymentsService.initiateGatewayPayment(dto);
+  initiatePayment(@Body() dto: InitiatePaymentDto, @CurrentUser() user: any) {
+    return this.paymentsService.initiateGatewayPayment(dto, user);
   }
 
   /**
@@ -47,8 +49,11 @@ export class PaymentsController {
    */
   @UseGuards(JwtAuthGuard)
   @Get('status/:transactionRef')
-  getPaymentStatus(@Param('transactionRef') transactionRef: string) {
-    return this.paymentsService.pollPaymentStatus(transactionRef);
+  getPaymentStatus(
+    @Param('transactionRef') transactionRef: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.paymentsService.pollPaymentStatus(transactionRef, user);
   }
 
   /**
@@ -56,8 +61,8 @@ export class PaymentsController {
    */
   @UseGuards(JwtAuthGuard)
   @Get('order/:orderId')
-  findByOrder(@Param('orderId') orderId: string) {
-    return this.paymentsService.findByOrder(orderId);
+  findByOrder(@Param('orderId') orderId: string, @CurrentUser() user: any) {
+    return this.paymentsService.findByOrder(orderId, user);
   }
 
   /**
@@ -65,8 +70,11 @@ export class PaymentsController {
    */
   @UseGuards(JwtAuthGuard)
   @Get('order/:orderId/summary')
-  getPaymentSummary(@Param('orderId') orderId: string) {
-    return this.paymentsService.getPaymentSummary(orderId);
+  getPaymentSummary(
+    @Param('orderId') orderId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.paymentsService.getPaymentSummary(orderId, user);
   }
 
   /**
@@ -74,14 +82,17 @@ export class PaymentsController {
    */
   @UseGuards(JwtAuthGuard)
   @Get('rental/:rentalOrderId')
-  findByRental(@Param('rentalOrderId') rentalOrderId: string) {
-    return this.paymentsService.findByRental(rentalOrderId);
+  findByRental(
+    @Param('rentalOrderId') rentalOrderId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.paymentsService.findByRental(rentalOrderId, user);
   }
 
   /**
    * Update payment status (admin use).
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id')
   updateStatus(
     @Param('id') id: string,

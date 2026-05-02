@@ -12,6 +12,7 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RegisterDto } from './dto/register.dto';
+import { requireJwtSecret } from './util/jwt-secrets';
 
 // Setting keys used to override JWT lifetimes per-tenant via the CMS settings UI.
 export const ACCESS_EXPIRES_SETTING_KEY = 'auth_access_token_expires';
@@ -240,15 +241,12 @@ export class AuthService {
       await this.resolveTokenExpirations(user.tenantId);
 
     const accessToken = this.jwtService.sign(payload, {
-      secret: this.configService.get('JWT_SECRET', 'naro-secret-key'),
+      secret: requireJwtSecret('JWT_SECRET', this.configService),
       expiresIn: accessExpiresIn as any,
     });
 
     const refreshToken = this.jwtService.sign(payload, {
-      secret: this.configService.get(
-        'JWT_REFRESH_SECRET',
-        'naro-refresh-secret-key',
-      ),
+      secret: requireJwtSecret('JWT_REFRESH_SECRET', this.configService),
       expiresIn: refreshExpiresIn as any,
     });
 
@@ -258,10 +256,7 @@ export class AuthService {
   async refreshTokens(refreshToken: string) {
     try {
       const payload = this.jwtService.verify(refreshToken, {
-        secret: this.configService.get(
-          'JWT_REFRESH_SECRET',
-          'naro-refresh-secret-key',
-        ),
+        secret: requireJwtSecret('JWT_REFRESH_SECRET', this.configService),
       });
 
       // Platform admin refresh

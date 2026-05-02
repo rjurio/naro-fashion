@@ -19,6 +19,7 @@ import { QueryRentalsDto } from './dto/query-rentals.dto';
 import { UpdateRentalStatusDto } from './dto/update-rental-status.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { extname } from 'path';
@@ -45,21 +46,25 @@ export class RentalsController {
     return this.rentalsService.findAll(userId);
   }
 
+  @UseGuards(AdminGuard)
   @Get('admin')
   findAllAdmin(@Query() query: QueryRentalsDto) {
     return this.rentalsService.findAllAdmin(query);
   }
 
+  @UseGuards(AdminGuard)
   @Get('upcoming-pickups')
   getUpcomingPickups(@Query('days', ParseIntPipe) days: number) {
     return this.rentalsService.getUpcomingPickups(days);
   }
 
+  @UseGuards(AdminGuard)
   @Get('pending-returns')
   getPendingReturns() {
     return this.rentalsService.getPendingReturns();
   }
 
+  @UseGuards(AdminGuard)
   @Get('overdue')
   getOverdueRentals() {
     return this.rentalsService.getOverdueRentals();
@@ -79,10 +84,11 @@ export class RentalsController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.rentalsService.findOne(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.rentalsService.findOne(id, user);
   }
 
+  @UseGuards(AdminGuard)
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -91,6 +97,7 @@ export class RentalsController {
     return this.rentalsService.update(id, dto);
   }
 
+  @UseGuards(AdminGuard)
   @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,
@@ -99,11 +106,13 @@ export class RentalsController {
     return this.rentalsService.updateStatus(id, dto.status);
   }
 
+  @UseGuards(AdminGuard)
   @Patch(':id/ready')
   markReadyForPickup(@Param('id') id: string) {
     return this.rentalsService.markReadyForPickup(id);
   }
 
+  @UseGuards(AdminGuard)
   @Post(':id/transport-receipt')
   @UseInterceptors(
     FileInterceptor('file', {

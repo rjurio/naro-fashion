@@ -12,6 +12,8 @@ import { useTranslation } from "@/lib/i18n";
 
 interface Address {
   id: string;
+  fullName: string;
+  phone: string;
   street: string;
   city: string;
   state: string;
@@ -27,7 +29,7 @@ const LABEL_ICONS: Record<string, React.ElementType> = {
   Office: Briefcase,
 };
 
-const emptyForm = { street: "", city: "", state: "", zipCode: "", country: "Tanzania", label: "Home", isDefault: false };
+const emptyForm = { fullName: "", phone: "", street: "", city: "", state: "", zipCode: "", country: "Tanzania", label: "Home", isDefault: false };
 
 export default function AddressesPage() {
   const { t } = useTranslation();
@@ -64,6 +66,8 @@ export default function AddressesPage() {
   const openEdit = (addr: Address) => {
     setEditing(addr);
     setForm({
+      fullName: addr.fullName ?? "",
+      phone: addr.phone ?? "",
       street: addr.street,
       city: addr.city,
       state: addr.state,
@@ -78,7 +82,14 @@ export default function AddressesPage() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.street.trim() || !form.city.trim() || !form.state.trim() || !form.country.trim()) {
+    if (
+      !form.fullName.trim() ||
+      !form.phone.trim() ||
+      !form.street.trim() ||
+      !form.city.trim() ||
+      !form.state.trim() ||
+      !form.country.trim()
+    ) {
       setError(t("account.addressFillFields"));
       return;
     }
@@ -187,6 +198,32 @@ export default function AddressesPage() {
                       {l.label}
                     </button>
                   ))}
+                </div>
+              </div>
+
+              {/* Recipient name + phone */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-1.5">{t("checkout.fullName")}</label>
+                  <input
+                    type="text"
+                    required
+                    value={form.fullName}
+                    onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+                    placeholder="e.g. Asha Mwakalinga"
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-1.5">{t("checkout.phoneNumber")}</label>
+                  <input
+                    type="tel"
+                    required
+                    value={form.phone}
+                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                    placeholder="e.g. 0712345678"
+                    className={inputClass}
+                  />
                 </div>
               </div>
 
@@ -335,8 +372,10 @@ export default function AddressesPage() {
                     <span className="text-sm font-semibold text-foreground">{addr.label || t("account.addressFallback")}</span>
                   </div>
 
-                  {/* Address text */}
+                  {/* Recipient + Address text */}
                   <p className="text-sm text-muted-foreground leading-relaxed">
+                    {addr.fullName && <><span className="font-medium text-foreground">{addr.fullName}</span><br /></>}
+                    {addr.phone && <>{addr.phone}<br /></>}
                     {addr.street}<br />
                     {addr.city}, {addr.state}<br />
                     {addr.zipCode ? `${addr.zipCode}, ` : ""}{addr.country}

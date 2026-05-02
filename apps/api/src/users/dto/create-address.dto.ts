@@ -2,6 +2,14 @@ import { IsString, IsOptional, IsBoolean, MaxLength } from 'class-validator';
 
 export class CreateAddressDto {
   @IsString()
+  @MaxLength(100)
+  fullName: string;
+
+  @IsString()
+  @MaxLength(20)
+  phone: string;
+
+  @IsString()
   @MaxLength(200)
   street: string;
 
@@ -13,9 +21,10 @@ export class CreateAddressDto {
   @MaxLength(100)
   state: string;
 
+  @IsOptional()
   @IsString()
   @MaxLength(20)
-  zipCode: string;
+  zipCode?: string;
 
   @IsString()
   @MaxLength(100)

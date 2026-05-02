@@ -12,6 +12,7 @@ import {
 import { UsersService } from './users.service';
 import { UpdateProfileDto, CreateAddressDto, UpdateAddressDto } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @UseGuards(JwtAuthGuard)
@@ -21,16 +22,19 @@ export class UsersController {
 
   // ---- Admin endpoints (must be above /profile to avoid route conflicts) ----
 
+  @UseGuards(AdminGuard)
   @Get()
   findAll(@Query('search') search?: string) {
     return this.usersService.findAllForAdmin(search);
   }
 
+  @UseGuards(AdminGuard)
   @Patch(':id/suspend')
   suspend(@Param('id') id: string) {
     return this.usersService.suspendUser(id);
   }
 
+  @UseGuards(AdminGuard)
   @Patch(':id/activate')
   activate(@Param('id') id: string) {
     return this.usersService.activateUser(id);

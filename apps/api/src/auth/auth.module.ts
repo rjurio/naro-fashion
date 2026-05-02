@@ -6,6 +6,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { LocalStrategy } from './strategies/local.strategy';
+import { requireJwtSecret } from './util/jwt-secrets';
 
 @Module({
   imports: [
@@ -13,7 +14,7 @@ import { LocalStrategy } from './strategies/local.strategy';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get('JWT_SECRET', 'naro-secret-key'),
+        secret: requireJwtSecret('JWT_SECRET', configService),
         signOptions: {
           expiresIn: configService.get('JWT_ACCESS_EXPIRES', '15m'),
         },

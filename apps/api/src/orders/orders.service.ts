@@ -2,12 +2,14 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { QueryOrdersDto, AdminQueryOrdersDto } from './dto/query-orders.dto';
+import { ownerScope, isAdminUser } from '../auth/util/ownership';
 import { Prisma } from '@prisma/client';
 
 @Injectable()
@@ -225,9 +227,9 @@ export class OrdersService {
     };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, user: any) {
     const order = await this.prisma.order.findFirst({
-      where: { id, tenantId: this.tenantContext.requireId },
+      where: { id, tenantId: this.tenantContext.requireId, ...ownerScope(user) },
       include: {
         user: {
           select: {
@@ -267,11 +269,21 @@ export class OrdersService {
     return order;
   }
 
-  async updateStatus(id: string, status: string) {
-    const order = await this.prisma.order.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
+  async updateStatus(id: string, status: string, user: any) {
+    const order = await this.prisma.order.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId, ...ownerScope(user) },
+    });
 
     if (!order) {
       throw new NotFoundException('Order not found');
+    }
+
+    // Customers can only cancel their own pending orders. Any other transition
+    // requires admin privileges.
+    if (!isAdminUser(user) && status !== 'CANCELLED') {
+      throw new ForbiddenException(
+        'Only admins can change order status to anything other than CANCELLED',
+      );
     }
 
     // Validate status transition

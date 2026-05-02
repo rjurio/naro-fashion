@@ -3,10 +3,8 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ServeStaticModule } from '@nestjs/serve-static';
-import { APP_INTERCEPTOR } from '@nestjs/core';
 import { join } from 'path';
 import { TenantModule } from './tenant/tenant.module';
-import { TenantInterceptor } from './tenant/tenant.interceptor';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { ProductsModule } from './products/products.module';
@@ -95,12 +93,6 @@ import { ProductSizesModule } from './product-sizes/product-sizes.module';
     SizeGuidesModule,
     PaymentMethodsModule,
     TenantsModule,
-  ],
-  providers: [
-    {
-      provide: APP_INTERCEPTOR,
-      useClass: TenantInterceptor,
-    },
   ],
 })
 export class AppModule {}

@@ -15,6 +15,7 @@ import {
   ProviderCode,
   ProviderCredentials,
 } from './payment-provider.types';
+import { ownerScope, isAdminUser } from '../auth/util/ownership';
 
 @Injectable()
 export class PaymentsService {
@@ -90,7 +91,7 @@ export class PaymentsService {
    * 4. Updates payment with gateway reference + provider code.
    * 5. Returns payment record + gateway info for the frontend.
    */
-  async initiateGatewayPayment(dto: InitiatePaymentDto) {
+  async initiateGatewayPayment(dto: InitiatePaymentDto, user: any) {
     if (!dto.orderId && !dto.rentalOrderId) {
       throw new BadRequestException(
         'Either orderId or rentalOrderId must be provided',
@@ -106,13 +107,15 @@ export class PaymentsService {
 
     const tenantId = this.tenantContext.requireId;
 
-    // Verify order/rental exists and get details
+    // Verify order/rental exists and get details. Customers can only pay for
+    // their own orders/rentals; admins (incl. POS cashiers) can pay on behalf
+    // of any customer in the tenant.
     let orderTotal = 0;
     let orderNumber = '';
 
     if (dto.orderId) {
       const order = await this.prisma.order.findFirst({
-        where: { id: dto.orderId, tenantId },
+        where: { id: dto.orderId, tenantId, ...ownerScope(user) },
       });
       if (!order) {
         throw new NotFoundException('Order not found');
@@ -123,7 +126,7 @@ export class PaymentsService {
 
     if (dto.rentalOrderId) {
       const rental = await this.prisma.rentalOrder.findFirst({
-        where: { id: dto.rentalOrderId, tenantId },
+        where: { id: dto.rentalOrderId, tenantId, ...ownerScope(user) },
       });
       if (!rental) {
         throw new NotFoundException('Rental order not found');
@@ -222,11 +225,22 @@ export class PaymentsService {
 
   // ─── Payment status polling ───────────────────────────────────────────
 
-  async pollPaymentStatus(transactionRef: string) {
+  async pollPaymentStatus(transactionRef: string, user: any) {
     const tenantId = this.tenantContext.requireId;
 
+    // Admins can poll any payment in the tenant; customers only their own
+    // (joined through order.userId or rentalOrder.userId).
+    const ownerFilter = isAdminUser(user)
+      ? {}
+      : {
+          OR: [
+            { order: { userId: user?.id } },
+            { rentalOrder: { userId: user?.id } },
+          ],
+        };
+
     const payment = await this.prisma.payment.findFirst({
-      where: { transactionRef, tenantId },
+      where: { transactionRef, tenantId, ...ownerFilter },
       include: {
         order: { select: { id: true, orderNumber: true } },
         rentalOrder: { select: { id: true, rentalNumber: true } },
@@ -485,11 +499,11 @@ export class PaymentsService {
 
   // ─── Existing query methods ───────────────────────────────────────────
 
-  async findByOrder(orderId: string) {
+  async findByOrder(orderId: string, user: any) {
     const tenantId = this.tenantContext.requireId;
 
     const order = await this.prisma.order.findFirst({
-      where: { id: orderId, tenantId },
+      where: { id: orderId, tenantId, ...ownerScope(user) },
     });
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -501,11 +515,11 @@ export class PaymentsService {
     });
   }
 
-  async findByRental(rentalOrderId: string) {
+  async findByRental(rentalOrderId: string, user: any) {
     const tenantId = this.tenantContext.requireId;
 
     const rental = await this.prisma.rentalOrder.findFirst({
-      where: { id: rentalOrderId, tenantId },
+      where: { id: rentalOrderId, tenantId, ...ownerScope(user) },
     });
     if (!rental) {
       throw new NotFoundException('Rental order not found');
@@ -550,11 +564,11 @@ export class PaymentsService {
     return updated;
   }
 
-  async getPaymentSummary(orderId: string) {
+  async getPaymentSummary(orderId: string, user: any) {
     const tenantId = this.tenantContext.requireId;
 
     const order = await this.prisma.order.findFirst({
-      where: { id: orderId, tenantId },
+      where: { id: orderId, tenantId, ...ownerScope(user) },
     });
 
     if (!order) {

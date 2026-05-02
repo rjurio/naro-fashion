@@ -3,6 +3,16 @@ import { IsString, IsOptional, IsBoolean, MaxLength } from 'class-validator';
 export class UpdateAddressDto {
   @IsOptional()
   @IsString()
+  @MaxLength(100)
+  fullName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(200)
   street?: string;
 

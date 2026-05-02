@@ -144,11 +144,27 @@ export class UsersService {
     });
   }
 
+  /**
+   * The schema uses `region` and `postalCode` (Tanzania-native naming) but
+   * the storefront UI uses `state`/`zipCode`. We accept both shapes on input
+   * and emit both on output so each side reads the names it expects.
+   */
+  private serializeAddress<T extends { region?: string | null; postalCode?: string | null }>(
+    a: T,
+  ): T & { state: string; zipCode: string } {
+    return {
+      ...a,
+      state: a.region ?? '',
+      zipCode: a.postalCode ?? '',
+    };
+  }
+
   async getAddresses(userId: string) {
-    return this.prisma.address.findMany({
+    const rows = await this.prisma.address.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
     });
+    return rows.map((r) => this.serializeAddress(r));
   }
 
   async createAddress(userId: string, dto: CreateAddressDto) {
@@ -159,20 +175,21 @@ export class UsersService {
       });
     }
 
-    return this.prisma.address.create({
+    const created = await this.prisma.address.create({
       data: {
         userId,
-        fullName: dto.street, // Using street as fallback for fullName
-        phone: '', // Required field
+        fullName: dto.fullName,
+        phone: dto.phone,
         street: dto.street,
         city: dto.city,
         region: dto.state,
-        postalCode: dto.zipCode,
+        postalCode: dto.zipCode ?? null,
         country: dto.country,
         label: dto.label ?? 'Home',
         isDefault: dto.isDefault ?? false,
       },
     });
+    return this.serializeAddress(created);
   }
 
   async updateAddress(userId: string, addressId: string, dto: UpdateAddressDto) {
@@ -192,18 +209,21 @@ export class UsersService {
     }
 
     const data: any = {};
+    if (dto.fullName !== undefined) data.fullName = dto.fullName;
+    if (dto.phone !== undefined) data.phone = dto.phone;
     if (dto.street !== undefined) data.street = dto.street;
     if (dto.city !== undefined) data.city = dto.city;
-    if ((dto as any).state !== undefined) data.region = (dto as any).state;
-    if ((dto as any).zipCode !== undefined) data.postalCode = (dto as any).zipCode;
+    if (dto.state !== undefined) data.region = dto.state;
+    if (dto.zipCode !== undefined) data.postalCode = dto.zipCode;
     if (dto.country !== undefined) data.country = dto.country;
     if (dto.label !== undefined) data.label = dto.label;
     if (dto.isDefault !== undefined) data.isDefault = dto.isDefault;
 
-    return this.prisma.address.update({
+    const updated = await this.prisma.address.update({
       where: { id: addressId },
       data,
     });
+    return this.serializeAddress(updated);
   }
 
   async deleteAddress(userId: string, addressId: string) {

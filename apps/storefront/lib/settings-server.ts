@@ -1,4 +1,26 @@
+import { cookies } from 'next/headers';
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
+
+/**
+ * Build an `X-Tenant-Id` header from the `tenantId` cookie set by
+ * `apps/storefront/middleware.ts` during tenant resolution.
+ *
+ * Required for SSR fetches: server components don't auto-forward cookies the
+ * way the browser does, so without this the API returns the default tenant's
+ * data (or errors) for every domain — manifest.json + first-paint metadata
+ * end up identical for every tenant.
+ */
+async function tenantHeader(): Promise<Record<string, string>> {
+  try {
+    const c = await cookies(); // Next 15: cookies() is async
+    const id = c.get('tenantId')?.value;
+    return id ? { 'X-Tenant-Id': id } : {};
+  } catch {
+    // cookies() is unavailable outside a request context (e.g. during build).
+    return {};
+  }
+}
 
 export interface BusinessProfile {
   businessName: string;
@@ -47,7 +69,12 @@ const DEFAULTS: BusinessProfile = {
 export async function getBusinessProfile(): Promise<BusinessProfile> {
   try {
     const res = await fetch(`${API_URL}/cms/settings/business-profile`, {
-      next: { revalidate: 60 },
+      // `cache: 'no-store'` avoids cross-tenant cache key collisions —
+      // Next's URL-based cache would otherwise return tenant A's profile
+      // to tenant B's first request after revalidation. Manifest/metadata
+      // fetches are infrequent so the extra API hit is fine.
+      cache: 'no-store',
+      headers: await tenantHeader(),
     });
     if (!res.ok) throw new Error('Failed to fetch');
     return res.json();

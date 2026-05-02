@@ -2,10 +2,11 @@ import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request } 
 import { ReportsService } from './reports.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
 @Controller('reports')
-@UseGuards(JwtAuthGuard, ModuleGuard)
+@UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
 @RequiresModule('reports')
 export class ReportsController {
   constructor(private readonly service: ReportsService) {}

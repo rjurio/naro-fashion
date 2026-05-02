@@ -10,6 +10,7 @@ import { AuditService } from '../audit/audit.service';
 import { CreateRentalDto } from './dto/create-rental.dto';
 import { UpdateRentalDto } from './dto/update-rental.dto';
 import { QueryRentalsDto } from './dto/query-rentals.dto';
+import { ownerScope } from '../auth/util/ownership';
 import { Decimal } from '@prisma/client/runtime/library';
 
 @Injectable()
@@ -222,9 +223,9 @@ export class RentalsService {
     };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, user: any) {
     const rental = await this.prisma.rentalOrder.findFirst({
-      where: { id, tenantId: this.tenantContext.requireId },
+      where: { id, tenantId: this.tenantContext.requireId, ...ownerScope(user) },
       include: {
         user: {
           select: {

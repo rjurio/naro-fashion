@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { PosService } from './pos.service';
@@ -27,7 +28,7 @@ import {
 } from './dto';
 
 @Controller('pos')
-@UseGuards(JwtAuthGuard, ModuleGuard)
+@UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
 @RequiresModule('pos')
 export class PosController {
   constructor(private readonly posService: PosService) {}
