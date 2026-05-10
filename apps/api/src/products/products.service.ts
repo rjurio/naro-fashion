@@ -130,9 +130,29 @@ export class ProductsService {
     };
   }
 
+  /**
+   * PUBLIC product-by-slug lookup. Wired to `@Public() @Get(':slug')` in
+   * ProductsController — anonymous customers hit this from the storefront.
+   *
+   * Filters MUST happen in the WHERE clause, not after the fetch. Pre-fix,
+   * this method matched on (slug, tenantId) only and post-checked
+   * `product.deletedAt` — drafts (`isActive: false`) were silently
+   * publicly reachable by direct URL despite never appearing in
+   * `findAll()`'s public listing. Discovered during Phase 2 testing on
+   * 2026-05-10 when a draft created via `create_product_draft` rendered
+   * at `https://www.narofashion.co.tz/products/<slug>` with `TSh 0`.
+   *
+   * Admins use `findById()` (no isActive filter — drafts deliberately
+   * visible) via the admin portal and the AI agent's `get_product` tool.
+   */
   async findBySlug(slug: string) {
     const product = await this.prisma.product.findFirst({
-      where: { slug, tenantId: this.tenantContext.requireId },
+      where: {
+        slug,
+        tenantId: this.tenantContext.requireId,
+        isActive: true,
+        deletedAt: null,
+      },
       include: {
         ...productIncludes,
         reviews: {
@@ -145,7 +165,7 @@ export class ProductsService {
       },
     });
 
-    if (!product || product.deletedAt) {
+    if (!product) {
       throw new NotFoundException('Product not found');
     }
 
