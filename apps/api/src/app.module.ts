@@ -43,6 +43,7 @@ import { PaymentMethodsModule } from './payment-methods/payment-methods.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { AuditModule } from './audit/audit.module';
 import { ProductSizesModule } from './product-sizes/product-sizes.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -93,6 +94,7 @@ import { ProductSizesModule } from './product-sizes/product-sizes.module';
     SizeGuidesModule,
     PaymentMethodsModule,
     TenantsModule,
+    AiModule,
   ],
 })
 export class AppModule {}

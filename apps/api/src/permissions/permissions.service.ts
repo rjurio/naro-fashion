@@ -63,6 +63,17 @@ const PERMISSIONS = [
   { code: 'audit:export', name: 'Export Audit Logs', module: 'audit', action: 'export' },
   // settings
   { code: 'settings:manage', name: 'Manage Settings', module: 'settings', action: 'manage' },
+  // product-sizes (AI-agent read scope; create/update/delete inferred from products perms today)
+  { code: 'product-sizes:view', name: 'View Product Sizes', module: 'product-sizes', action: 'view' },
+  // size-guides
+  { code: 'size-guides:view', name: 'View Size Guides', module: 'size-guides', action: 'view' },
+  // rental-policies
+  { code: 'rental-policies:view', name: 'View Rental Policies', module: 'rental-policies', action: 'view' },
+  // recycle-bin
+  { code: 'recycle-bin:list', name: 'List Recycle Bin', module: 'recycle-bin', action: 'list' },
+  // ai-agent — required for any /api/v1/ai/* call. Disabled by default for STAFF/MANAGER;
+  // operators must grant it explicitly to roles that should use the agent.
+  { code: 'ai-agent:use', name: 'Use AI Admin Agent', module: 'ai-agent', action: 'use' },
 ];
 
 @Injectable()

@@ -242,6 +242,7 @@ model AdminUser {
 
   tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   activityLogs AdminActivityLog[]
+  agentAuditLogs AgentAuditLog[]
   checkedItems RentalChecklistEntry[]
   roles        AdminUserRole[]
 
@@ -266,6 +267,44 @@ model AdminActivityLog {
   @@index([tenantId])
   @@index([adminUserId])
   @@index([createdAt])
+}
+
+// AI agent audit log — one row per AI tool invocation (read or write,
+// success or failure). Sits alongside AdminActivityLog rather than
+// replacing it: write actions also push a summary into AdminActivityLog
+// so the existing /audit page surfaces AI activity. AgentAuditLog stores
+// the richer fields (sanitised input/output, approval link, severity)
+// that the existing schema doesn't carry.
+model AgentAuditLog {
+  id                  String   @id @default(cuid())
+  tenantId            String?
+  adminUserId         String
+  agentName           String   @default("naro-fashion-admin")
+  sessionId           String?
+  toolName            String
+  actionType          String   @default("READ") // READ | CREATE | UPDATE | DELETE | RESTORE | PUBLISH | ARCHIVE | STATUS_CHANGE | ADJUST_INVENTORY | NOTE
+  targetResourceType  String?
+  targetResourceId    String?
+  inputJson           Json?
+  outputJson          Json?
+  approvalRequired    Boolean  @default(false)
+  approvalStatus      String   @default("NOT_REQUIRED") // NOT_REQUIRED | PENDING | APPROVED | REJECTED | EXPIRED | CONSUMED
+  status              String   // SUCCESS | FAILED | REJECTED | UNAUTHORIZED | VALIDATION_ERROR | PERMISSION_DENIED | MODULE_DISABLED
+  errorMessage        String?
+  severity            String   @default("INFO") // INFO | NOTICE | WARNING | CRITICAL
+  ipAddress           String?
+  userAgent           String?
+  durationMs          Int?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([adminUserId, createdAt])
+  @@index([toolName])
+  @@index([targetResourceType, targetResourceId])
+  @@index([severity])
 }
 
 // ============================================================

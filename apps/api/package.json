@@ -7,7 +7,9 @@
     "build": "nest build",
     "start": "node dist/main",
     "start:prod": "node dist/main",
-    "lint": "eslint \"{src,test}/**/*.ts\""
+    "lint": "eslint \"{src,test}/**/*.ts\"",
+    "test": "jest",
+    "test:watch": "jest --watch"
   },
   "dependencies": {
     "@naro/database": "workspace:*",
@@ -60,6 +62,9 @@
     "prisma": "^6.0.0",
     "ts-loader": "^9.5.0",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "@types/jest": "^29.5.13",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5"
   }
 }
