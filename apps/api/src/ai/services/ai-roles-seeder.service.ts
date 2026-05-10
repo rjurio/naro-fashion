@@ -141,15 +141,31 @@ export class AiRolesSeederService implements OnApplicationBootstrap {
    * backfill closes that gap by always upserting the four AI permission
    * grants on SUPER_ADMIN.
    *
+   * Handles BOTH role layouts found in the wild:
+   *   - tenantId=null SUPER_ADMIN (the pattern documented by
+   *     RolesService.seedSystemRoles — system role with no tenant scope,
+   *     visible to every tenant via the
+   *     `OR: [{ tenantId }, { tenantId: null, isSystem: true }]` lookup)
+   *   - tenant-scoped SUPER_ADMIN (rows with `tenantId` set; isSystem=true
+   *     retained — observed on 2026-05-10 prod, which is what triggered
+   *     this fix in the first place)
+   *
+   * The match condition is `name='SUPER_ADMIN' AND isSystem=true` only —
+   * tenantId is NOT in the filter. We iterate every matching row and
+   * grant the 4 AI permissions to each via `createMany skipDuplicates`,
+   * which is idempotent at the DB level (the `(roleId, permissionId)`
+   * primary key on `RolePermission` enforces uniqueness).
+   *
    * Phase 3.2 will REMOVE :approve from SUPER_ADMIN via a separate one-off
    * migration script. End state — AI approval rights must be intentionally
    * granted via AI_AGENT_APPROVER, not implicit through SUPER_ADMIN.
    */
   private async backfillSuperAdmin(): Promise<void> {
-    const superAdmin = await this.prisma.role.findFirst({
-      where: { name: 'SUPER_ADMIN', isSystem: true, tenantId: null },
+    const superAdminRoles = await this.prisma.role.findMany({
+      where: { name: 'SUPER_ADMIN', isSystem: true },
+      select: { id: true, tenantId: true },
     });
-    if (!superAdmin) {
+    if (superAdminRoles.length === 0) {
       // RolesService hasn't seeded SUPER_ADMIN yet (fresh install where
       // OnModuleInit ordering surprised us). Next boot will fix it.
       return;
@@ -163,12 +179,14 @@ export class AiRolesSeederService implements OnApplicationBootstrap {
     ];
     const permissionIds = await this.permissionIdsByCode(aiPermissionCodes);
 
-    await this.prisma.rolePermission.createMany({
-      data: permissionIds.map((permissionId) => ({
-        roleId: superAdmin.id,
-        permissionId,
-      })),
-      skipDuplicates: true,
-    });
+    for (const role of superAdminRoles) {
+      await this.prisma.rolePermission.createMany({
+        data: permissionIds.map((permissionId) => ({
+          roleId: role.id,
+          permissionId,
+        })),
+        skipDuplicates: true,
+      });
+    }
   }
 }
