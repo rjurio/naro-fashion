@@ -9,6 +9,31 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - Local file storage for image uploads (ServeStaticModule serves `/uploads`), Multer for multipart
 - @nestjs/serve-static for serving uploaded files
 
+## AI Admin Agent (Phase 1 — read-only)
+Lives at `src/ai/`. Adds 17 GET endpoints under `/api/v1/ai/*`, all read-only by design and enforced both at runtime (no write decorators) and at build time (`ai-controllers.shape.spec.ts` invariant).
+
+**Architecture**:
+- `services/ai-tool-runner.service.ts` (request-scoped) — wraps every controller handler with timing → audit → envelope. Controllers call `this.runner.run({ tool, actionType: 'READ', input, handler: () => existingService.method(...) })`.
+- `services/ai-audit.service.ts` (request-scoped) — writes one row per call to `AgentAuditLog`. Pulls `adminUserId`, `tenantId`, IP, UA, and the `X-Agent-Session-Id` header (capped at 64 chars). Swallows its own errors so a broken audit never breaks a tool call.
+- `services/ai-sanitizer.service.ts` — strips `password*`, `secret*`, `accessToken`, `refreshToken`, `apiKey`, `clientSecret`, `webhookSecret`, `Authorization`, `Bearer`, `cardNumber`/`cvv`/`pin` keys (case-insensitive, normalises `_`/`-`). **Preserves `approvalToken`** (allow-listed for forensics — already consumed by the time it reaches the audit log). Bounds: strings >4KB truncated, arrays >200 items truncated, whole payload >64KB summarised.
+- `guards/ai-permission.guard.ts` — DB-checks `AdminUserRole → Role → RolePermission → Permission(code='ai-agent:use', isActive: true)`. Platform admins bypass. **Permission is NOT auto-granted to any seeded role** — operators must assign it.
+- `filters/ai-exception.filter.ts` — catches every error thrown inside an AI route and re-shapes into `{success:false, tool, error:{code, message}, approvalRequired:false, auditId}` while preserving the HTTP status code. Maps 400→`validation_error`, 401→`unauthorized`, 403→`permission_denied`, 404→`not_found`, 409→`conflict`, 422→`unprocessable`, 429→`rate_limited`, 5xx→`server_error`.
+- `common/ai-controller.decorators.ts` — `@AiSecured()` bundles `JwtAuthGuard, AdminGuard, AiPermissionGuard` + the filter. Inventory and Reports controllers wire `ModuleGuard` + `@RequiresModule()` explicitly because `@AiSecured()` can't carry the per-controller module metadata.
+
+**Endpoints (all GET, all read-only)**: products (search, :id), categories, product-sizes, orders (list, :id), rentals (list, :id), inventory + low-stock (module-gated), rental-policies, size-guide, recycle-bin (Phase 1: Product/Category/ProductSize/SizeGuide), reports/{sales,rental,inventory}-summary + popular-products + pending-orders + overdue-rentals (module-gated). Full list in `docs/ai-agent/AI_TOOLS.md`.
+
+**Conventions for new AI tools**:
+- Always go through `AiToolRunner.run()` — never write to `AgentAuditLog` directly. The runner sets timing, severity, and envelope shape uniformly.
+- Pass the `actionType` per the AgentAuditLog enum: `READ | CREATE | UPDATE | DELETE | RESTORE | PUBLISH | ARCHIVE | STATUS_CHANGE | ADJUST_INVENTORY | NOTE`.
+- Reuse existing service methods. Don't reimplement business logic in the AI layer — that's the whole point of the architecture.
+- Each new endpoint needs a permission. Add it to `permissions.service.ts` PERMISSIONS list so it gets seeded on next boot. Phase 1 added: `ai-agent:use, product-sizes:view, size-guides:view, rental-policies:view, recycle-bin:list`.
+- Module-gated endpoints (anything that wraps a `@RequiresModule()` controller) MUST also wire `ModuleGuard` + `@RequiresModule()` on the AI controller — otherwise tenants without the module enabled can hit the AI surface.
+
+**Phase roadmap** (`docs/ai-agent/IMPLEMENTATION_PLAN.md`):
+- Phase 2: draft creation tools (create_product_draft, add_order_note, draft size guide entries) — no approval needed because drafts are reversible.
+- Phase 3: approval-gated writes via new `AgentApprovalRequest` table (two-phase commit, single-use 5-min token, 60-second token for permanent-delete).
+- Phase 4: full CRUD + recycle-bin restore/permanent-delete + reports export.
+
 ## Multi-Tenancy
 - **TenantContext** (`src/tenant/tenant.context.ts`): Request-scoped injectable providing `tenantId`. Use `this.tenantContext.requireId` in all Prisma queries. Falls back to decoding JWT from `Authorization` header when `req.user` is not set (for `@Public()` endpoints). `requireId` throws `BadRequestException` (400) with actionable message ("Provide X-Tenant-Id header or a valid Authorization token") instead of generic 500 — cleaner public API responses.
 - **TenantInterceptor** (`src/tenant/tenant.interceptor.ts`): Global interceptor, extracts tenantId from JWT or `X-Tenant-Id` header. **Registered inside `TenantModule`** (not AppModule) so it can inject `JwtService` + `ConfigService` from the JwtModule already imported there.
@@ -113,6 +138,13 @@ REST API backend for Naro Fashion. Runs on port 4000, prefix `/api/v1`.
 - Do NOT import from `@naro/shared` in API services — ESM/CJS mismatch causes runtime crash
 - Catch Prisma P2002 (unique constraint) → throw ConflictException (409)
 - **DTO whitelist is strict**: the global `ValidationPipe` runs with `whitelist: true` + `forbidNonWhitelisted: true`. Any query/body field not declared on the DTO returns `400 property X should not exist`. When adding a new filter to an endpoint, the DTO must be updated in the same commit or clients silently 400 — the storefront's `.catch()` often masks this as "empty results".
+
+## Tests (added 2026-05-10 with Phase 1 AI agent)
+First test infrastructure in the repo. Plain Jest + ts-jest, no NestJS test harness needed for current coverage.
+- Config: `jest.config.js` at api root. `rootDir: src`, `testRegex: .*\.spec\.ts$`, transform via ts-jest with `isolatedModules`.
+- Run: `pnpm --filter api test` or `pnpm --filter api test:watch`.
+- Current coverage: 4 spec files / 59 tests covering AI sanitiser, AI envelope helper, AI audit service (with mocked Prisma), and the read-only invariant on AI controllers.
+- Conventions: spec files colocated with source (`foo.service.ts` ↔ `foo.service.spec.ts`). Mocked Prisma for service tests; no DB boot. Adding integration tests later will need a separate `naro_fashion_test` schema and a Nest-app boot helper.
 
 ## Database
 - Connection string in `.env` and `packages/database/.env`

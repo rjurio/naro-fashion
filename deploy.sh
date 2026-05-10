@@ -5,8 +5,17 @@ echo "🚀 Deploying Naro Fashion..."
 
 cd /var/www/naro-fashion
 
-# Pull latest code
-git pull origin master
+# Pull latest code from prod (the branch CI triggers on — see
+# .github/workflows/deploy-prod.yml). Used to be `origin master`, which
+# silently undeployed every push for ~3 weeks: CI triggered on prod, ran
+# this script, but pulled master which had no new commits. Caught
+# 2026-05-10 — see CLAUDE.md "Silent deploys class #2".
+git fetch origin prod
+git checkout prod
+git reset --hard origin/prod
+
+# Sanity check: did we actually move? Surface clearly in the deploy log.
+echo "Now on: $(git rev-parse --short HEAD) ($(git log -1 --pretty=%s))"
 
 # Install dependencies
 pnpm install

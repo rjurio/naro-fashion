@@ -14,7 +14,15 @@ Prisma schema and client for Naro Fashion multi-tenant SaaS.
 Tenant, PlatformAdmin, TenantBranding, SubscriptionPlan, TenantSubscription, TenantPayment, TenantModule
 
 ## Tenant-Scoped Models (have tenantId field)
-User, AdminUser, AdminActivityLog, LoginAttempt, CustomerIDDocument, Category, Product, ProductVariant, Order, Payment, Shipment, Invoice, ShippingZone, Review, RentalOrder, RentalChecklistTemplate, RentalPolicy, FlashSale, ReferralCode, Banner, HeroSlide, ParallaxSection, PageView, Page, SizeGuide, SiteSetting, InstagramPost, NewsletterSubscriber, Newsletter, PickupPoint, InventoryTransaction, ExpenseCategory, BusinessExpense, FinancialPeriod, Role, PosSession, HeldSale, Layaway, PosExchange, PromoCode, CustomerEvent, AbandonedCartReminder, PaymentMethod, ContactSubmission
+User, AdminUser, AdminActivityLog, AgentAuditLog, LoginAttempt, CustomerIDDocument, Category, Product, ProductVariant, Order, Payment, Shipment, Invoice, ShippingZone, Review, RentalOrder, RentalChecklistTemplate, RentalPolicy, FlashSale, ReferralCode, Banner, HeroSlide, ParallaxSection, PageView, Page, SizeGuide, SiteSetting, InstagramPost, NewsletterSubscriber, Newsletter, PickupPoint, InventoryTransaction, ExpenseCategory, BusinessExpense, FinancialPeriod, Role, PosSession, HeldSale, Layaway, PosExchange, PromoCode, CustomerEvent, AbandonedCartReminder, PaymentMethod, ContactSubmission
+
+## AgentAuditLog (added 2026-05-10)
+- One row per AI tool invocation (read or write, success or failure). Sits **alongside** `AdminActivityLog` rather than replacing it — write actions in later phases will also push a summary into AdminActivityLog so the existing /audit page surfaces AI activity.
+- 18 fields: `tenantId`, `adminUserId`, `agentName` (default `naro-fashion-admin`), `sessionId` (from `X-Agent-Session-Id` header, capped at 64 chars), `toolName`, `actionType` (READ | CREATE | UPDATE | DELETE | RESTORE | PUBLISH | ARCHIVE | STATUS_CHANGE | ADJUST_INVENTORY | NOTE), `targetResourceType`, `targetResourceId`, `inputJson` (sanitised), `outputJson` (sanitised), `approvalRequired` (Phase 3+), `approvalStatus`, `status` (SUCCESS | FAILED | REJECTED | UNAUTHORIZED | VALIDATION_ERROR | PERMISSION_DENIED | MODULE_DISABLED), `errorMessage`, `severity` (INFO | NOTICE | WARNING | CRITICAL), `ipAddress`, `userAgent`, `durationMs`, plus `createdAt`/`updatedAt`.
+- 5 indexes: `(tenantId, createdAt)`, `(adminUserId, createdAt)`, `toolName`, `(targetResourceType, targetResourceId)`, `severity`.
+- `AdminUser.agentAuditLogs` back-relation for cascade delete.
+- Sanitisation happens in `apps/api/src/ai/services/ai-sanitizer.service.ts` BEFORE persistence — never trust `inputJson`/`outputJson` to contain raw secrets even on legacy rows.
+- Phase 1 only writes `actionType=READ` rows. Write actions land in Phase 2 (drafts) and Phase 3 (approval-gated CRUD).
 
 ## PageView (added 2026-04-25)
 - One row per storefront page hit (route change), used for the visitor analytics dashboard.
