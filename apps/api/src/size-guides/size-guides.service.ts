@@ -92,9 +92,32 @@ export class SizeGuidesService {
     });
   }
 
+  /**
+   * PUBLIC size-guide-by-slug lookup. Wired to
+   * `@Public() @Get('by-slug/:slug')` in SizeGuidesController — anonymous
+   * customers can hit this from the storefront.
+   *
+   * Filters MUST happen in the WHERE clause, not after the fetch. Pre-fix,
+   * this method matched on (slug, tenantId) only and post-checked
+   * `guide.deletedAt` — drafts (`isActive: false`) created via the AI
+   * agent's `create_size_guide_entry` (Phase 2) or via the admin UI
+   * before activation were silently publicly reachable by direct slug.
+   * Same bug pattern as ProductsService.findBySlug — fixed 2026-05-10
+   * after the products hotfix surfaced this as the next gap.
+   *
+   * Admins use `findById()` (no isActive filter — drafts deliberately
+   * visible) via the admin portal.
+   */
   async findBySlug(slug: string) {
-    const guide = await this.prisma.sizeGuide.findFirst({ where: { slug, tenantId: this.tenantContext.requireId } });
-    if (!guide || guide.deletedAt) throw new NotFoundException('Size guide not found');
+    const guide = await this.prisma.sizeGuide.findFirst({
+      where: {
+        slug,
+        tenantId: this.tenantContext.requireId,
+        isActive: true,
+        deletedAt: null,
+      },
+    });
+    if (!guide) throw new NotFoundException('Size guide not found');
     return guide;
   }
 
