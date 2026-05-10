@@ -4,6 +4,92 @@ Four phases. Each phase is independently shippable to production behind the `ai-
 
 ---
 
+## Phase 3.0 status — IMPLEMENTED 2026-05-10 ✅ (foundation only — zero runtime behaviour change)
+
+**Scope shipped**: schema migration, permission seeding, role seeding, decorator + guard infrastructure. No risky tools wired. No existing endpoint behaviour changed.
+
+This is the safe-to-deploy preparatory layer for Phase 3.1. After this lands in production:
+- Existing Phase 1/2 endpoints (`/api/v1/ai/products/search`, `/api/v1/ai/orders/:id/notes`, etc.) keep working **identically** — they're still gated by `ai-agent:use` only because they don't carry the new `@RequiresAiPermission()` decorator.
+- The new `AgentApprovalRequest` table is created but no service writes to it yet.
+- The new permissions and roles are seeded but only SUPER_ADMIN is auto-granted them (rollout backfill — see Decision Log #2).
+- `@RequiresApproval(riskLevel)` decorator is shipped but no route uses it. Phase 3.1 will start applying it.
+
+### What was implemented
+
+| Component | File | Notes |
+|---|---|---|
+| `AgentApprovalRequest` Prisma model | [`packages/database/prisma/schema.prisma`](../../packages/database/prisma/schema.prisma) | 27 fields per Decision Log #6/#7/#8/#12/#13. **Stores `approvalTokenHash` only — never raw tokens.** |
+| `AgentAuditLog.approvalRequestId` column | (same schema file) | Foreign-key-soft link with `onDelete: SetNull`; indexed for join queries |
+| AdminUser back-relations | (same schema file) | `agentApprovalsRequested`, `agentApprovalsApproved` |
+| 3 new permission codes | [`apps/api/src/permissions/permissions.service.ts`](../../apps/api/src/permissions/permissions.service.ts) | `ai-agent:read`, `ai-agent:write-drafts`, `ai-agent:approve` (`ai-agent:use` already existed) |
+| 2 new system roles | [`apps/api/src/ai/services/ai-roles-seeder.service.ts`](../../apps/api/src/ai/services/ai-roles-seeder.service.ts) | `AI_AGENT_OPERATOR` (use+read+write-drafts), `AI_AGENT_APPROVER` (use+read+approve). Tenant-null + `isSystem=true` to match existing pattern |
+| SUPER_ADMIN backfill | (same seeder) | Idempotent grant of all 4 AI permissions to SUPER_ADMIN. **Temporary** — Phase 3.2 demotion script removes `:approve`. Decision Log #2 |
+| `@RequiresAiPermission(scope)` decorator | [`apps/api/src/ai/decorators/requires-ai-permission.decorator.ts`](../../apps/api/src/ai/decorators/requires-ai-permission.decorator.ts) | Reflector metadata key. Not yet applied to any route |
+| `AiPermissionGuard` extended | [`apps/api/src/ai/guards/ai-permission.guard.ts`](../../apps/api/src/ai/guards/ai-permission.guard.ts) | Reads `@RequiresAiPermission()`. When absent → only `:use` required (back-compat). When present → `:use` + scope perm both required |
+| `@RequiresApproval(riskLevel)` decorator | [`apps/api/src/ai/decorators/requires-approval.decorator.ts`](../../apps/api/src/ai/decorators/requires-approval.decorator.ts) | Scaffold only — no interceptor consumes it yet. Phase 3.1 will wire the approval-token flow |
+| Type constants | [`apps/api/src/ai/types/`](../../apps/api/src/ai/types/) | `AI_PERMISSION_CODES`, `AI_AGENT_ROLE_NAMES`, `AGENT_APPROVAL_STATUS`, `AI_RISK_LEVEL`, `AI_RISK_LEVEL_TTL_MS`, `MAX_APPROVAL_EXECUTION_ATTEMPTS` |
+| Tests | `phase-3-foundation.spec.ts` + `ai-permission.guard.spec.ts` | 138 tests total (was 92 — Phase 3.0 adds 46) |
+
+### What was deliberately NOT implemented (per the locked spec)
+
+- ❌ No risky tools wired — no `publish_product`, no `update_product`, no inventory adjust, no order/rental status change, no permanent delete, no refunds.
+- ❌ No `@RequiresAiPermission()` applied to any existing route — Phase 1/2 routes keep their original gate (`ai-agent:use` only) untouched. Confirmed by `phase-3-foundation.spec.ts` invariant.
+- ❌ No `@RequiresApproval()` applied to any route — same invariant.
+- ❌ No approval-token consume/issue flow — Phase 3.1 work.
+- ❌ No new HTTP routes — controller-shape invariant still allowlists exactly the 4 Phase 2 `@Post` paths and forbids `@Patch`/`@Put`/`@Delete`.
+- ❌ No customer-facing storefront change.
+- ❌ No automatic deploy — commit is local; user explicit go-ahead required to push.
+
+### Production-runtime behaviour
+
+After deploying this commit:
+- `/api/v1/ai/*` endpoints respond identically to Phase 2.
+- The `AgentApprovalRequest` table exists (created by `prisma db push --accept-data-loss` in deploy.sh) but is empty.
+- `AgentAuditLog.approvalRequestId` is null on every existing row and on every Phase 1/2 row written from now on.
+- The 3 new permission rows are inserted by `PermissionsService.onModuleInit()`.
+- The 2 new system roles are inserted by `AiRolesSeederService.onApplicationBootstrap()`.
+- SUPER_ADMIN gets the 4 AI permissions via the same seeder's idempotent backfill. **Cannot break existing AdminUser logins** — only adds rows to `RolePermission`.
+
+### How to test locally
+
+```bash
+# 1. Apply schema change (creates AgentApprovalRequest table on dev DB)
+cd packages/database && pnpm prisma db push
+
+# 2. Run all tests (138 expected to pass)
+cd ../../apps/api && pnpm test
+
+# 3. Boot the API and verify nothing broke
+pnpm dev
+# Hit a Phase 1/2 endpoint with a SUPER_ADMIN JWT — should work as before:
+#   curl -H "Authorization: Bearer <admin>" http://localhost:4000/api/v1/ai/products/search?limit=2
+```
+
+### Known limitations (Phase 3.0)
+
+- **Prisma client regen on Windows/OneDrive can EPERM.** This is the documented gotcha (see CLAUDE.md → "OneDrive sync can cause EPERM errors"). The schema is valid (`prisma validate` confirms), TypeScript compiles, tests pass — Phase 3.0 code path doesn't reference `prisma.agentApprovalRequest.*` at runtime. Local workstations may need to retry `prisma generate` (or `prisma db push`, which generates and pushes) after closing background node processes. Linux/CI/VPS not affected.
+- **`AgentApprovalRequest` table will be empty** until Phase 3.1 ships the approval flow.
+- **The `expectedUpdatedAt` and `executionAttempts` fields exist but no code reads/writes them** — Phase 3.1 wires the consume transaction.
+
+### Suggested deploy steps when ready
+
+1. `git push origin prod` — CI runs `deploy.sh` which now pulls from `prod` (post-deploy.sh fix from 2026-05-10) and runs `prisma db push --accept-data-loss` → creates `AgentApprovalRequest`, adds `AgentAuditLog.approvalRequestId`.
+2. PM2 restart picks up the new permission seed + roles seeder.
+3. SQL spot-check on prod after deploy:
+   ```sql
+   SELECT code FROM "Permission" WHERE code LIKE 'ai-agent:%' ORDER BY code;
+   -- expected: ai-agent:approve, ai-agent:read, ai-agent:use, ai-agent:write-drafts
+
+   SELECT name FROM "Role" WHERE name LIKE 'AI_AGENT_%' AND "deletedAt" IS NULL;
+   -- expected: AI_AGENT_APPROVER, AI_AGENT_OPERATOR
+
+   SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'AgentApprovalRequest');
+   -- expected: t
+   ```
+4. Smoke a Phase 1/2 endpoint to confirm zero behaviour change.
+
+---
+
 ## Phase 2 status — IMPLEMENTED 2026-05-10 ✅ (subset)
 
 **Scope shipped**: 4 of the 6 originally-planned Phase 2 tools — the operator deliberately deferred the rest.

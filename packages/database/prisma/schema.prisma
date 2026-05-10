@@ -243,6 +243,8 @@ model AdminUser {
   tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   activityLogs AdminActivityLog[]
   agentAuditLogs AgentAuditLog[]
+  agentApprovalsRequested AgentApprovalRequest[] @relation("AgentApprovalRequestedBy")
+  agentApprovalsApproved  AgentApprovalRequest[] @relation("AgentApprovalApprovedBy")
   checkedItems RentalChecklistEntry[]
   roles        AdminUserRole[]
 
@@ -282,13 +284,14 @@ model AgentAuditLog {
   agentName           String   @default("naro-fashion-admin")
   sessionId           String?
   toolName            String
-  actionType          String   @default("READ") // READ | CREATE | UPDATE | DELETE | RESTORE | PUBLISH | ARCHIVE | STATUS_CHANGE | ADJUST_INVENTORY | NOTE
+  actionType          String   @default("READ") // READ | CREATE | UPDATE | DELETE | RESTORE | PUBLISH | ARCHIVE | STATUS_CHANGE | ADJUST_INVENTORY | NOTE | APPROVAL_REQUESTED | APPROVAL_GRANTED | APPROVAL_REJECTED | APPROVAL_REVOKED | APPROVAL_CANCELLED | APPROVAL_EXPIRED | APPROVAL_EXHAUSTED
   targetResourceType  String?
   targetResourceId    String?
   inputJson           Json?
   outputJson          Json?
   approvalRequired    Boolean  @default(false)
-  approvalStatus      String   @default("NOT_REQUIRED") // NOT_REQUIRED | PENDING | APPROVED | REJECTED | EXPIRED | CONSUMED
+  approvalStatus      String   @default("NOT_REQUIRED") // NOT_REQUIRED | PENDING | APPROVED | REJECTED | EXPIRED | CONSUMED | CANCELLED | REVOKED | EXHAUSTED
+  approvalRequestId   String?  // Links a write/approval audit row to its AgentApprovalRequest (Phase 3.0+). Null for Phase 1/2 reads + drafts.
   status              String   // SUCCESS | FAILED | REJECTED | UNAUTHORIZED | VALIDATION_ERROR | PERMISSION_DENIED | MODULE_DISABLED
   errorMessage        String?
   severity            String   @default("INFO") // INFO | NOTICE | WARNING | CRITICAL
@@ -298,13 +301,79 @@ model AgentAuditLog {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  adminUser       AdminUser             @relation(fields: [adminUserId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  approvalRequest AgentApprovalRequest? @relation(fields: [approvalRequestId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([tenantId, createdAt])
   @@index([adminUserId, createdAt])
   @@index([toolName])
   @@index([targetResourceType, targetResourceId])
   @@index([severity])
+  @@index([approvalRequestId])
+}
+
+// AI agent approval request (Phase 3.0+).
+// Lifecycle: PENDING → APPROVED → CONSUMED (happy path)
+//                  → REJECTED | CANCELLED | REVOKED | EXPIRED | EXHAUSTED (terminal failure paths)
+//
+// Token storage: only `approvalTokenHash` (sha256 of the raw token) is persisted.
+// Raw token is returned to the approver once and never logged. See
+// docs/ai-agent/PHASE_3_DESIGN.md §5 + Decision Log #6.
+//
+// No risky tools currently consume this model — Phase 3.0 ships the
+// schema only. Phase 3.1 wires the approval flow.
+model AgentApprovalRequest {
+  id                       String    @id @default(cuid())
+  tenantId                 String?
+
+  // ─── Identity ────────────────────────────────────────────────────────
+  requestedByAdminUserId   String                                     // initiator
+  approvedByAdminUserId    String?                                    // populated when status flips out of PENDING
+
+  // ─── Tool + payload ──────────────────────────────────────────────────
+  toolName                 String                                     // e.g. "publish_product"
+  targetResourceType       String?
+  targetResourceId         String?
+  targetResourceName       String?                                    // human-readable label, e.g. "Floral Mermaid Gown"
+  inputJson                Json                                       // sanitised input — same rules as AgentAuditLog
+  payloadHash              String                                     // sha256(toolName || canonicalJSON(input))
+
+  // ─── Approval summary snapshot (frozen at request time) ──────────────
+  actionTitle              String                                     // short verb, e.g. "Publish wedding gown"
+  businessSummary          String                                     // one-line plain-English explanation
+  riskLevel                String                                     // LOW | MEDIUM | HIGH | CRITICAL
+  beforeValues             Json?                                      // resource snapshot BEFORE the action
+  afterValues              Json?                                      // proposed values AFTER the action
+  expectedUpdatedAt        DateTime?                                  // resource.updatedAt at request time (stale-data guard)
+
+  // ─── Token (HASHED ONLY — never raw) ─────────────────────────────────
+  approvalTokenHash        String?   @unique                          // sha256(rawToken). Cleared on consume/revoke/exhaust.
+
+  // ─── State machine ───────────────────────────────────────────────────
+  status                   String    @default("PENDING")              // PENDING | APPROVED | REJECTED | CANCELLED | REVOKED | CONSUMED | EXPIRED | EXHAUSTED
+  rejectionReason          String?
+  expirationReason         String?                                    // 'ttl' | 'stale_data' | 'payload_mismatch' (when status=EXPIRED)
+  executionAttempts        Int       @default(0)                      // consume retries; capped at 3
+
+  // ─── Lifecycle timestamps ────────────────────────────────────────────
+  expiresAt                DateTime
+  approvedAt               DateTime?
+  rejectedAt               DateTime?
+  cancelledAt              DateTime?
+  revokedAt                DateTime?
+  consumedAt               DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  requestedBy AdminUser  @relation("AgentApprovalRequestedBy", fields: [requestedByAdminUserId], references: [id], onDelete: Cascade)
+  approvedBy  AdminUser? @relation("AgentApprovalApprovedBy",  fields: [approvedByAdminUserId],  references: [id], onDelete: SetNull)
+  auditLogs   AgentAuditLog[]
+
+  @@index([tenantId, status])
+  @@index([requestedByAdminUserId, createdAt])
+  @@index([approvedByAdminUserId, createdAt])
+  @@index([expiresAt])
+  @@index([riskLevel, status])
 }
 
 // ============================================================

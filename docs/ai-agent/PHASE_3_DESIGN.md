@@ -1,6 +1,11 @@
 # Phase 3 Design — AI Agent Approval Workflow
 
-**Status**: design approved 2026-05-10. Implementation NOT started — this document is the canonical spec the implementing PR must satisfy.
+**Status**: design approved 2026-05-10.
+
+**Implementation progress**:
+- ✅ **Phase 3.0** — IMPLEMENTED 2026-05-10. Schema + permissions + roles + decorators/guard scaffold. **Zero runtime behaviour change** for existing endpoints. See [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) → "Phase 3.0 status" section.
+- ⏳ **Phase 3.1** — risky tools + four-eyes + cron + 40 tests. **Not started.**
+- ⏳ **Phase 3.2** — SUPER_ADMIN demotion migration script. Not started; runs 2–4 weeks after 3.1 in production.
 
 **Cross-references**:
 - [`AI_TOOLS.md`](./AI_TOOLS.md) — tool catalogue (Phase 3 introduces the risky/write tools)

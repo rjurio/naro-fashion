@@ -74,6 +74,12 @@ const PERMISSIONS = [
   // ai-agent — required for any /api/v1/ai/* call. Disabled by default for STAFF/MANAGER;
   // operators must grant it explicitly to roles that should use the agent.
   { code: 'ai-agent:use', name: 'Use AI Admin Agent', module: 'ai-agent', action: 'use' },
+  // ai-agent scope permissions (Phase 3.0+). NOT yet enforced on Phase 1/2 routes —
+  // the AiPermissionGuard reads @RequiresAiPermission() metadata when a route opts
+  // in. Seeding now so operators can pre-wire roles before Phase 3.1 enforcement.
+  { code: 'ai-agent:read', name: 'AI Agent — Read Tools', module: 'ai-agent', action: 'read' },
+  { code: 'ai-agent:write-drafts', name: 'AI Agent — Create Drafts / Notes', module: 'ai-agent', action: 'write-drafts' },
+  { code: 'ai-agent:approve', name: 'AI Agent — Approve Risky Actions', module: 'ai-agent', action: 'approve' },
   // Phase 2 write actions (drafts + notes) — currently gated only by ai-agent:use.
   // Per-tool permission enforcement lands with the approval workflow in Phase 3.
   // These codes are seeded so operators can already wire them into roles for the

@@ -14,6 +14,7 @@ import { ReportsModule } from '../reports/reports.module';
 import { AiSanitizerService } from './services/ai-sanitizer.service';
 import { AiAuditService } from './services/ai-audit.service';
 import { AiToolRunner } from './services/ai-tool-runner.service';
+import { AiRolesSeederService } from './services/ai-roles-seeder.service';
 import { AiPermissionGuard } from './guards/ai-permission.guard';
 import { AiExceptionFilter } from './filters/ai-exception.filter';
 
@@ -70,6 +71,7 @@ import { ReportsAiController } from './controllers/reports.ai.controller';
     AiToolRunner,
     AiPermissionGuard,
     AiExceptionFilter,
+    AiRolesSeederService,
   ],
 })
 export class AiModule {}
