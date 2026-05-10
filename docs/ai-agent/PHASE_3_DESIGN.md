@@ -21,6 +21,15 @@ Five decisions locked before implementation begins. This table is the authoritat
 | 3 | Multi-approver requirement | **DEFERRED to Phase 4** | Phase 3 v1 is **single-approver only**. Two-approver requirements for high-blast actions (`permanently_delete_record`, refunds, `update_rental_policy`) are deferred to Phase 4. Phase 3 ships with `requiredApproverCount = 1` implied; the column itself is not added until Phase 4 to keep the v1 schema minimal. See §11. |
 | 4 | Approval revocation (APPROVED → REJECTED) | **APPROVED** | The original approver may revoke an APPROVED-but-not-yet-CONSUMED token via `POST /api/v1/ai/approvals/:id/revoke`. A "higher-privilege AI approval admin" override is **not** in Phase 3.1; if defined later, that admin could also revoke. If implementation complexity grows, original-approver-only revocation is the minimum bar that must ship. See §7. |
 | 5 | Implementation sequence | **APPROVED** | Phase 3.0 (schema + roles + perms + decorator/guard wired, **no behaviour change**) → Phase 3.1 (risky tools + four-eyes + cron + 30 tests) → Phase 3.2 (SUPER_ADMIN demotion migration script). See §9. |
+| 6 | Approval token storage: **hash only** | **APPROVED** | The raw token is generated, returned to the approver **once**, and then thrown away. Only `sha256(rawToken)` is stored on `AgentApprovalRequest.approvalTokenHash`. Raw token never logged, never exposed via the audit API, never persisted. Match the existing password-reset-token pattern in `AdminUser.passwordResetToken` (also SHA-256 hashed). Prefer protected UI/API integration over operator copy-paste. See §5. |
+| 7 | Approval summary: **structured snapshot** | **APPROVED** | Every `AgentApprovalRequest` carries explicit fields the approver UI can render without reaching back to the original resource: `actionTitle`, `businessSummary`, `targetResourceType`, `targetResourceId`, `targetResourceName`, `requestedByAdminUserId`, `riskLevel`, `beforeValues` (JSON snapshot), `afterValues` (JSON snapshot of the proposed change), `expiresAt`. Frozen at request time so a stale-but-honest view is shown to the approver even if the resource changes underneath (see decision #12). See §6. |
+| 8 | Risk levels: `LOW \| MEDIUM \| HIGH \| CRITICAL` | **APPROVED** | Each approval-gated tool declares a hard-coded risk level via its `@RequiresApproval(riskLevel)` decorator. Drives: (a) token TTL (CRITICAL=60s, HIGH=2min, MEDIUM=5min, LOW=10min — though LOW is unused in Phase 3 because LOW actions don't need approval), (b) approver-UI warning intensity (red/orange/yellow/grey), (c) future multi-approver count (Phase 4: CRITICAL→2 approvers, others→1). Stored on `AgentApprovalRequest.riskLevel`. See §5. |
+| 9 | **Permanent delete excluded** from Phase 3.1 | **APPROVED** | `permanently_delete_record` is **NOT** wired in Phase 3.1. Recycle-bin **restore** ships normally; permanent removal is blocked until: (a) a Prisma FK/cascade audit confirms the blast radius for each soft-deletable model (Product → ProductVariant/ProductImage/OrderItem etc.), AND (b) Phase 4 multi-approver lands. See §8 and §12. |
+| 10 | **Refunds/payments out of Phase 3 entirely** | **APPROVED** | No refund tools, no payment-reversal tools, no `Payment` mutations via the AI agent in Phase 3. These need payment-specific controls (gateway reconciliation, fund movement compliance, etc.) that are out of scope for the generic approval workflow. Will land as their own subsystem later. See §12. |
+| 11 | Tenant isolation tests: **mandatory** | **APPROVED** | Four explicit tests required in addition to the existing test list — see §10.H. Tenant scoping is enforced today by `TenantContext.requireId` + the AdminGuard guard chain, but Phase 3 introduces approval rows + tokens that span request → approval → execute, and we want belt-and-braces coverage. |
+| 12 | Stale-data protection: `expectedUpdatedAt` | **APPROVED** | At request time, capture the target resource's current `updatedAt` into `AgentApprovalRequest.expectedUpdatedAt`. At execute time, the consume transaction re-reads the resource and compares; mismatch → **409 stale_data**, approval invalidated (status → `EXPIRED` with `expirationReason: 'stale_data'`), operator must re-initiate so they see the new state. Prevents "approve A, race a manual edit, then execute on the wrong baseline". See §7 Workflow 5. |
+| 13 | Execution retry limit: **max 3 attempts** | **APPROVED** | `AgentApprovalRequest.executionAttempts` increments on every consume attempt, win or lose. After the **3rd** failed attempt, the approval is marked `status='EXHAUSTED'` and the token is invalidated. The operator must re-initiate. Bounds the cost of an operator hammering retry through transient errors. See §7 Workflow 5. |
+| 14 | Revocation: **original approver only** (Phase 3.1) | **APPROVED** | Reaffirms decision #4 with explicit constraints: revocation is allowed **only** by `request.approverAdminUserId === req.user.id`, **only** while `status === 'APPROVED'`, **only** before `consumedAt` is set. No higher-privilege override in Phase 3.1. See §7 Workflow 4.5. |
 
 These decisions are locked. Reopening any of them requires a separate amendment commit to this document.
 
@@ -164,39 +173,75 @@ Phase 3 v1 is single-approver: one approval ⇒ token issued. Some actions (perm
 
 ---
 
-## 5. Approval token mechanics
+## 5. Approval token mechanics + risk levels
 
-### Generation
+### Risk levels — drive TTL, UI, and (Phase 4) multi-approver count
 
-- 256-bit random hex via `crypto.randomBytes(32).toString('hex')` (64 hex chars).
-- Stored in `AgentApprovalRequest.approvalToken` with `@unique` constraint.
-- Returned to the approver in the JSON response of `POST /approvals/:id/approve`. Never logged in plaintext to `AgentAuditLog.outputJson` (the sanitiser drops `approvalToken` *only when present as input* — for the issuance response we deliberately log just the token id, not the value).
+Decision Log #8. Every approval-gated tool declares a hard-coded `riskLevel` via the `@RequiresApproval(riskLevel)` decorator. The level is stored on `AgentApprovalRequest.riskLevel` at request time and is what the approver UI keys off for warning intensity.
 
-### Lifetime
+| Risk level | Token TTL (Phase 3.1) | Approver UI warning | Phase 4 multi-approver | Example tools |
+|---|---|---|---|---|
+| `LOW` | 10 min | grey badge | 1 | (unused in Phase 3 — LOW actions don't go through approval at all) |
+| `MEDIUM` | 5 min | yellow badge | 1 | `archive_product`, `restore_product`, `restore_*` from recycle bin, `update_size_guide_entry` (toggle isActive) |
+| `HIGH` | 2 min | orange banner | 1 | `publish_product`, `update_product` (incl. pricing), `update_order_status`, `update_rental_status`, `mark_rental_returned`, `adjust_inventory` |
+| `CRITICAL` | 60 sec | **red full-width warning** + extra confirmation phrase | **2** (Phase 4 only — single-approver in Phase 3.1) | `update_rental_policy`, `record_rental_damage` with deposit deduction |
 
-| Action class | TTL |
-|---|---|
-| Default risky action (publish, status change, inventory adjust, etc.) | **5 minutes** |
-| Permanent delete (any `permanently_delete_record`) | **60 seconds** |
-| Refunds / payment-reversal (when added) | **60 seconds** |
-| `update_rental_policy` (tenant-wide blast radius) | **2 minutes** |
+**Permanent delete and refunds are NOT in Phase 3.1** (Decision Log #9 and #10). When permanent-delete eventually lands it will be CRITICAL with the 60s TTL and a Phase-4 dual-approver requirement.
 
-`expiresAt = createdAt + ttl`. After `expiresAt`, status flips to `EXPIRED` (auto-expiry cron, §7) and the token can never be consumed.
+`expiresAt = createdAt + ttlForLevel(riskLevel)`. After `expiresAt`, the auto-expiry cron flips status to `EXPIRED` (§7 Workflow 6).
 
-### Single-use
+### Token generation, storage, and transport — Decision Log #6
+
+The raw token is generated **once**, returned to the approver **once**, and the database **only ever stores its hash**.
+
+```ts
+// Pseudo-code at approval time
+const rawToken = crypto.randomBytes(32).toString('hex');           // 64-char hex, ~256 bits
+const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+await prisma.agentApprovalRequest.update({
+  where: { id },
+  data: { approvalTokenHash: tokenHash, status: 'APPROVED', approvedAt: new Date(), approverAdminUserId: req.user.id },
+});
+return res.json({ approvalToken: rawToken, expiresAt, ... });        // raw returned ONCE — then forgotten by the server
+```
+
+**Hardline rules** (each fails the build via a unit test if violated):
+- ❌ The raw token is **never** persisted to any table. Only `sha256(rawToken)` is stored.
+- ❌ The raw token is **never** written to `AgentAuditLog` (input or output). The sanitiser already strips `approvalToken` keys; in addition, the approve handler does not include `rawToken` in its `outputJson` audit fragment.
+- ❌ The raw token is **never** returned by any audit API (`GET /api/v1/ai/audit`, `GET /api/v1/ai/approvals/:id`). Only the approval id, status, and `approvalTokenIssued: boolean` are exposed.
+- ❌ The raw token is **never** rendered into a server log line in any environment.
+- ❌ Consume sets `approvalTokenHash = NULL` on success — even the hash is wiped after use.
+
+**Lookup at execute time**: the operator (or agent runtime) sends the raw token in the request body. The handler hashes it (`sha256`) and looks up the row by `approvalTokenHash = <hash>`. Same `@unique` constraint, same single-row lookup, but the DB never sees the raw value.
+
+**Preferred transport** — Decision Log #6 reaffirmed. Operators should **not** copy-paste tokens between consoles. The approval cycle is meant to run inside protected UI/API surface where the token never leaves the trust boundary:
+
+1. Approver clicks "Approve" in the (Phase 4) admin UI → server holds the raw token in a short-lived in-memory queue keyed by `approvalRequestId`.
+2. The agent runtime calls `GET /api/v1/ai/approvals/:id/redeemable-token` (perm: `ai-agent:write-drafts` AND `req.user.id === request.initiatorAdminUserId`) — server pops the token from the in-memory queue, returns it once.
+3. The agent runtime calls the executing endpoint with the token in the request body. Token is hashed and matched.
+
+If the in-memory queue is unavailable (e.g. server restart between approve and execute), the approver must re-approve — same TTL, same payload hash, fresh token. **No copy-paste fallback**; if Phase 3.1 ships before the queue exists, the approver UI itself holds the token in browser memory and posts directly to the agent backend on behalf of the operator.
+
+Phase 3.1 ships with the **direct approver-pastes-into-API** path as the bare minimum so the workflow can land before the UI exists; the full protected-token path lands in Phase 4 alongside the admin UI.
+
+### Single-use + retry limit
 
 `consumedAt` is set in the **same Prisma transaction** as the underlying write. The transaction:
-1. `SELECT ... FOR UPDATE` the approval row by token.
-2. Verify status = APPROVED, `expiresAt > now`, `consumedAt IS NULL`.
-3. Recompute payload hash, compare.
-4. Update approval: `status = 'CONSUMED'`, `consumedAt = now()`.
-5. Run the actual operation (Prisma write).
-6. If step 5 fails: rollback the transaction → approval row reverts to APPROVED. The operator may retry with the same token (still single-use; `consumedAt` rolled back).
-7. If steps 1–4 fail: throw the appropriate error envelope (410 expired, 410 consumed, 409 payload_mismatch).
+1. `SELECT ... FOR UPDATE` the approval row by `approvalTokenHash = sha256(incomingRawToken)`.
+2. Verify `status = 'APPROVED'`, `expiresAt > now`, `consumedAt IS NULL`, `executionAttempts < 3` (Decision Log #13).
+3. Increment `executionAttempts`. **This always commits**, win or lose, so a transient failure burns one of the 3 attempts.
+4. **Stale-data check** (Decision Log #12): re-read the target resource (`SELECT updatedAt FROM <Resource> WHERE id = ?`). If `<resource.updatedAt> != approvalRequest.expectedUpdatedAt` → rollback the increment, set `status='EXPIRED'` with `expirationReason='stale_data'`, throw 409 `stale_data`.
+5. Recompute payload hash from the incoming body, compare to stored. Mismatch → rollback the increment, set `status='EXPIRED'` with `expirationReason='payload_mismatch'`, throw 409.
+6. Update approval: `status = 'CONSUMED'`, `consumedAt = now()`, `approvalTokenHash = NULL` (defence-in-depth — even the hash is wiped on success).
+7. Run the actual operation (Prisma write) inside the same transaction.
+8. **Rollback on handler failure** (Decision Log #1): if step 7 fails, rollback the entire transaction. Approval row reverts to `APPROVED` AND `executionAttempts` reverts to its pre-increment value. The operator may retry with the same token within TTL.
+9. After 3rd failed attempt — i.e. when step 2 sees `executionAttempts >= 3` — the approval is set to `status='EXHAUSTED'` immediately, hash cleared, and the executing call returns 410 `approval_exhausted`. The operator must re-initiate from scratch.
 
 The transaction guarantees a token can only ever apply to one successful write. A concurrent retry will deadlock at `SELECT ... FOR UPDATE` and the loser sees `consumed` after the winner commits.
 
-**Decision: rollback semantics on handler failure — LOCKED 2026-05-10 (Decision Log #1).** The alternative (fail-forward — keep status=CONSUMED even if write fails) is simpler but forces a fresh approval cycle on every transient error. Rollback gives operators a clean retry window within TTL. The rollback path is fully tested (test #13 in §10).
+**Decision: rollback semantics on handler failure — LOCKED 2026-05-10 (Decision Log #1).** The alternative (fail-forward — keep status=CONSUMED even if write fails) is simpler but forces a fresh approval cycle on every transient error. Rollback gives operators a clean retry window within TTL — bounded by the 3-attempt cap (Decision Log #13) so a buggy retry loop can't burn through unlimited tries.
+
+**Counter-intuitive subtlety on `executionAttempts`**: it commits even when the transaction is otherwise rolled back, so the cap is enforced even across crash-restart boundaries. Implementation: do a separate transaction to bump the counter BEFORE the consume transaction starts, then run the consume transaction atomically. If the consume fails, the counter stays bumped (correct — you used an attempt). If the consume succeeds, the counter is irrelevant (status=CONSUMED is the terminal state). See §10 test #13a covering the bump-on-failure semantics.
 
 ### Payload hash binding
 
@@ -232,32 +277,57 @@ model AgentAuditLog {
 
 ### `AgentApprovalRequest` schema (NEW model)
 
+Updated 2026-05-10 to reflect Decision Log #6 (token hash), #7 (snapshot fields), #8 (risk level), #12 (expectedUpdatedAt), #13 (executionAttempts).
+
 ```prisma
 model AgentApprovalRequest {
   id                    String    @id @default(cuid())
-  tenantId              String?
+  tenantId              String?                                   // tenant scoping — see §10.H tests
 
+  // ─── Identity ───────────────────────────────────────────────────────
   initiatorAdminUserId  String                                    // who opened the request
   approverAdminUserId   String?                                   // who approved/rejected (null until acted)
   approverIp            String?                                   // for forensics; matches the approve POST
 
+  // ─── Tool + payload ─────────────────────────────────────────────────
   toolName              String                                    // e.g. "publish_product"
   targetResourceType    String?                                   // e.g. "Product"
   targetResourceId      String?
-  inputJson             Json                                      // sanitised — same rules as AgentAuditLog
+  targetResourceName    String?                                   // human-readable label, e.g. "Floral Mermaid Gown"
+  inputJson             Json                                      // sanitised input — same rules as AgentAuditLog
   payloadHash           String                                    // sha256(toolName || canonicalJSON(input))
-  summary               String                                    // human-readable, shown to approver
 
-  approvalToken         String?   @unique                         // present once status=APPROVED; null after CONSUMED
-  status                String    @default("PENDING")             // PENDING | APPROVED | REJECTED | EXPIRED | CONSUMED | CANCELLED
-  rejectionReason       String?
+  // ─── Approval summary snapshot — Decision Log #7 ────────────────────
+  // All four fields are frozen at request time so the approver UI can
+  // render a stable, complete view without reaching back to the resource.
+  // If the resource changes after request time, the diff in beforeValues
+  // vs the live state is what triggers the stale_data check at execute
+  // time (Decision Log #12).
+  actionTitle           String                                    // short verb, e.g. "Publish wedding gown"
+  businessSummary       String                                    // one-line plain-English explanation
+  riskLevel             String                                    // LOW | MEDIUM | HIGH | CRITICAL — Decision Log #8
+  beforeValues          Json?                                     // snapshot of relevant fields BEFORE the action
+  afterValues           Json?                                     // snapshot of fields the action would set
+  expectedUpdatedAt     DateTime?                                 // resource.updatedAt at request time — Decision Log #12
 
-  expiresAt             DateTime
+  // ─── Token (HASHED) — Decision Log #6 ───────────────────────────────
+  // Raw token is generated, returned to approver once, then forgotten.
+  // Only sha256(rawToken) is ever persisted. Lookup at execute time
+  // hashes the incoming raw token and compares.
+  approvalTokenHash     String?   @unique                         // present once status=APPROVED; CLEARED after CONSUMED or revocation
+
+  // ─── State machine ──────────────────────────────────────────────────
+  status                String    @default("PENDING")             // PENDING | APPROVED | REJECTED | EXPIRED | CONSUMED | CANCELLED | EXHAUSTED
+  rejectionReason       String?                                   // populated for REJECTED (incl. revocation)
+  expirationReason      String?                                   // populated for EXPIRED — 'ttl' | 'stale_data' | 'payload_mismatch'
+  executionAttempts     Int       @default(0)                     // increments each consume try; cap at 3 (Decision Log #13)
+
+  // ─── Lifecycle timestamps ───────────────────────────────────────────
+  expiresAt             DateTime                                  // = createdAt + ttlForLevel(riskLevel)
   approvedAt            DateTime?
   rejectedAt            DateTime?
   cancelledAt           DateTime?
   consumedAt            DateTime?
-
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
@@ -268,6 +338,7 @@ model AgentApprovalRequest {
   @@index([initiatorAdminUserId, createdAt])
   @@index([approverAdminUserId, createdAt])
   @@index([expiresAt])
+  @@index([riskLevel, status])                                    // for "show me all open CRITICAL approvals" dashboards
 }
 ```
 
@@ -279,22 +350,41 @@ agentApprovalsReviewed  AgentApprovalRequest[] @relation("AgentApprovalApprover"
 
 ### Linkage chain
 
-A risky action produces 3–5 `AgentAuditLog` rows, all sharing the same `approvalRequestId`:
+A risky action produces 3–6 `AgentAuditLog` rows, all sharing the same `approvalRequestId`:
 
 | # | actionType | severity | When | Notes |
 |---|---|---|---|---|
-| 1 | `APPROVAL_REQUESTED` | NOTICE | initiator POSTs without token | input is sanitised; outputJson contains the new approval id |
-| 2a | `APPROVAL_GRANTED` | NOTICE | approver POSTs `/approvals/:id/approve` | logs approverAdminUserId, ipAddress |
+| 1 | `APPROVAL_REQUESTED` | NOTICE | initiator POSTs without token | input is sanitised; outputJson contains the new approval id, riskLevel, expiresAt |
+| 2a | `APPROVAL_GRANTED` | NOTICE | approver POSTs `/approvals/:id/approve` | logs approverAdminUserId, ipAddress; **never logs the raw token** |
 | 2b | `APPROVAL_REJECTED` | NOTICE | approver POSTs `/approvals/:id/reject` | logs `rejectionReason` |
+| 2b' | `APPROVAL_REVOKED` | NOTICE | original approver POSTs `/approvals/:id/revoke` | only valid while status=APPROVED; clears token hash |
 | 2c | `APPROVAL_CANCELLED` | INFO | initiator DELETEs `/approvals/:id` | only valid while status=PENDING |
-| 2d | `APPROVAL_EXPIRED` | INFO | cron flips PENDING/APPROVED→EXPIRED | written by the cron, adminUserId=null |
-| 3 | (the actual action — `PUBLISH`/`UPDATE`/`DELETE`/etc.) | NOTICE or CRITICAL | initiator re-POSTs with token | links the original audit chain to the underlying operation |
+| 2d | `APPROVAL_EXPIRED` | INFO | cron flips PENDING/APPROVED→EXPIRED | written by the cron, adminUserId=null; `expirationReason` distinguishes `ttl` vs `stale_data` vs `payload_mismatch` |
+| 2e | `APPROVAL_EXHAUSTED` | WARNING | 3rd consume attempt fails | Decision Log #13 — operator must re-initiate |
+| 3 | (the actual action — `PUBLISH`/`UPDATE`/`DELETE`/etc.) | NOTICE or CRITICAL | initiator re-POSTs with valid raw token | links the original audit chain to the underlying operation |
 
 The activity page (Phase 4 work) groups rows by `approvalRequestId` to show a complete request → approval → execution timeline.
 
+### What audit APIs are allowed to expose — Decision Log #6
+
+The audit endpoints (`GET /api/v1/ai/audit`, `GET /api/v1/ai/approvals/:id`, `GET /api/v1/ai/approvals?status=...`) MUST NOT include the raw approval token in any response — not in `inputJson`, not in `outputJson`, not in any field. They MAY include:
+
+- The `approvalRequestId`.
+- `status`, `riskLevel`, `expiresAt`, all timestamps.
+- `payloadHash` (it's already public after request — anyone with the input can compute it).
+- A boolean `tokenIssued: boolean` (true after approve, false otherwise) — derived from `status === 'APPROVED' && approvalTokenHash !== null`.
+- The hash itself MUST NOT be exposed via the audit API either; it's defence-in-depth that should stay internal.
+
+Phase 3.1 implementation must include unit tests asserting that the audit serialiser strips both raw-token-shaped fields AND the `approvalTokenHash` field before sending to the wire.
+
 ### Sanitisation reuse
 
-The existing `AiSanitizerService` (Phase 1) sanitises `inputJson` identically for both `AgentAuditLog` and `AgentApprovalRequest`. The `summary` field is generated server-side from a per-tool template and may contain operator-friendly text like `"Publish 'Floral Mermaid Gown' (TZS 850,000) to the storefront"`. Templates live in `apps/api/src/ai/services/approval-summary.service.ts` (Phase 3.1).
+The existing `AiSanitizerService` (Phase 1) sanitises `inputJson` identically for both `AgentAuditLog` and `AgentApprovalRequest`. The `actionTitle` and `businessSummary` fields are generated server-side from a per-tool template and may contain operator-friendly text like:
+
+- `actionTitle`: `"Publish 'Floral Mermaid Gown'"`
+- `businessSummary`: `"Make this product visible on https://www.narofashion.co.tz immediately. Current price: TZS 850,000. Active variants: 3."`
+
+Templates live in `apps/api/src/ai/services/approval-summary.service.ts` (Phase 3.1).
 
 ---
 
@@ -318,29 +408,42 @@ All transitions are one-way. No row goes back to PENDING once it leaves.
 
 ### Workflow 1 — initiate
 
-1. Operator (must hold `ai-agent:write-drafts` for now; specific risky-action perms in Phase 3.2) POSTs the action with no `approvalToken`.
-2. The handler runs DTO validation as if it were going to execute (so the operator sees real validation errors before approval). On success:
-   - Computes `payloadHash`.
-   - Creates `AgentApprovalRequest` with status=PENDING, expiresAt=now+TTL.
-   - Writes `AgentAuditLog` row (#1 above) with `actionType: 'APPROVAL_REQUESTED'`.
-   - Returns the `approval_required` envelope:
-     ```json
-     {
-       "success": false,
-       "tool": "publish_product",
-       "error": { "code": "approval_required", "message": "Approval required — see approvalRequest." },
-       "approvalRequired": true,
-       "auditId": "...",
-       "approvalRequest": {
-         "id": "appr_req_...",
-         "summary": "...",
-         "expiresAt": "...",
-         "ttlSeconds": 300
-       }
+1. Operator (must hold `ai-agent:write-drafts`) POSTs the action with no `approvalToken`.
+2. The handler runs DTO validation as if it were going to execute (so the operator sees real validation errors before approval).
+3. On validation success, the handler builds the **approval snapshot** (Decision Log #7) by combining:
+   - The route's hard-coded `riskLevel` from `@RequiresApproval(riskLevel)`.
+   - A per-tool `approval-summary.service.ts` resolver that returns `{ actionTitle, businessSummary, beforeValues, afterValues, targetResourceName }`. Resolvers re-read the target resource (single Prisma query) and compose human-readable text + structured before/after diffs.
+   - The current `<resource>.updatedAt` → `expectedUpdatedAt` (Decision Log #12). Captured atomically with the snapshot — the resolver returns it.
+4. Creates `AgentApprovalRequest`:
+   - `status='PENDING'`, `expiresAt = now + ttlForLevel(riskLevel)`, `executionAttempts=0`.
+   - `actionTitle`, `businessSummary`, `beforeValues`, `afterValues`, `targetResourceName`, `riskLevel`, `expectedUpdatedAt` — all from the snapshot.
+   - `inputJson` (sanitised) and `payloadHash`.
+5. Writes `AgentAuditLog` row (#1 above) with `actionType: 'APPROVAL_REQUESTED'`.
+6. Returns the `approval_required` envelope:
+   ```json
+   {
+     "success": false,
+     "tool": "publish_product",
+     "error": { "code": "approval_required", "message": "Approval required — see approvalRequest." },
+     "approvalRequired": true,
+     "auditId": "...",
+     "approvalRequest": {
+       "id": "appr_req_...",
+       "actionTitle": "Publish 'Floral Mermaid Gown'",
+       "businessSummary": "Make this product visible on the storefront. Current price: TZS 850,000. Active variants: 3.",
+       "riskLevel": "HIGH",
+       "targetResourceType": "Product",
+       "targetResourceId": "cm123abc",
+       "targetResourceName": "Floral Mermaid Gown",
+       "beforeValues": { "isActive": false, "compareAtPrice": null },
+       "afterValues":  { "isActive": true,  "compareAtPrice": null },
+       "expiresAt": "2026-05-10T11:35:00Z",
+       "ttlSeconds": 120
      }
-     ```
+   }
+   ```
 
-Note: `approvalRequired: true` (Phase 1/2 always emits `false`).
+Note: `approvalRequired: true` (Phase 1/2 always emits `false`). The envelope **does not** contain any token field — tokens are issued only on approve.
 
 ### Workflow 2 — approve
 
@@ -391,16 +494,25 @@ A "higher-privilege AI approval admin" override (allowing someone other than the
 
 ### Workflow 5 — execute (consume token)
 
-1. Operator (must be the original initiator) re-POSTs the original tool with `approvalToken` in the body.
-2. Handler opens a Prisma transaction:
-   - `SELECT ... FOR UPDATE` the approval row by token.
-   - Validate: status=APPROVED, `expiresAt > now`, `consumedAt IS NULL`, `initiatorAdminUserId === req.user.id`, recomputed payload hash matches.
-   - On any check failing: throw the appropriate error envelope and abort.
-3. Inside the same transaction:
-   - Mark `status=CONSUMED`, `consumedAt=now()`, clear `approvalToken` (defence-in-depth so accidentally-leaked-after-the-fact tokens are useless).
+1. Operator (must be the original initiator) re-POSTs the original tool with the **raw** `approvalToken` in the body.
+2. Handler hashes the incoming raw token: `tokenHash = sha256(rawToken)`. Discards the raw value immediately — only the hash is held for the lookup.
+3. **Pre-flight attempt-counter bump (separate transaction)**: increment `executionAttempts` for the row matching `approvalTokenHash = tokenHash` if `status='APPROVED' AND consumedAt IS NULL`. This commits before the main transaction so the cap is enforced even if the consume crashes mid-write. If the row is now at `executionAttempts > 3`, set `status='EXHAUSTED'`, clear `approvalTokenHash`, write audit row #2e, return 410 `approval_exhausted`.
+4. Handler opens the **main consume transaction** (Prisma `$transaction`):
+   - `SELECT ... FOR UPDATE` the approval row by `approvalTokenHash`. Not found → 410 `approval_invalid_or_consumed`.
+   - Validate:
+     - `status === 'APPROVED'` (else 410 with the actual current status)
+     - `expiresAt > now` (else flip to `EXPIRED` with `expirationReason='ttl'`, return 410 `approval_expired`)
+     - `consumedAt IS NULL` (else 410 `approval_consumed`)
+     - `initiatorAdminUserId === req.user.id` (else 403 `forbidden_not_initiator`)
+   - **Stale-data check** (Decision Log #12): single-row read of the target resource by id, compare `<resource>.updatedAt` to `approvalRequest.expectedUpdatedAt`. Mismatch → set `status='EXPIRED'` with `expirationReason='stale_data'`, clear `approvalTokenHash`, write audit row, throw 409 `stale_data` with a body that includes the new `<resource>.updatedAt` so the operator UI can re-fetch and re-initiate.
+   - **Payload hash check**: recompute `sha256(toolName || canonicalJSON(input))` from the incoming body, compare to stored. Mismatch → set `status='EXPIRED'` with `expirationReason='payload_mismatch'`, clear hash, throw 409 `payload_mismatch`.
+5. All checks pass → inside the same transaction:
+   - `status='CONSUMED'`, `consumedAt=now()`, clear `approvalTokenHash` (defence-in-depth — even the hash is gone after success).
    - Run the actual write via the existing service.
-4. On success: write audit row (#3) with the operation's actionType + `approvalRequestId`.
-5. On handler error inside step 3: rollback the entire transaction. The token reverts to APPROVED and may be retried within TTL.
+6. On commit: write audit row (#3) with the operation's actionType + `approvalRequestId`. Severity follows `riskLevel` (CRITICAL → CRITICAL, HIGH → NOTICE, MEDIUM → INFO).
+7. On handler error inside step 5: **rollback the entire main transaction** — but the pre-flight bump from step 3 stays committed (you used an attempt). Status goes back to `APPROVED`, hash is back, operator may retry within TTL up to the 3-attempt cap.
+
+Net effect: the token is single-use on **success**, retryable on **transient failure**, capped at 3 attempts, and invalidated on **stale-data** or **payload-mismatch** (which require a fresh approval cycle so the approver re-sees the new state).
 
 ### Workflow 6 — auto-expiry (cron)
 
@@ -422,28 +534,35 @@ For each affected row, write `AgentAuditLog` row (#2d) with `severity: 'INFO'`, 
 ### New approval-management routes
 
 ```
-POST   /api/v1/ai/approvals/:id/approve       perm: ai-agent:approve
-POST   /api/v1/ai/approvals/:id/reject        perm: ai-agent:approve
-DELETE /api/v1/ai/approvals/:id               perm: ai-agent:write-drafts (initiator only)
+POST   /api/v1/ai/approvals/:id/approve       perm: ai-agent:approve  (NOT initiator — four-eyes)
+POST   /api/v1/ai/approvals/:id/reject        perm: ai-agent:approve  (NOT initiator — four-eyes)
+POST   /api/v1/ai/approvals/:id/revoke        perm: ai-agent:approve  (ORIGINAL approver only — Decision Log #14)
+DELETE /api/v1/ai/approvals/:id               perm: ai-agent:write-drafts  (initiator only, while PENDING)
 GET    /api/v1/ai/approvals?status=PENDING    perm: ai-agent:read
 GET    /api/v1/ai/approvals/:id               perm: ai-agent:read
 ```
 
-### New risky-action routes (subset; full list lands with Phase 3.1)
+### Phase 3.1 risky-action routes — locked list
 
-```
-POST   /api/v1/ai/products/:id/publish        perm: ai-agent:write-drafts + approval token
-POST   /api/v1/ai/products/:id/archive        perm: ai-agent:write-drafts + approval token
-POST   /api/v1/ai/products/:id/restore        perm: ai-agent:write-drafts + approval token
-POST   /api/v1/ai/products/:id/permanent-delete  perm: ai-agent:write-drafts + 60s approval token + 'DELETE <type> <id>' confirm body
-PATCH  /api/v1/ai/products/:id                perm: ai-agent:write-drafts + approval token (when pricing fields touched; non-pricing in Phase 3.1)
-POST   /api/v1/ai/orders/:id/status           perm: ai-agent:write-drafts + approval token
-POST   /api/v1/ai/rentals/:id/return          perm: ai-agent:write-drafts + approval token
-POST   /api/v1/ai/inventory/adjust            perm: ai-agent:write-drafts + approval token
-PATCH  /api/v1/ai/rental-policies             perm: ai-agent:write-drafts + approval token
-```
+| Route | Risk | Approval | Notes |
+|---|---|---|---|
+| `POST /api/v1/ai/products/:id/publish` | HIGH | required | toggles `isActive: true` |
+| `POST /api/v1/ai/products/:id/archive` | MEDIUM | required | soft-delete (sets `deletedAt`) |
+| `POST /api/v1/ai/products/:id/restore` | MEDIUM | required | clears `deletedAt`; from recycle bin |
+| `PATCH /api/v1/ai/products/:id` | HIGH if pricing-touched, MEDIUM otherwise | required | the new DTO permits pricing fields here (unlike the Phase 2 draft DTO); the runner picks the risk level by inspecting which fields appear in the input |
+| `POST /api/v1/ai/orders/:id/status` | HIGH | required | follows the existing transition matrix in `OrdersService.updateStatus` |
+| `POST /api/v1/ai/rentals/:id/return` | HIGH | required | triggers late-fee calc |
+| `POST /api/v1/ai/inventory/adjust` | HIGH | required | direct stock change |
+| `PATCH /api/v1/ai/rental-policies` | CRITICAL | required | tenant-wide blast radius; 60s TTL |
+| `POST /api/v1/ai/categories/:id/restore` | MEDIUM | required | from recycle bin |
 
-**`@Patch` and `@Delete` are forbidden under `/api/v1/ai/*` until Phase 3.1.** The shape invariant test in `ai-controllers.shape.spec.ts` blocks them today; Phase 3.1 updates the allowlist alongside the route additions.
+### Explicitly NOT in Phase 3.1 (Decision Log #9 and #10)
+
+- ❌ `POST /api/v1/ai/products/:id/permanent-delete` — blocked until Prisma FK/cascade audit is complete (Product → ProductVariant, ProductImage, OrderItem, RentalOrder, etc.) AND Phase 4 multi-approver is wired. The recycle-bin **restore** path is allowed; permanent removal is not.
+- ❌ Refund and payment-reversal tools (any `Payment` mutation via the AI agent) — these need payment-gateway-specific controls (gateway reconciliation, fund movement compliance, audit symmetry between gateway events and our local Payment model). Out of scope for Phase 3 entirely. Will land as their own subsystem alongside the existing payment provider work.
+- ❌ Bulk operations — `bulk_update_*`, `bulk_delete_*`, etc. Single-resource operations only in Phase 3.
+
+The `ai-controllers.shape.spec.ts` invariant test is updated alongside Phase 3.1 to allowlist exactly the routes in the table above. Anything else — including any future permanent-delete or refund attempt — must come with its own ADR / amendment commit.
 
 ### Guard stack (per route)
 
@@ -474,7 +593,7 @@ Goal: end-state has SUPER_ADMIN with `:use + :read + :write-drafts + :approve` *
 - Seeds `ai-agent:read`, `ai-agent:write-drafts`, `ai-agent:approve` permissions.
 - **`AiPermissionGuard` still only checks `ai-agent:use`.** Phase 1/2 routes unchanged.
 - Adds the `@RequiresAiPermission()` decorator + `RequiresAiPermissionGuard` but they're not yet wired into any route.
-- One-off migration script: for every tenant, grant `:read`, `:write-drafts`, `:approve` to the existing `SUPER_ADMIN` role. (Backfills so when 3.1 enforcement lands, SUPER_ADMINs don't lose access.)
+- One-off migration script: for every tenant, **temporarily** grant `:read`, `:write-drafts`, AND `:approve` to the existing `SUPER_ADMIN` role. **This is a rollout convenience only** — it ensures SUPER_ADMINs retain access through 3.1 while operators have time to assign `AI_AGENT_OPERATOR`/`AI_AGENT_APPROVER` to the right people. The grant of `:approve` to SUPER_ADMIN will be **removed** in Phase 3.2. See Decision Log #2.
 
 **Rollout rule**: Phase 3.0 ships a deploy with **no behaviour change**. Safe.
 
@@ -583,6 +702,30 @@ The test list maps 1:1 to the 11 categories specified. File names are illustrati
 | 29 | `risky tool with valid token executes and consumes` | |
 | 30 | `non-risky tool (Phase 2 draft) does NOT trigger approval flow` | Confirms route metadata is read correctly |
 
+### H. Tenant isolation — Decision Log #11 (mandatory)
+
+These tests run against a Jest setup with two seeded tenants `T1` and `T2`, each with its own SUPER_ADMIN, operator, and approver. All four MUST pass before Phase 3.1 ships.
+
+| # | Test | What it proves |
+|---|---|---|
+| 31 | `tenant A approver cannot approve tenant B's request` | T2 approver POSTs `/approvals/<T1-request-id>/approve` → **404** (the row is invisible due to `TenantContext.requireId` scoping; we return 404 not 403 to avoid leaking existence) |
+| 32 | `tenant A initiator cannot execute tenant B's approved action` | T2 operator holds a (somehow leaked) raw token from T1 and POSTs the executing tool with it → the hash lookup is scoped by `tenantId` and returns no row → 410 `approval_invalid_or_consumed` |
+| 33 | `approval tokens are tenant-scoped (hash collisions don't cross tenants)` | Two requests in T1 and T2 with byte-identical inputs produce different `approvalTokenHash` rows because the hash incorporates `tenantId` AND `toolName` AND payload. Even if rawToken collides (cryptographically impossible but tested explicitly), the row lookup still won't return a row from the wrong tenant. |
+| 34 | `audit logs are tenant-scoped` | T2 admin GETs `/api/v1/ai/audit?approvalRequestId=<T1-request-id>` → returns no rows. The Phase 1 `AgentAuditLog` query already filters by `tenantId`; this test asserts that filter is still on after the Phase 3 audit serialiser change (the one that adds `approvalRequestId` filtering). |
+
+The four-eyes test (#1) and tenant-isolation tests (#31-34) overlap conceptually but are independent failure modes: four-eyes is intra-tenant, tenant-isolation is inter-tenant. Both must hold.
+
+### I. Stale-data + retry-limit — Decision Log #12 + #13
+
+| # | Test | What it proves |
+|---|---|---|
+| 35 | `stale_data check fires when resource updatedAt drifts after request` | Request approval for product X. Manually `UPDATE Product SET updatedAt = NOW() WHERE id = X` (simulating a parallel admin edit). Approve and execute. Expect: 409 `stale_data`, approval row → `status='EXPIRED'` with `expirationReason='stale_data'`, `approvalTokenHash=NULL`, audit row written. |
+| 36 | `expectedUpdatedAt is captured atomically with the snapshot` | Two concurrent initiate calls in different threads produce two different `expectedUpdatedAt` values that match the `updatedAt` at their respective request times. (Tests the resolver's read-and-stamp atomicity.) |
+| 37 | `executionAttempts increments on every consume try` | Mock the underlying service to throw on first 2 attempts, succeed on 3rd. After 3rd attempt: `executionAttempts=3`, `status='CONSUMED'` (operation succeeded just in time). |
+| 38 | `4th attempt returns 410 approval_exhausted` | Mock the service to always throw. After 3rd failure, 4th call → 410 `approval_exhausted`, audit row #2e written. Token is invalidated; operator must re-initiate. |
+| 39 | `attempt counter survives a crash mid-write` | Simulate a crash inside the consume transaction on attempt 2. Restart, retry: counter is 2 (not reset). Bumps to 3 on this attempt. Asserts the pre-flight bump-then-transact pattern is correct. |
+| 40 | `revocation invalidates token even with consume in flight` | Open the consume transaction (hold open via test fixture). Approver revokes. Consume completes — should fail with `approval_invalid_or_consumed` because the hash lookup post-revoke returns no row. |
+
 ---
 
 ## 11. Open design questions (need decisions before Phase 3.1 implementation begins)
@@ -605,29 +748,43 @@ The test list maps 1:1 to the 11 categories specified. File names are illustrati
 
 ## 12. Out of scope for Phase 3 (deliberately)
 
+### Explicitly blocked until later phases — Decision Log #9 and #10
+
+- ❌ **Permanent delete via AI** — `permanently_delete_record` and any equivalent `DELETE` route under `/api/v1/ai/*`. Blocked until: (a) a Prisma FK/cascade audit confirms the blast radius for each soft-deletable model. Specifically: what happens to `OrderItem` rows when a Product is hard-deleted (`Restrict`? `SetNull`? `Cascade`?), what happens to `RentalOrder.productId`, `WishlistItem`, `CartItem`, etc. AND (b) Phase 4 multi-approver lands so CRITICAL-tier actions require two approvers. Recycle-bin **restore** ships in Phase 3.1 and is sufficient for the recovery story until then.
+- ❌ **Refund / payment-reversal tools** — any mutation on the `Payment` model, any call into Selcom/ClickPesa refund APIs, anything that moves money. These need payment-gateway-specific controls (gateway reconciliation, fund movement compliance, audit symmetry between gateway events and our local Payment model) that the generic approval workflow doesn't cover. Will land as their own subsystem.
+- ❌ **Bulk operations** — `bulk_update_*`, `bulk_delete_*`, `bulk_publish_*`. The single-resource approval flow keeps the audit story clean; bulk needs its own design (snapshot per resource? one approval covering N resources? what happens if 3 of 10 fail?).
+
+### Phase 4+ (planned)
+
 - An LLM client (Anthropic/OpenAI) — separate piece of work.
 - An admin UI for approval management — Phase 4.
 - Per-resource approver assignment (e.g. "only Faith can approve product price changes") — Phase 4.
-- Multi-approver escalation — Phase 4.
-- Approval delegation — later.
+- Multi-approver escalation (CRITICAL → 2 approvers required) — Phase 4. Decision Log #3.
+- Higher-privilege "AI approval admin" override that can revoke any approver's token — Phase 4.
+- Approval delegation (approver A delegates to approver B for a window) — later.
 - Real-time notifications (in-app banners, push, websocket) — Phase 4.
 - Approval analytics dashboard (avg-time-to-approve, top-rejected-reasons, etc.) — Phase 4.
 - AI-side risk scoring (auto-flag suspicious requests for extra review) — Phase 5+.
-- Per-tool approval policy (e.g. "auto-approve `archive_product` for users with X years tenure") — explicitly NEVER. The whole point of approvals is human review of every risky action.
+
+### Explicitly NEVER
+
+- **Per-tool approval policy** that auto-approves a class of action under any condition (e.g. "auto-approve `archive_product` for users with X years tenure"). The whole point of approvals is human review of every risky action; auto-approval defeats the purpose.
 
 ---
 
 ## 13. Definition of done for Phase 3.1
 
-- [ ] `AgentApprovalRequest` model + `AgentAuditLog.approvalRequestId` shipped via `prisma db push`.
+- [ ] `AgentApprovalRequest` model with all snapshot + risk + retry + stale-data fields (Decision Log #6, #7, #8, #12, #13) shipped via `prisma db push`.
+- [ ] `AgentAuditLog.approvalRequestId` column added.
 - [ ] Three new permissions seeded; two new system roles seeded per tenant.
 - [ ] `RequiresAiPermissionGuard` + `@RequiresAiPermission()` decorator wired into `AiPermissionGuard`.
-- [ ] `ApprovalTokenInterceptor` + `@RequiresApproval()` decorator implemented and tested.
-- [ ] Approval-management routes (approve, reject, cancel, list, get) live.
-- [ ] At least 4 risky-action routes live: `publish_product`, `archive_product`, `update_order_status`, `adjust_inventory`. Others land in Phase 3.1.x patches.
-- [ ] All 30 tests in §10 pass; build fails if any are skipped.
-- [ ] `ai-controllers.shape.spec.ts` updated to allow Phase 3 verbs on the explicit allowlist.
+- [ ] `ApprovalTokenInterceptor` + `@RequiresApproval(riskLevel)` decorator implemented and tested.
+- [ ] Approval-management routes (approve, reject, **revoke**, cancel, list, get) live with documented perms.
+- [ ] All Phase 3.1 risky-action routes from §8 are live. **Permanent delete is NOT among them** (Decision Log #9). **Refunds are NOT among them** (Decision Log #10).
+- [ ] All 40 tests in §10 pass (30 original + 4 tenant-isolation in §10.H + 6 stale-data/retry in §10.I); build fails if any are skipped.
+- [ ] `ai-controllers.shape.spec.ts` updated to allow Phase 3 verbs on the explicit allowlist (and to keep blocking `permanent-delete` / refund / bulk verbs).
 - [ ] Cron expiry job tested with a time-stub.
+- [ ] **Token-storage audit pass**: explicit unit tests asserting (a) raw token never persists, (b) raw token never appears in `AgentAuditLog.outputJson` after approve, (c) audit serialiser strips `approvalTokenHash` from any GET response.
 - [ ] CHANGELOG / `IMPLEMENTATION_PLAN.md` updated with Phase 3.1 status.
 - [ ] Operator-facing migration note shipped (in-app banner or email) before Phase 3.2 demotion script runs.
 
