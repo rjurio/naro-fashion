@@ -322,6 +322,47 @@ export class OrdersService {
     return updated;
   }
 
+  /**
+   * Append a timestamped, admin-attributed note to Order.notes. Reversible
+   * (admin can edit the field manually), so the AI agent does not require
+   * approval for this operation in Phase 2.
+   *
+   * Note shape:
+   *   [2026-05-10T17:30:00.000Z — Faith Urio] Customer requested express delivery
+   */
+  async addNote(orderId: string, note: string, user: any) {
+    const tenantId = this.tenantContext.requireId;
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, tenantId },
+      select: { id: true, notes: true },
+    });
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const trimmed = note.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Note cannot be empty');
+    }
+
+    const adminLabel =
+      [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim() ||
+      user?.email ||
+      'admin';
+    const annotated = `[${new Date().toISOString()} — ${adminLabel}] ${trimmed}`;
+    const newNotes = order.notes ? `${order.notes}\n${annotated}` : annotated;
+
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: { notes: newNotes },
+      select: { id: true, notes: true },
+    });
+    await this.auditService.log('ADD_NOTE', 'Order', orderId, {
+      noteLength: trimmed.length,
+    });
+    return updated;
+  }
+
   async getStats() {
     const tenantId = this.tenantContext.requireId;
     const [statusCounts, revenueResult] = await Promise.all([

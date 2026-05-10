@@ -148,6 +148,41 @@ export class SizeGuidesService {
     });
   }
 
+  /**
+   * Create a draft size guide — forced inactive and never set as default.
+   * Used by the AI agent in Phase 2; operators must activate the draft via
+   * the admin UI before customers can see it.
+   */
+  async createDraft(dto: CreateSizeGuideDto) {
+    const tenantId = this.tenantContext.requireId;
+    const slug = this.generateSlug(dto.name);
+    const existing = await this.prisma.sizeGuide.findFirst({
+      where: { slug, tenantId },
+    });
+    if (existing) {
+      throw new ConflictException(
+        'A size guide with a similar name already exists',
+      );
+    }
+
+    return this.prisma.sizeGuide.create({
+      data: {
+        tenantId,
+        name: dto.name,
+        nameSwahili: dto.nameSwahili,
+        slug,
+        content: dto.content,
+        contentSwahili: dto.contentSwahili,
+        pdfUrl: dto.pdfUrl,
+        pdfUrlSwahili: dto.pdfUrlSwahili,
+        // Drafts are NEVER active and NEVER default. Operator must set both
+        // explicitly via the admin UI after reviewing the content.
+        isActive: false,
+        isDefault: false,
+      },
+    });
+  }
+
   async update(id: string, dto: UpdateSizeGuideDto) {
     const tenantId = this.tenantContext.requireId;
     const guide = await this.prisma.sizeGuide.findFirst({ where: { id, tenantId } });

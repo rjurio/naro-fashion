@@ -4,6 +4,107 @@ Four phases. Each phase is independently shippable to production behind the `ai-
 
 ---
 
+## Phase 2 status — IMPLEMENTED 2026-05-10 ✅ (subset)
+
+**Scope shipped**: 4 of the 6 originally-planned Phase 2 tools — the operator deliberately deferred the rest.
+
+Implemented:
+- `create_product_draft` — POST `/api/v1/ai/products/draft`
+- `add_order_note` — POST `/api/v1/ai/orders/:id/notes`
+- `create_size_guide_entry` — POST `/api/v1/ai/size-guide`
+- `create_size` — POST `/api/v1/ai/product-sizes`
+
+Skipped (deferred to Phase 3+ alongside the approval workflow):
+- `create_category` — sandbox-by-default flag adds complexity; the operator chose to land it cleanly with approvals later.
+- `update_product` — pricing-aware editing belongs with Phase 3 approvals.
+
+**Hard rule enforced this phase**: ZERO pricing-field writes from any AI tool.
+
+The strict DTO `CreateProductDraftAiDto` declares only non-pricing fields. Combined with the global `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })`, any pricing field on the wire returns `400 property X should not exist` before the handler runs. Concrete blocked fields (covered by 17 cases in `create-product-draft.ai.dto.spec.ts`):
+
+```
+basePrice, compareAtPrice, purchasePrice
+rentalPricePerDay, rentalDepositAmount, rentalDownPaymentPct, latePenaltyPercent
+isActive, isFeatured, published
+sizeGuideId, model3dUrl, model3dPosterUrl
+lastRestockedAt, avgRating, reviewCount, deletedAt
+price (legacy)
+```
+
+The server forces `price: 0` and `published: false` when calling `ProductsService.create()` — operators MUST set the real price + add at least one variant via the admin UI before the draft can be published. (Publishing itself ships in Phase 3.)
+
+### Files added / changed
+
+```
+apps/api/src/ai/dto/create-product-draft.ai.dto.ts        (new, strict no-pricing)
+apps/api/src/ai/dto/create-product-draft.ai.dto.spec.ts   (new, 17 forbidden-field tests)
+apps/api/src/ai/dto/add-order-note.ai.dto.ts              (new)
+apps/api/src/ai/dto/create-size-guide.ai.dto.ts           (new)
+apps/api/src/ai/dto/create-size.ai.dto.ts                 (new)
+
+apps/api/src/ai/controllers/products.ai.controller.ts     (+@Post('draft'))
+apps/api/src/ai/controllers/orders.ai.controller.ts       (+@Post(':id/notes'))
+apps/api/src/ai/controllers/size-guide.ai.controller.ts   (+@Post())
+apps/api/src/ai/controllers/product-sizes.ai.controller.ts(+@Post())
+apps/api/src/ai/controllers/ai-controllers.shape.spec.ts  (Phase 2 invariant: explicit @Post allowlist; @Patch/@Put/@Delete still forbidden)
+
+apps/api/src/orders/orders.service.ts                     (+addNote method, append-only with [ISO — admin name] prefix)
+apps/api/src/size-guides/size-guides.service.ts           (+createDraft method, forces isActive:false isDefault:false)
+apps/api/src/permissions/permissions.service.ts           (+orders:add-note, size-guides:create, product-sizes:create)
+```
+
+### Per-tool permission gating: NOT yet implemented
+
+Phase 2 still uses the single `ai-agent:use` gate. Per-tool gating (e.g. require `products:create` for `create_product_draft`, `orders:add-note` for `add_order_note`) is deferred to Phase 3. The new permission codes are seeded so operators can pre-wire them into roles before the cutover.
+
+### Audit log additions
+
+Each Phase 2 write produces:
+1. One `AgentAuditLog` row with `actionType ∈ {CREATE, NOTE}`, `severity = INFO`, `status = SUCCESS`, sanitised input (note text length only — never the body).
+2. One `AdminActivityLog` row written by the existing `AuditService` inside `OrdersService.addNote` / `ProductSizesService.create` / etc — the AI layer didn't have to plumb this; existing services already log on write.
+
+### Tests
+- 92 total (was 59 in Phase 1).
+- New: 17 cases in `create-product-draft.ai.dto.spec.ts` proving every forbidden field returns 400.
+- Updated: `ai-controllers.shape.spec.ts` now whitelists 4 specific `@Post` decorator strings; any @Post outside the allowlist (or any @Patch/@Put/@Delete anywhere) fails the build.
+
+### How to test locally
+
+```bash
+# After pulling, no schema change is needed — Phase 2 is code-only.
+cd apps/api && pnpm test
+# Boot the API
+pnpm dev
+# Grant the new perms (optional — only if you want operators with non-SUPER_ADMIN
+# roles to call writes; for now SUPER_ADMIN with ai-agent:use can do everything).
+
+# 1. Draft a product
+TOKEN="<paste a SUPER_ADMIN JWT>"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"AI Test Gown","categoryId":"<real-cat-id>","availabilityMode":"PURCHASE_ONLY"}' \
+  http://localhost:4000/api/v1/ai/products/draft | jq .
+
+# 2. Verify pricing is blocked
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"AI Bad","categoryId":"<id>","availabilityMode":"PURCHASE_ONLY","basePrice":100000}' \
+  http://localhost:4000/api/v1/ai/products/draft | jq .
+# expect: success:false, error.code:"validation_error", message contains "basePrice should not exist"
+
+# 3. Add an order note
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"note":"Customer asked about delivery"}' \
+  http://localhost:4000/api/v1/ai/orders/<order-id>/notes | jq .
+```
+
+### Known limitations (Phase 2)
+- **No pricing changes via AI** by hard requirement — operators must use the admin UI to set/edit prices until Phase 3 lands the approval workflow. Drafts are created with `price: 0` placeholder.
+- **No category creation** via AI — deferred to Phase 3 to avoid the sandbox-default-parent UX.
+- **No product update** via AI — `update_product` (non-pricing fields) is deferred to Phase 3 so the pricing-aware code path lands cleanly.
+- **Per-tool permission gating not yet enforced** — `ai-agent:use` is still the only gate. Phase 3 will add a `@RequiresPermission()` decorator + guard.
+- **Order note size-bound at 2000 chars** by `MaxLength(2000)`; longer notes return 400. The note text is NOT logged into `AgentAuditLog.inputJson` (only its length) to avoid customer-PII duplication.
+
+---
+
 ## Phase 1 status — IMPLEMENTED 2026-05-10 ✅
 
 The read-only foundation is committed but **not yet deployed**. Lives entirely under `apps/api/src/ai/` plus one Prisma model and one permission addition. No write endpoints exist; no external AI provider is wired; no approval workflow exists.

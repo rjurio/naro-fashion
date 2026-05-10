@@ -2,14 +2,29 @@ import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 /**
- * Phase 1 invariant: every AI controller is read-only. There must be NO
- * @Post / @Patch / @Put / @Delete decorators in any AI controller file.
+ * AI controller shape invariants.
  *
- * This test fails fast if a future change accidentally introduces a
- * write endpoint without going through the approval workflow that's
- * scheduled for Phase 3.
+ * Phase 1 forbade ALL writes. Phase 2 introduces a small whitelist of
+ * @Post handlers (create_product_draft, add_order_note,
+ * create_size_guide_entry, create_size). Everything else still 404s on
+ * write verbs at runtime AND fails this test at build time.
+ *
+ * @Patch / @Put / @Delete remain forbidden until Phase 3 (approval
+ * workflow). When Phase 3 lands, update PHASE_3_NOTE below.
  */
-describe('AI controllers Phase 1 read-only invariant', () => {
+
+// Allowlist: file → array of exact @Post(...) decorator strings allowed in
+// that file. Quotes are normalised to single quotes before comparison.
+const ALLOWED_POSTS: Record<string, string[]> = {
+  'products.ai.controller.ts': [`@Post('draft')`],
+  'orders.ai.controller.ts': [`@Post(':id/notes')`],
+  'size-guide.ai.controller.ts': [`@Post()`],
+  'product-sizes.ai.controller.ts': [`@Post()`],
+};
+
+const FORBIDDEN_DECORATORS = ['@Patch(', '@Put(', '@Delete('];
+
+describe('AI controllers — Phase 2 shape invariants', () => {
   const controllersDir = __dirname;
 
   const controllerFiles = readdirSync(controllersDir).filter(
@@ -21,21 +36,40 @@ describe('AI controllers Phase 1 read-only invariant', () => {
   });
 
   it.each(controllerFiles)(
-    'controller %s only declares @Get handlers',
+    'controller %s has no @Patch / @Put / @Delete (those land in Phase 3)',
     (file) => {
-      const src = readFileSync(join(controllersDir, file), 'utf8');
-      // Strip block comments so doc text like "// will be wired in Phase 3"
-      // doesn't cause a false positive.
-      const stripped = src.replace(/\/\*[\s\S]*?\*\//g, '');
-      const forbidden = ['@Post(', '@Patch(', '@Put(', '@Delete('];
-      for (const decorator of forbidden) {
+      const stripped = stripComments(
+        readFileSync(join(controllersDir, file), 'utf8'),
+      );
+      for (const decorator of FORBIDDEN_DECORATORS) {
         expect(stripped).not.toContain(decorator);
       }
     },
   );
 
   it.each(controllerFiles)(
-    'controller %s imports a guard stack (JwtAuthGuard, AdminGuard, AiPermissionGuard)',
+    'controller %s only declares @Post handlers on the Phase 2 allowlist',
+    (file) => {
+      const stripped = stripComments(
+        readFileSync(join(controllersDir, file), 'utf8'),
+      );
+      const matches = stripped.match(/@Post\([^)]*\)/g) ?? [];
+      const allowed = (ALLOWED_POSTS[file] ?? []).map(normalise);
+      for (const found of matches) {
+        const norm = normalise(found);
+        if (!allowed.includes(norm)) {
+          throw new Error(
+            `Unexpected @Post in ${file}: ${found}. ` +
+              `Update ALLOWED_POSTS in ai-controllers.shape.spec.ts or remove the route. ` +
+              `Phase 3 (approval workflow) is the right place for new write tools.`,
+          );
+        }
+      }
+    },
+  );
+
+  it.each(controllerFiles)(
+    'controller %s carries the AI guard stack (JwtAuthGuard, AdminGuard, AiPermissionGuard)',
     (file) => {
       const src = readFileSync(join(controllersDir, file), 'utf8');
       // Either via @AiSecured() decorator or the explicit guard list
@@ -49,3 +83,15 @@ describe('AI controllers Phase 1 read-only invariant', () => {
     },
   );
 });
+
+function stripComments(src: string): string {
+  // Block + line comments — so a doc-comment containing "@Post(" doesn't
+  // trigger a false positive in the allowlist check.
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+}
+
+function normalise(decoratorStr: string): string {
+  return decoratorStr.replace(/"/g, "'");
+}

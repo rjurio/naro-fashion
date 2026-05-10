@@ -74,6 +74,13 @@ const PERMISSIONS = [
   // ai-agent — required for any /api/v1/ai/* call. Disabled by default for STAFF/MANAGER;
   // operators must grant it explicitly to roles that should use the agent.
   { code: 'ai-agent:use', name: 'Use AI Admin Agent', module: 'ai-agent', action: 'use' },
+  // Phase 2 write actions (drafts + notes) — currently gated only by ai-agent:use.
+  // Per-tool permission enforcement lands with the approval workflow in Phase 3.
+  // These codes are seeded so operators can already wire them into roles for the
+  // Phase 3 cutover without a redeploy.
+  { code: 'orders:add-note', name: 'Add Order Notes', module: 'orders', action: 'add-note' },
+  { code: 'size-guides:create', name: 'Create Size Guides', module: 'size-guides', action: 'create' },
+  { code: 'product-sizes:create', name: 'Create Product Sizes', module: 'product-sizes', action: 'create' },
 ];
 
 @Injectable()
