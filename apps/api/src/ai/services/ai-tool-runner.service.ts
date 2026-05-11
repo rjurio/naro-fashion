@@ -21,6 +21,14 @@ export interface AiToolRunArgs<T> {
   handler: () => Promise<T>;
   /** Optional human-readable summary for the agent UI. */
   message?: string | ((data: T) => string);
+  /**
+   * Override what gets written to `AgentAuditLog.outputJson` (instead of
+   * the handler's full return value). Used by the approval controller's
+   * `approve` route to strip the just-issued raw token from the audit
+   * trail while still returning it to the caller in the response body.
+   * Decision Log #6 — raw tokens MUST NEVER persist.
+   */
+  auditOutput?: (data: T) => unknown;
 }
 
 /**
@@ -44,11 +52,12 @@ export class AiToolRunner {
 
     try {
       const data = await args.handler();
+      const auditPayload = args.auditOutput ? args.auditOutput(data) : data;
       const auditId = await this.audit.record({
         tool: args.tool,
         actionType,
         input: args.input,
-        output: data,
+        output: auditPayload,
         targetResourceType: args.targetResourceType,
         targetResourceId: args.targetResourceId,
         status: 'SUCCESS',

@@ -831,6 +831,28 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
       }
     });
 
+    it('approve route uses auditOutput to strip raw token from the runner audit row', () => {
+      // Critical: the runner's default behaviour is to persist the
+      // handler's return value as outputJson. The approve handler
+      // returns the raw token. Without auditOutput, the raw token
+      // would land in the unlinked runner audit row (we caught this
+      // in production smoke on 2026-05-11). The fix is the
+      // auditOutput transform that strips `approvalToken` before
+      // audit. This test asserts the transform exists in the source.
+      const stripped = approvalsSrc
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      // Match the auditOutput key inside the approve route's runner.run({...}).
+      const approveBlock = stripped.match(
+        /@Post\(':id\/approve'\)[\s\S]+?@RequiresAiPermission|@Post\(':id\/approve'\)[\s\S]+?\}\)/,
+      );
+      expect(approveBlock).toBeTruthy();
+      const block = approveBlock![0];
+      expect(block).toContain('auditOutput');
+      // Specifically: it MUST destructure approvalToken out.
+      expect(block).toMatch(/approvalToken\s*,\s*\.\.\.redacted/);
+    });
+
     it('canonicalJSON is order-insensitive (payload-hash binding test)', () => {
       const a = canonicalJSON({ x: 1, y: 2, z: { b: 'B', a: 'A' } });
       const b = canonicalJSON({ z: { a: 'A', b: 'B' }, y: 2, x: 1 });

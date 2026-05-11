@@ -75,6 +75,13 @@ export class ApprovalsAiController {
   }
 
   // POST /api/v1/ai/approvals/:id/approve
+  //
+  // The handler returns the raw token in the response body. We MUST NOT
+  // let the runner audit it as-is (its default behaviour is to persist
+  // the handler's full return value as outputJson). Decision Log #6 —
+  // the raw token never persists to AgentAuditLog. The `auditOutput`
+  // transform strips it before the audit write while leaving the
+  // response to the client untouched.
   @RequiresAiPermission(AI_PERMISSION_CODES.APPROVE)
   @Post(':id/approve')
   approve(@Param('id') id: string) {
@@ -85,6 +92,13 @@ export class ApprovalsAiController {
       targetResourceType: 'AgentApprovalRequest',
       targetResourceId: id,
       handler: () => this.approvals.approve(id),
+      auditOutput: (summary) => {
+        const { approvalToken, ...redacted } = summary as any;
+        // approvalToken is intentionally dropped; tokenIssued + status
+        // still tell forensics that a token was minted at this time.
+        void approvalToken; // referenced to keep linters quiet
+        return redacted;
+      },
       message: () => 'Approval granted. Raw token returned ONCE — store it now.',
     });
   }
