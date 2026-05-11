@@ -1214,6 +1214,71 @@ class AdminApiClient {
   getAuditFilters() {
     return this.get<{ entities: string[]; actions: string[]; adminUsers: { id: string; firstName: string; lastName: string }[] }>('/audit/filters');
   }
+  // ============================================================
+  // AI APPROVALS (admin UI for Phase 3 four-eyes workflow)
+  //
+  // Wraps the existing /api/v1/ai/approvals/* surface. The raw
+  // approvalToken returned by approve() is ONLY exposed in the
+  // direct response — it is never persisted to localStorage /
+  // sessionStorage / URL / any other client storage. Callers MUST
+  // hold it in transient React state and clear it on modal close.
+  // ============================================================
+
+  /**
+   * List approval requests. Server-side filter via `?status=`.
+   * The wrapping envelope is `{ success, tool, data, ... }` — we
+   * extract `.data` so the caller gets the rows directly.
+   */
+  async listApprovals(params?: { status?: string; limit?: number }) {
+    const qs: Record<string, string> = {};
+    if (params?.status) qs.status = params.status;
+    if (params?.limit) qs.limit = String(params.limit);
+    const env = await this.get<{ data: any[] }>('/ai/approvals', { params: qs });
+    return env?.data ?? [];
+  }
+
+  async getApproval(id: string) {
+    const env = await this.get<{ data: any }>(`/ai/approvals/${id}`);
+    return env?.data ?? null;
+  }
+
+  /**
+   * Issue the four-eyes approval and receive the raw token EXACTLY ONCE.
+   * The server returns `{ ..., data: { ..., approvalToken: '<64 hex>' } }`.
+   * The caller MUST NOT persist this anywhere; the UI shows it in a
+   * one-shot modal and clears it on close.
+   */
+  async approveApproval(id: string): Promise<{ approvalToken: string; summary: any }> {
+    const env = await this.post<{ data: any }>(`/ai/approvals/${id}/approve`, {});
+    const summary = env?.data ?? {};
+    return { approvalToken: summary.approvalToken, summary };
+  }
+
+  async rejectApproval(id: string, reason: string) {
+    const env = await this.post<{ data: any }>(`/ai/approvals/${id}/reject`, { reason });
+    return env?.data ?? null;
+  }
+
+  async revokeApproval(id: string, reason?: string) {
+    const env = await this.post<{ data: any }>(
+      `/ai/approvals/${id}/revoke`,
+      reason ? { reason } : {},
+    );
+    return env?.data ?? null;
+  }
+
+  async cancelApproval(id: string) {
+    const env = await this.post<{ data: any }>(`/ai/approvals/${id}/cancel`, {});
+    return env?.data ?? null;
+  }
+
+  async executeApproval(id: string, approvalToken: string) {
+    const env = await this.post<{ data: any }>(`/ai/approvals/${id}/execute`, {
+      approvalToken,
+    });
+    return env?.data ?? null;
+  }
+
   async exportAuditLog(params?: Record<string, string>): Promise<Blob> {
     const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
     const url = new URL(`${this.baseUrl}/audit/export`);

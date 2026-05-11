@@ -32,6 +32,7 @@ import {
   TrendingUp,
   FileBarChart2,
   Shield,
+  ShieldCheck,
   UserCog,
   Key,
   Camera,
@@ -156,6 +157,17 @@ const navItems: NavItem[] = [
       { label: 'Admin Users', href: '/dashboard/users', icon: UserCog },
       { label: 'Roles & Permissions', href: '/dashboard/users/roles', icon: Key },
       { label: 'Audit Log', href: '/dashboard/audit-log', icon: ScrollText },
+    ],
+  },
+  {
+    label: 'AI Agent',
+    icon: Sparkles,
+    children: [
+      // Approvals page — gated server-side by `ai-agent:read`. We always
+      // show the link; an admin without the permission sees the page 403
+      // and gets a toast. Phase 4 may add a `TenantModule.code='ai-agent'`
+      // gate so this matches the other sidebar entries.
+      { label: 'Approvals', href: '/dashboard/ai/approvals', icon: ShieldCheck },
     ],
   },
   { label: 'Recycle Bin', href: '/dashboard/recycle-bin', icon: Trash2 },
