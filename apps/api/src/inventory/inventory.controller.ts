@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { UpdateInventorySettingsDto } from './dto/update-inventory-settings.dto';
@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
@@ -35,7 +36,7 @@ export class InventoryController {
   }
 
   @Post('adjust')
-  adjustStock(@Body() dto: AdjustStockDto, @Request() req: any) {
-    return this.service.adjustStock(dto, req.user?.sub);
+  adjustStock(@Body() dto: AdjustStockDto, @CurrentUser('id') performedBy: string) {
+    return this.service.adjustStock(dto, performedBy);
   }
 }

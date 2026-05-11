@@ -6,7 +6,6 @@ import {
   Delete,
   Body,
   Param,
-  Req,
   UseGuards,
 } from '@nestjs/common';
 import { PromoCodesService } from './promo-codes.service';
@@ -15,6 +14,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @Controller('promo-codes')
 @UseGuards(JwtAuthGuard, ModuleGuard)
@@ -24,8 +24,8 @@ export class PromoCodesController {
 
   // Admin: Create promo code
   @Post()
-  create(@Body() dto: CreatePromoCodeDto, @Req() req: any) {
-    return this.promoCodesService.create(dto, req.user?.sub);
+  create(@Body() dto: CreatePromoCodeDto, @CurrentUser('id') createdBy: string) {
+    return this.promoCodesService.create(dto, createdBy);
   }
 
   // Admin: List all promo codes
@@ -40,11 +40,16 @@ export class PromoCodesController {
     return this.promoCodesService.findOne(id);
   }
 
-  // Public: Validate a promo code (storefront checkout)
+  // Public: Validate a promo code (storefront checkout). @Public() skips
+  // JwtAuthGuard, so req.user is always null/undefined here and userId is
+  // undefined for anonymous storefront callers. The pre-existing behaviour
+  // (no per-user max-uses enforcement on this route) is preserved.
   @Public()
   @Post('validate')
-  validate(@Body() dto: ValidatePromoCodeDto, @Req() req: any) {
-    const userId = req.user?.sub;
+  validate(
+    @Body() dto: ValidatePromoCodeDto,
+    @CurrentUser('id') userId: string | undefined,
+  ) {
     return this.promoCodesService.validate(dto, userId);
   }
 

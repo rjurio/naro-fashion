@@ -86,7 +86,7 @@ export class AiAuditService {
     try {
       const req = this.request as any;
       const adminUserId: string | undefined =
-        args.adminUserIdOverride ?? req?.user?.sub ?? req?.user?.id;
+        args.adminUserIdOverride ?? req?.user?.id;
 
       // No identifiable admin user — refuse to record. This should never
       // happen in production because every AI route is behind AdminGuard,

@@ -8,7 +8,6 @@ import {
   Param,
   Query,
   UseGuards,
-  Request,
 } from '@nestjs/common';
 import {
   EventsService,
@@ -22,6 +21,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @UseGuards(ModuleGuard)
 @RequiresModule('events')
@@ -74,8 +74,8 @@ export class EventsController {
 
   @UseGuards(JwtAuthGuard)
   @Get('my-event')
-  findMyEvent(@Request() req: any) {
-    return this.eventsService.findMyEvent(req.user.sub);
+  findMyEvent(@CurrentUser('id') userId: string) {
+    return this.eventsService.findMyEvent(userId);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -86,14 +86,17 @@ export class EventsController {
 
   @UseGuards(JwtAuthGuard)
   @Post()
-  createByAdmin(@Body() dto: CreateEventDto, @Request() req: any) {
-    return this.eventsService.createByAdmin(dto, req.user.sub);
+  createByAdmin(@Body() dto: CreateEventDto, @CurrentUser('id') adminId: string) {
+    return this.eventsService.createByAdmin(dto, adminId);
   }
 
   @UseGuards(JwtAuthGuard)
   @Post('customer')
-  createByCustomer(@Body() dto: CustomerSubmitEventDto, @Request() req: any) {
-    return this.eventsService.createByCustomer(dto, req.user.sub);
+  createByCustomer(
+    @Body() dto: CustomerSubmitEventDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.eventsService.createByCustomer(dto, userId);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -104,8 +107,8 @@ export class EventsController {
 
   @UseGuards(JwtAuthGuard)
   @Patch(':id/approve')
-  approve(@Param('id') id: string, @Request() req: any) {
-    return this.eventsService.approve(id, req.user.sub);
+  approve(@Param('id') id: string, @CurrentUser('id') adminId: string) {
+    return this.eventsService.approve(id, adminId);
   }
 
   @UseGuards(JwtAuthGuard)

@@ -51,7 +51,7 @@ export class AiPermissionGuard implements CanActivate {
       return true;
     }
 
-    const adminUserId = user.id ?? user.sub;
+    const adminUserId = user.id;
     if (!adminUserId) {
       throw new ForbiddenException(
         'AI agent access requires an admin account',

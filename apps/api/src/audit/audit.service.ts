@@ -27,7 +27,7 @@ export class AuditService {
    * @param entity - The entity type (Product, Category, Order, etc.)
    * @param entityId - The ID of the entity (optional)
    * @param details - Additional details about the action (optional)
-   * @param overrideAdminUserId - Override the admin user ID (optional, defaults to req.user.sub)
+   * @param overrideAdminUserId - Override the admin user ID (optional, defaults to req.user.id)
    */
   async log(
     action: string,
@@ -38,7 +38,11 @@ export class AuditService {
   ): Promise<void> {
     try {
       const req = this.request as any;
-      const adminUserId = overrideAdminUserId || req.user?.sub;
+      // JwtStrategy.validate() returns the resolved AdminUser/User row,
+      // which exposes `id`. The raw JWT payload's `sub` is never preserved
+      // onto req.user — reading it here yielded undefined and silently wrote
+      // null into every AdminActivityLog row.
+      const adminUserId = overrideAdminUserId || req.user?.id;
 
       if (!adminUserId) {
         // No admin user — skip audit log (e.g., customer actions or system calls)

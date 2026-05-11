@@ -15,8 +15,15 @@ describe('AiAuditService', () => {
       },
     };
     tenantContextMock = { id: 'tenant_t1' };
+    // JwtStrategy.validate() returns the resolved AdminUser/User row,
+    // which exposes `id`. The raw JWT payload's `sub` is never preserved
+    // onto req.user — that fixture shape (used pre-2026-05-11) was only
+    // passing because the service code carried a defensive
+    // `?? req?.user?.sub` fallback. The fallback was dead code and has
+    // been removed; the fixture now matches what production actually
+    // sets on req.user.
     request = {
-      user: { sub: 'admin_u1', isAdmin: true },
+      user: { id: 'admin_u1', isAdmin: true },
       ip: '10.0.0.1',
       headers: {
         'user-agent': 'jest',

@@ -1167,7 +1167,7 @@ export class ApprovalService {
 
   private requireAdminUserId(): string {
     const req = this.request as any;
-    const id = req?.user?.id ?? req?.user?.sub;
+    const id = req?.user?.id;
     if (!id) {
       throw new ForbiddenException(
         'Approval workflow requires an authenticated admin user.',

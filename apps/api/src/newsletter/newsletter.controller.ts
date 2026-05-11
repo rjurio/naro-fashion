@@ -8,7 +8,6 @@ import {
   Param,
   Query,
   UseGuards,
-  Req,
 } from '@nestjs/common';
 import {
   NewsletterService,
@@ -18,6 +17,7 @@ import {
 } from './newsletter.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../auth/decorators/public.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @Controller('newsletter')
 export class NewsletterController {
@@ -79,8 +79,11 @@ export class NewsletterController {
 
   @UseGuards(JwtAuthGuard)
   @Post()
-  createNewsletter(@Body() dto: CreateNewsletterDto, @Req() req: any) {
-    return this.newsletterService.createNewsletter(dto, req.user?.sub);
+  createNewsletter(
+    @Body() dto: CreateNewsletterDto,
+    @CurrentUser('id') createdBy: string,
+  ) {
+    return this.newsletterService.createNewsletter(dto, createdBy);
   }
 
   @UseGuards(JwtAuthGuard)
