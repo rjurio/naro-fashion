@@ -46,6 +46,29 @@ function modelBlock(name: string): string {
 
 describe('Phase 3.0 foundation invariants', () => {
   // ─────────────────────────────────────────────────────────────────────
+  // A0. Phase 3.1B.α — Product.archivedAt lifecycle marker
+  // ─────────────────────────────────────────────────────────────────────
+  describe('Product schema — archivedAt lifecycle marker', () => {
+    it('Product model declares archivedAt as a nullable DateTime', () => {
+      const block = modelBlock('Product');
+      // Match the exact column declaration: `archivedAt   DateTime?`
+      // (allow varying whitespace between name and type but require `?`).
+      expect(block).toMatch(/\n\s+archivedAt\s+DateTime\?/);
+    });
+
+    it('Product model indexes archivedAt for the future restore list query', () => {
+      const block = modelBlock('Product');
+      expect(block).toMatch(/@@index\(\[archivedAt\]\)/);
+    });
+
+    it('Product schema still has isActive + deletedAt — archivedAt is additive, not a replacement', () => {
+      const block = modelBlock('Product');
+      expect(block).toMatch(/\n\s+isActive\s+Boolean/);
+      expect(block).toMatch(/\n\s+deletedAt\s+DateTime\?/);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
   // A. Schema — AgentApprovalRequest exists with the right shape
   // ─────────────────────────────────────────────────────────────────────
   describe('AgentApprovalRequest schema', () => {

@@ -77,6 +77,21 @@ Many fields changed from `@unique` to `@@unique([tenantId, field])`: Category.sl
 - `purchasePrice`, `minimumStock`, `supplierName`, `supplierContact`, `lastRestockedAt` - Inventory management fields
 - `inventoryTransactions InventoryTransaction[]` - Transaction log relation
 
+## Product.archivedAt (Phase 3.1B.α, 2026-05-11)
+Nullable `DateTime?` column distinguishing **archived** rows (was once active, then hidden via the AI approval workflow's `archive_product` tool) from **drafts** (never published). Without this column, `restore_product` (Phase 3.1B.β, not yet shipped) couldn't safely tell the two apart and might re-publish unreviewed drafts.
+
+**Set by**: `ApprovalService.execute()` for `archive_product` → `archivedAt = new Date()` alongside `isActive = false`.
+**Cleared by**: `ApprovalService.execute()` for `publish_product` → `archivedAt = null` alongside `isActive = true`. Defensive — the publish validator already rejects `archivedAt != null` upstream.
+**Read by**: `PublishValidationService.validatePublishable` (rejects with "use restore_product"). Phase 3.1B.β will add a restore validator that requires `archivedAt: { not: null }`.
+
+**Public visibility**: `archivedAt` is NEVER used to gate storefront reads. Public WHERE clauses keep filtering on `isActive: true, deletedAt: null` only. The public response whitelist (`publicProductListSelect` / `publicProductDetailSelect`) explicitly excludes `archivedAt` and a regression test in `products.service.spec.ts` proves it.
+
+**Backfill (deliberate non-choice)**: PR-α did NOT backfill. Every existing row keeps `archivedAt = null` on rollout — i.e. they're all classified as drafts under the new lifecycle. This is conservative: the publish workflow still works for legacy inactive products (they're drafts; publish_product accepts them), and operators who want a specific legacy product to be "restorable" can run `archive_product` once on it to stamp the marker.
+
+**`deletedAt` distinction**: archive is NOT a soft-delete. `archive_product` execute leaves `deletedAt` untouched — the product stays in the admin surface for restore. `deletedAt` is reserved for the recycle-bin path (`prisma.product.update({ data: { deletedAt: new Date() } })` via the admin delete endpoint).
+
+Index: `@@index([archivedAt])` — powers the future `list archived products` admin/AI query. Tiny since the column is null on every row at rollout.
+
 ## Commands
 - `pnpm prisma generate` - Generate Prisma client
 - `pnpm prisma db push` - Push schema to DB (also generates client)

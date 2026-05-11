@@ -801,14 +801,22 @@ export class ApprovalService {
           );
         }
 
-        // Phase 3.1B dispatch: every approval-gated product tool flips
-        // `isActive`. publish_product → true, archive_product → false.
-        // When tools start touching other columns (price/inventory/etc.)
-        // this will need richer dispatch, but the four-eyes/token/hash/
-        // stale-data plumbing above stays identical.
+        // Phase 3.1B.α dispatch: every approval-gated product tool flips
+        // `isActive` AND stamps/clears `archivedAt` so the lifecycle
+        // state is unambiguous afterwards:
+        //   publish_product  → isActive=true,  archivedAt=null  (lifts a draft to ACTIVE)
+        //   archive_product  → isActive=false, archivedAt=now   (sends an ACTIVE row to ARCHIVED)
+        // Clearing archivedAt on publish is defensive — publish_product's
+        // validator already rejects archived products with a
+        // "use restore_product" message, so this should be a no-op flip
+        // from null to null in practice. Kept explicit so a future
+        // restore_product tool can share the same write path.
         return tx.product.update({
           where: { id: row.targetResourceId! },
-          data: { isActive: nextActiveState },
+          data: {
+            isActive: nextActiveState,
+            archivedAt: nextActiveState ? null : new Date(),
+          },
         });
       });
     } catch (err) {

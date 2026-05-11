@@ -2,17 +2,22 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /**
- * publish_product pre-flight validation — Phase 3.1A.
+ * publish_product pre-flight validation — Phase 3.1A + 3.1B.α tightening.
  *
  * Runs at request-approval time so the operator sees real errors BEFORE
  * an approver wastes a click. Same checks repeat at execute time only as
  * a defence-in-depth — the canonical guard is here.
  *
- * Rules:
+ * Rules (the `archivedAt: null` check is new in PR-α 2026-05-11):
  *   - product exists in the caller's tenant
- *   - product NOT soft-deleted
+ *   - product NOT soft-deleted (`deletedAt: null`)
  *   - product currently inactive (publishing an already-live product is a no-op
  *     and would clobber the audit chain; refuse it explicitly)
+ *   - product is a DRAFT, not an ARCHIVED row (`archivedAt: null`). Archived
+ *     products will use `restore_product` once that ships in PR-β. Today they
+ *     get a precise 400 telling them to wait. This stops `publish_product`
+ *     from accidentally re-publishing a row that was deliberately hidden by
+ *     `archive_product` without going through the future restore flow.
  *   - product has the customer-facing fields a published listing requires:
  *       name, slug, category, at least one ProductImage, basePrice > 0
  *   - per availabilityMode:
@@ -51,6 +56,11 @@ export class PublishValidationService {
     if (product.isActive) {
       throw new BadRequestException(
         'Product is already active. Nothing to publish.',
+      );
+    }
+    if (product.archivedAt) {
+      throw new BadRequestException(
+        'This product is archived. Use restore_product when it is available.',
       );
     }
     if (!product.name || !product.name.trim()) {

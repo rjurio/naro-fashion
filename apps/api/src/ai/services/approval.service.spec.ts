@@ -536,11 +536,13 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
 
       expect(result.data.isActive).toBe(true);
       expect(result.approvalRequest.status).toBe(AGENT_APPROVAL_STATUS.CONSUMED);
-      // The publish_product update was issued.
-      expect(prismaMock.product.update).toHaveBeenCalledWith({
-        where: { id: 'prod_draft' },
-        data: { isActive: true },
-      });
+      // The publish_product update was issued — Phase 3.1B.α adds the
+      // `archivedAt: null` clear alongside the `isActive: true` flip so a
+      // future restore_product writes through the same shape.
+      const updateCall = prismaMock.product.update.mock.calls[0][0];
+      expect(updateCall.where).toEqual({ id: 'prod_draft' });
+      expect(updateCall.data.isActive).toBe(true);
+      expect(updateCall.data.archivedAt).toBeNull();
     });
 
     it('#21 successful execution writes a PUBLISH audit row linked to approval', async () => {
@@ -745,6 +747,178 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
       await expect(service.execute('appr_1', '')).rejects.toBeInstanceOf(
         BadRequestException,
       );
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // archivedAt lifecycle marker — Phase 3.1B.α (2026-05-11)
+  //
+  // PR-α prerequisite for restore_product: distinguish DRAFT (never
+  // published) from ARCHIVED (was active, then hidden by archive_product)
+  // via a new nullable timestamp column on Product. These tests assert:
+  //   - archive_product execute stamps `archivedAt: Date` (and never
+  //     touches `deletedAt`).
+  //   - publish_product execute clears `archivedAt: null`.
+  //   - publish_product validator rejects archived rows with the
+  //     "use restore_product" message.
+  // The state-shape assertions on the actual update calls live in the
+  // existing publish/archive describe blocks above (#20, #A12) — this
+  // block focuses on the new rejection path and audit-shape that's
+  // unique to the lifecycle marker.
+  // ══════════════════════════════════════════════════════════════════
+  describe('archivedAt lifecycle marker — Phase 3.1B.α', () => {
+    function archivedProduct(overrides: any = {}) {
+      // A row that's already been through archive_product: isActive=false
+      // AND archivedAt set. publish_product MUST reject these.
+      return draftProduct({
+        id: 'prod_archived',
+        isActive: false,
+        deletedAt: null,
+        archivedAt: new Date('2026-05-10T08:00:00Z'),
+        name: 'Previously Active Gown',
+        slug: 'previously-active-gown',
+        basePrice: '900000',
+        ...overrides,
+      });
+    }
+
+    it('publish validator REJECTS an archived product with the "use restore_product" hint', async () => {
+      // Wire the real validator from the actual module — the service
+      // mock can't catch the new branch because it only returns
+      // `{ product }` blindly. Build a one-off validator with a mocked
+      // Prisma read that returns the archived row.
+      const {
+        PublishValidationService,
+      } = require('./publish-validation.service') as typeof import('./publish-validation.service');
+      const validator = new PublishValidationService({
+        product: {
+          findFirst: jest.fn().mockResolvedValue(archivedProduct()),
+        },
+      } as any);
+      await expect(
+        validator.validatePublishable('prod_archived', TENANT_A),
+      ).rejects.toMatchObject({
+        message: expect.stringMatching(/archived.*restore_product/i),
+      });
+    });
+
+    it('publish validator ALLOWS a draft (archivedAt=null, isActive=false)', async () => {
+      const {
+        PublishValidationService,
+      } = require('./publish-validation.service') as typeof import('./publish-validation.service');
+      const validator = new PublishValidationService({
+        product: {
+          findFirst: jest.fn().mockResolvedValue(
+            draftProduct({ archivedAt: null }),
+          ),
+        },
+      } as any);
+      const result = await validator.validatePublishable(
+        'prod_draft',
+        TENANT_A,
+      );
+      expect(result.product?.id).toBe('prod_draft');
+      expect(result.imageCount).toBeGreaterThanOrEqual(1);
+    });
+
+    it('archive_product execute writes { isActive: false, archivedAt: <Date> } and does NOT set deletedAt', async () => {
+      // Hits the dispatch in ApprovalService.execute() — same flow as the
+      // existing archive happy-path test, but with explicit assertions on
+      // the new archivedAt write path.
+      const rawToken = 'L'.repeat(64);
+      // Construct an APPROVED archive row directly so we don't have to
+      // duplicate the approve() setup.
+      const approvedArchive = approvalRow({
+        id: 'appr_α_archive',
+        toolName: 'archive_product',
+        status: AGENT_APPROVAL_STATUS.APPROVED,
+        approvedByAdminUserId: APPROVER,
+        approvedAt: NOW,
+        approvalTokenHash: hashApprovalToken(rawToken),
+        targetResourceId: 'prod_active',
+        targetResourceName: 'Ivory',
+        payloadHash: payloadHash('archive_product', { productId: 'prod_active' }),
+        inputJson: { productId: 'prod_active' },
+        expectedUpdatedAt: new Date('2026-05-11T09:50:00Z'),
+      });
+      prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(approvedArchive);
+      prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+      prismaMock.product.findFirst.mockResolvedValueOnce(activeProduct());
+      prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+      prismaMock.product.update.mockResolvedValueOnce({
+        id: 'prod_active',
+        slug: 'ivory-beaded-ball-gown',
+        isActive: false,
+      });
+      prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+        approvalRow({ id: 'appr_α_archive', status: AGENT_APPROVAL_STATUS.CONSUMED }),
+      );
+
+      await service.execute('appr_α_archive', rawToken);
+
+      const writeCall = prismaMock.product.update.mock.calls[0][0];
+      expect(writeCall.data.isActive).toBe(false);
+      expect(writeCall.data.archivedAt).toBeInstanceOf(Date);
+      expect('deletedAt' in writeCall.data).toBe(false);
+    });
+
+    it('publish_product execute writes { isActive: true, archivedAt: null } (idempotent clear)', async () => {
+      const rawToken = 'M'.repeat(64);
+      const approvedPublish = approvalRow({
+        id: 'appr_α_publish',
+        toolName: 'publish_product',
+        status: AGENT_APPROVAL_STATUS.APPROVED,
+        approvedByAdminUserId: APPROVER,
+        approvedAt: NOW,
+        approvalTokenHash: hashApprovalToken(rawToken),
+        targetResourceId: 'prod_draft',
+        approvalTokenHash_unused_keeper: undefined, // ignored extra
+        payloadHash: payloadHash('publish_product', { productId: 'prod_draft' }),
+        inputJson: { productId: 'prod_draft' },
+        expectedUpdatedAt: new Date('2026-05-11T09:50:00Z'),
+      });
+      prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(approvedPublish);
+      prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+      prismaMock.product.findFirst.mockResolvedValueOnce(draftProduct());
+      prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+      prismaMock.product.update.mockResolvedValueOnce({
+        id: 'prod_draft',
+        slug: 'floral-mermaid-gown',
+        isActive: true,
+      });
+      prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+        approvalRow({ id: 'appr_α_publish', status: AGENT_APPROVAL_STATUS.CONSUMED }),
+      );
+
+      await service.execute('appr_α_publish', rawToken);
+
+      const writeCall = prismaMock.product.update.mock.calls[0][0];
+      expect(writeCall.data.isActive).toBe(true);
+      // Explicit null clear — not undefined, not omitted.
+      expect(writeCall.data.archivedAt).toBeNull();
+    });
+
+    it('publish_product validator chain: archived check fires BEFORE field-content checks (operator gets the right hint)', async () => {
+      // If both checks fired in the wrong order, an operator trying to
+      // publish an archived row with no images would get "missing images"
+      // instead of "use restore_product" — confusing. Assert the order
+      // explicitly by setting up a row that fails BOTH checks and
+      // verifying the archived message wins.
+      const {
+        PublishValidationService,
+      } = require('./publish-validation.service') as typeof import('./publish-validation.service');
+      const validator = new PublishValidationService({
+        product: {
+          findFirst: jest.fn().mockResolvedValue(
+            archivedProduct({ images: [], basePrice: 0 }),
+          ),
+        },
+      } as any);
+      await expect(
+        validator.validatePublishable('prod_archived', TENANT_A),
+      ).rejects.toMatchObject({
+        message: expect.stringMatching(/use restore_product/i),
+      });
     });
   });
 
@@ -1032,11 +1206,14 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
         expect(result.approvalRequest.status).toBe(
           AGENT_APPROVAL_STATUS.CONSUMED,
         );
-        // The dispatch fired the right write — isActive: false.
-        expect(prismaMock.product.update).toHaveBeenCalledWith({
-          where: { id: 'prod_active' },
-          data: { isActive: false },
-        });
+        // The dispatch fired the right write — isActive: false AND
+        // archivedAt stamped to a non-null Date (Phase 3.1B.α).
+        const updateCall = prismaMock.product.update.mock.calls[0][0];
+        expect(updateCall.where).toEqual({ id: 'prod_active' });
+        expect(updateCall.data.isActive).toBe(false);
+        expect(updateCall.data.archivedAt).toBeInstanceOf(Date);
+        // Critical lifecycle invariant — archive is NOT a soft-delete.
+        expect('deletedAt' in updateCall.data).toBe(false);
       });
 
       it('#A13 storefront 404 after archive — implicit: execute issues isActive:false', async () => {
@@ -1067,7 +1244,9 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
         );
         await service.execute('appr_archive_1', rawToken);
         const updateCall = prismaMock.product.update.mock.calls[0][0];
-        expect(updateCall.data).toEqual({ isActive: false });
+        // Phase 3.1B.α: write shape is now { isActive: false, archivedAt: Date }.
+        expect(updateCall.data.isActive).toBe(false);
+        expect(updateCall.data.archivedAt).toBeInstanceOf(Date);
       });
 
       it('#A14 admin lookup unaffected — execute does NOT set deletedAt', async () => {

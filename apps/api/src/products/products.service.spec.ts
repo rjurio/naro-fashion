@@ -197,6 +197,11 @@ describe('ProductsService — public vs admin product lookup', () => {
       'lastRestockedAt',
       'deletedAt',
       'updatedAt',
+      // Phase 3.1B.α — archivedAt is admin lifecycle metadata. It MUST
+      // never appear in a public response or the storefront could derive
+      // "this product was archived" from a missing-but-visible row.
+      // Public visibility is gated by isActive+deletedAt only.
+      'archivedAt',
     ] as const;
 
     const STOREFRONT_REQUIRED_FIELDS = [

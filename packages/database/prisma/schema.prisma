@@ -453,6 +453,18 @@ model Product {
   model3dUrl        String?   // URL to GLB/GLTF file in /uploads/models/
   model3dPosterUrl  String?   // Optional poster image shown while 3D model loads
 
+  // Lifecycle marker — Phase 3.1B.α (2026-05-11). Distinguishes archived
+  // products (was once active, now hidden) from drafts (never published).
+  // Both share `isActive: false, deletedAt: null` so without this column
+  // restore_product could not safely tell them apart and might re-publish
+  // an unreviewed draft. Nullable; NEVER gates public visibility (the
+  // storefront still filters on isActive+deletedAt only). Stamped by
+  // archive_product execute, cleared by publish_product execute.
+  // Existing rows are left null on rollout — conservative backfill keeps
+  // legacy inactive rows classified as drafts. Operators may run
+  // archive_product once on a legacy product to make it restorable.
+  archivedAt   DateTime?
+
   deletedAt    DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -478,6 +490,9 @@ model Product {
   @@index([slug])
   @@index([availabilityMode])
   @@index([isActive, isFeatured])
+  // Powers the future `list archived products` admin/AI surface; cheap
+  // and tiny since the column is null on every row at rollout.
+  @@index([archivedAt])
 }
 
 model ProductVariant {

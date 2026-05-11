@@ -4,6 +4,74 @@ Four phases. Each phase is independently shippable to production behind the `ai-
 
 ---
 
+## Phase 3.1B.α status — IMPLEMENTED 2026-05-11 ✅ (Product.archivedAt lifecycle marker)
+
+**Scope shipped**: Adds the `archivedAt: DateTime?` column to `Product` so `restore_product` (PR-β, not in this PR) can safely distinguish drafts from previously-archived products. Updates `archive_product` execute to stamp the field and `publish_product` execute to clear it. Tightens `publish_product`'s validator to reject archived rows with a "use restore_product" hint.
+
+**No backfill performed.** Existing `isActive: false, deletedAt: null` rows keep `archivedAt: null` — i.e. classified as drafts under the new lifecycle. Conservative choice: it preserves the current `publish_product` workflow for legacy inactive products (they're drafts; `publish_product` still works on them) while leaving operators a manual route — running `archive_product` once on a legacy product makes it restorable when PR-β ships.
+
+### Schema change
+
+```diff
+ model Product {
+   // ... existing fields ...
++  // Lifecycle marker — Phase 3.1B.α (2026-05-11). Distinguishes archived
++  // products (was once active, now hidden) from drafts (never published).
++  archivedAt   DateTime?
+   deletedAt    DateTime?
+   // ... indexes ...
++  @@index([archivedAt])
+ }
+```
+
+Migration: `prisma db push --accept-data-loss` (the standard production deploy path in `deploy.sh`). Nullable column add, no constraint change, no lock escalation beyond a metadata-only `ACCESS EXCLUSIVE`. Existing rows get `archivedAt = null` by default.
+
+### State-space after PR-α
+
+| `isActive` | `archivedAt` | `deletedAt` | Lifecycle | Public? |
+|---|---|---|---|---|
+| `false` | `null` | `null` | **DRAFT** (never published) | no |
+| `true` | `null` | `null` | **ACTIVE** | yes |
+| `false` | `<date>` | `null` | **ARCHIVED** (was active, archived) | no |
+| any | any | `<date>` | **SOFT-DELETED** (recycle bin) | no |
+
+### Code change summary
+
+- **`publish-validation.service.ts`** — `validatePublishable` now rejects `archivedAt != null` immediately after the existing `isActive` check, with the user-facing message `"This product is archived. Use restore_product when it is available."` Order matters: the archived check fires BEFORE field-content checks (images/price/variants) so an operator gets the right hint for an archived row, not "missing images".
+- **`approval.service.ts`** — the consume transaction's `tx.product.update({ data: { isActive } })` becomes `data: { isActive, archivedAt: isActive ? null : new Date() }`. Single line change; same atomic write; both directions explicit so a future `restore_product` shares the same code path.
+- **Public response whitelist** — no change needed. `publicProductListSelect` / `publicProductDetailSelect` use explicit allow-lists; `archivedAt` was never on them, so it stays out of the storefront API surface. New test in `products.service.spec.ts` (the `ADMIN_ONLY_FIELDS` table) asserts this as a regression guard.
+
+### What's NOT in PR-α (PR-β scope)
+
+- ❌ `restore_product` request-approval route — separate PR after this one soaks.
+- ❌ Restore validator (`isActive: false, archivedAt: not null, deletedAt: null`).
+- ❌ Restore dispatch case in `execute()`.
+- ❌ Storefront / admin UI exposure of archived state (admin only sees the column via `findById`/`findAllAdmin` because those use Prisma `include` returning all scalars; storefront whitelist already strips it).
+
+### Tests added in PR-α
+
+10 new tests across two files:
+
+`phase-3-foundation.spec.ts` (3 new in a `Product schema — archivedAt lifecycle marker` block):
+1. `Product` model declares `archivedAt` as nullable `DateTime`.
+2. `Product` indexes `archivedAt`.
+3. `Product` still has `isActive` + `deletedAt` (additive, not a replacement).
+
+`approval.service.spec.ts` (5 new in a `archivedAt lifecycle marker — Phase 3.1B.α` block + 2 updates):
+4. Publish validator REJECTS archived product with `use restore_product` message.
+5. Publish validator ALLOWS drafts (archivedAt=null).
+6. Archive execute writes `{ isActive: false, archivedAt: Date }` and NEVER sets `deletedAt`.
+7. Publish execute writes `{ isActive: true, archivedAt: null }` (explicit null clear).
+8. Publish validator check order: archived check fires before field-content checks.
++ Updates to tests #20 (publish data shape) and #A12 (archive data shape) to expect the new `archivedAt` write.
+
+`products.service.spec.ts` (1 update):
+9. `ADMIN_ONLY_FIELDS` table now includes `archivedAt` — proves the public list + detail selects never return it.
+
+Total: 375 tests passing across 12 suites (was 365 in 3.1B → +10).
+
+---
+
 ## Phase 3.1B status — IMPLEMENTED 2026-05-11 ✅ (archive_product only — single-tool extension)
 
 **Scope shipped**: `archive_product` as the second risky tool on the approval workflow. Reuses every piece of Phase 3.1A plumbing (four-eyes, hashed token, payload hash, stale-data, retry cap, cron expiry, audit linkage). NO other Phase 3.1B tools (restore, update_product, status changes, inventory adjust, rental policy, permanent delete, refunds) are wired.
