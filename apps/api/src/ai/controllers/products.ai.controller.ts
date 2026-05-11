@@ -137,4 +137,29 @@ export class ProductsAiController {
         'Approval requested. A different admin must approve before publishing.',
     });
   }
+
+  // POST /api/v1/ai/products/:id/archive/request-approval  (Phase 3.1B)
+  //
+  // Mirror of publish/request-approval, inverted state direction:
+  // active → archived (`isActive: false`). Hides the product from the
+  // storefront but keeps the row + all its data in admin (no soft-
+  // delete — that's a separate operation). Same approval workflow,
+  // same four-eyes, same TTL, same payload+staleness binding. No
+  // direct archive endpoint — only the request-approval initiator
+  // route.
+  @RequiresAiPermission(AI_PERMISSION_CODES.WRITE_DRAFTS)
+  @RequiresApproval(AI_RISK_LEVEL.HIGH)
+  @Post(':id/archive/request-approval')
+  requestArchive(@Param('id') id: string) {
+    return this.runner.run({
+      tool: 'archive_product',
+      actionType: 'APPROVAL_REQUESTED',
+      input: { productId: id },
+      targetResourceType: 'Product',
+      targetResourceId: id,
+      handler: () => this.approvals.requestArchiveProduct(id),
+      message: () =>
+        'Approval requested. A different admin must approve before archiving.',
+    });
+  }
 }

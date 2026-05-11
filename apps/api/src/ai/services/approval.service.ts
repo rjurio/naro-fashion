@@ -15,6 +15,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { TenantContext } from '../../tenant/tenant.context';
 import { AiAuditService } from './ai-audit.service';
 import { PublishValidationService } from './publish-validation.service';
+import { ArchiveValidationService } from './archive-validation.service';
 import { payloadHash } from '../util/canonical-json';
 import {
   generateApprovalToken,
@@ -31,11 +32,13 @@ import {
 /**
  * Tool name constants — referenced by the runner, audit rows, and the
  * payload-hash binding. Adding a new approval-gated tool means adding a
- * new entry here AND a new `request*` method on this service. Phase 3.1A
- * ships exactly one: publish_product.
+ * new entry here AND a new `request*` method on this service AND a
+ * `case` in `execute()`'s dispatch. Phase 3.1A shipped publish_product;
+ * Phase 3.1B adds archive_product (and nothing else).
  */
 export const APPROVAL_TOOL_NAMES = {
   PUBLISH_PRODUCT: 'publish_product',
+  ARCHIVE_PRODUCT: 'archive_product',
 } as const;
 
 export type ApprovalToolName =
@@ -88,6 +91,7 @@ export class ApprovalService {
     private readonly tenantContext: TenantContext,
     private readonly audit: AiAuditService,
     private readonly publishValidator: PublishValidationService,
+    private readonly archiveValidator: ArchiveValidationService,
   ) {}
 
   // ────────────────────────────────────────────────────────────────────
@@ -159,6 +163,88 @@ export class ApprovalService {
       input: inputJson,
       targetResourceType: 'Product',
       targetResourceId: product!.id,
+      approvalRequestId: created.id,
+      approvalRequired: true,
+      approvalStatus: AGENT_APPROVAL_STATUS.PENDING,
+      severity: 'NOTICE',
+      status: 'SUCCESS',
+    });
+
+    return this.toSummary(created);
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  //   request-approval — archive_product (Phase 3.1B)
+  // ────────────────────────────────────────────────────────────────────
+
+  /**
+   * Build the AgentApprovalRequest for `archive_product`. Mirror of
+   * `requestPublishProduct` with inverted before/after state. "Archive"
+   * here means `isActive: false` — the product stays in admin but is
+   * hidden from the storefront. NOT a soft-delete; `deletedAt` is left
+   * alone (that's a separate operation, recycle-bin).
+   */
+  async requestArchiveProduct(
+    productId: string,
+  ): Promise<ApprovalRequestSummary> {
+    const tenantId = this.tenantContext.requireId;
+    const initiatorId = this.requireAdminUserId();
+    const tool = APPROVAL_TOOL_NAMES.ARCHIVE_PRODUCT;
+    const riskLevel = AI_RISK_LEVEL.HIGH;
+
+    const { product } = await this.archiveValidator.validateArchivable(
+      productId,
+      tenantId,
+    );
+
+    const ttlMs = AI_RISK_LEVEL_TTL_MS[riskLevel];
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + ttlMs);
+
+    const inputJson = { productId };
+    const hash = payloadHash(tool, inputJson);
+
+    const beforeValues = {
+      isActive: true,
+      slug: product.slug,
+      name: product.name,
+    };
+    const afterValues = {
+      isActive: false,
+      slug: product.slug,
+      name: product.name,
+    };
+
+    const created = await this.prisma.agentApprovalRequest.create({
+      data: {
+        tenantId,
+        requestedByAdminUserId: initiatorId,
+        toolName: tool,
+        targetResourceType: 'Product',
+        targetResourceId: product.id,
+        targetResourceName: product.name,
+        inputJson: inputJson as any,
+        payloadHash: hash,
+        actionTitle: `Archive '${product.name}'`,
+        businessSummary:
+          `Hide this product from the storefront. It will remain in admin ` +
+          `for restore. Customers will get 404 on its slug. ` +
+          `Current price: TZS ${Number(product.basePrice ?? 0).toLocaleString('en-US')}.`,
+        riskLevel,
+        beforeValues: beforeValues as any,
+        afterValues: afterValues as any,
+        expectedUpdatedAt: product.updatedAt,
+        status: AGENT_APPROVAL_STATUS.PENDING,
+        expiresAt,
+      },
+    });
+
+    await this.audit.record({
+      tool,
+      actionType: 'APPROVAL_REQUESTED',
+      input: inputJson,
+      targetResourceType: 'Product',
+      targetResourceId: product.id,
       approvalRequestId: created.id,
       approvalRequired: true,
       approvalStatus: AGENT_APPROVAL_STATUS.PENDING,
@@ -652,12 +738,35 @@ export class ApprovalService {
       });
     }
 
-    // Final publish-time validation — re-run the pre-flight checks so a
-    // resource that became unpublishable since request time is rejected.
-    await this.publishValidator.validatePublishable(
-      row.targetResourceId!,
-      tenantId,
-    );
+    // Tool-specific final pre-flight validation — re-runs against the
+    // current resource state so a product that became un-publishable or
+    // un-archivable since request time is rejected here. Each tool has
+    // its own validator + its own "what change to write" semantics.
+    let nextActiveState: boolean;
+    switch (row.toolName) {
+      case APPROVAL_TOOL_NAMES.PUBLISH_PRODUCT:
+        await this.publishValidator.validatePublishable(
+          row.targetResourceId!,
+          tenantId,
+        );
+        nextActiveState = true;
+        break;
+      case APPROVAL_TOOL_NAMES.ARCHIVE_PRODUCT:
+        await this.archiveValidator.validateArchivable(
+          row.targetResourceId!,
+          tenantId,
+        );
+        nextActiveState = false;
+        break;
+      default:
+        // Unknown tool stored on the row — defensive. Should never trip
+        // because the controller surface only initiates known tools, but
+        // if a future PR adds a tool here without updating the dispatch,
+        // we want a precise error not a silent wrong-action.
+        throw new BadRequestException(
+          `Unsupported approval tool '${row.toolName}' for execute().`,
+        );
+    }
 
     // Main consume transaction: flip status + run the write atomically.
     let executionFailed = false;
@@ -692,11 +801,14 @@ export class ApprovalService {
           );
         }
 
-        // Phase 3.1A — the only thing this approval workflow can do is
-        // publish_product. When more tools join, dispatch on row.toolName.
+        // Phase 3.1B dispatch: every approval-gated product tool flips
+        // `isActive`. publish_product → true, archive_product → false.
+        // When tools start touching other columns (price/inventory/etc.)
+        // this will need richer dispatch, but the four-eyes/token/hash/
+        // stale-data plumbing above stays identical.
         return tx.product.update({
           where: { id: row.targetResourceId! },
-          data: { isActive: true },
+          data: { isActive: nextActiveState },
         });
       });
     } catch (err) {
@@ -735,12 +847,22 @@ export class ApprovalService {
     }
 
     // Success — write the final audit row linking the underlying op back
-    // to the approval. Severity follows the risk level.
+    // to the approval. Severity follows the risk level. actionType
+    // tracks the tool so the activity dashboard can render the
+    // operation-specific verb (PUBLISH vs ARCHIVE).
+    const successActionType =
+      row.toolName === APPROVAL_TOOL_NAMES.ARCHIVE_PRODUCT
+        ? 'ARCHIVE'
+        : 'PUBLISH';
     await this.audit.record({
       tool: row.toolName,
-      actionType: 'PUBLISH',
+      actionType: successActionType,
       input: { approvalRequestId: row.id, productId: row.targetResourceId },
-      output: { id: updatedProduct.id, slug: updatedProduct.slug, isActive: true },
+      output: {
+        id: updatedProduct.id,
+        slug: updatedProduct.slug,
+        isActive: nextActiveState,
+      },
       targetResourceType: 'Product',
       targetResourceId: updatedProduct.id,
       approvalRequestId: row.id,
@@ -755,7 +877,11 @@ export class ApprovalService {
     });
     return {
       approvalRequest: this.toSummary(after!),
-      data: { id: updatedProduct.id, slug: updatedProduct.slug, isActive: true },
+      data: {
+        id: updatedProduct.id,
+        slug: updatedProduct.slug,
+        isActive: nextActiveState,
+      },
     };
   }
 

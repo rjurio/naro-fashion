@@ -204,19 +204,19 @@ describe('Phase 3.0 foundation invariants', () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────
-  // E. Phase 3.1A — only publish_product is wired as a risky tool
+  // E. Phase 3.1A + 3.1B — only publish_product + archive_product are
+  //                       wired as risky tools
   // ─────────────────────────────────────────────────────────────────────
-  describe('Phase 3.1A — only publish_product is a risky tool', () => {
+  describe('Phase 3.1A+3.1B — only publish_product and archive_product are risky tools', () => {
     /**
-     * Risky paths that must NEVER appear in any AI controller in Phase
-     * 3.1A. If any of these are wired it means a Phase 3.1B (or later)
-     * change slipped into a 3.1A PR — caught at build time.
+     * Risky paths that must NEVER appear in any AI controller until the
+     * design adds the relevant tool. archive_product is allowed under
+     * Phase 3.1B but only via the `:id/archive/request-approval` path;
+     * a bare `:id/archive` direct route is still forbidden.
      */
     const FORBIDDEN_RISKY_PATH_FRAGMENTS = [
-      "'archive'",
       "'permanent-delete'",
       "'/permanent-delete'",
-      "':id/archive'",
       "'/refund'",
       "'/refunds'",
       "'/status'",
@@ -230,7 +230,7 @@ describe('Phase 3.0 foundation invariants', () => {
     );
 
     it.each(controllerFiles)(
-      'controller %s declares no Phase 3.1B+ risky paths',
+      'controller %s declares no Phase 3.1B+ risky paths beyond publish/archive request-approval',
       (file) => {
         const src = readFileSync(join(AI_CONTROLLERS_DIR, file), 'utf8');
         const stripped = src
@@ -242,10 +242,26 @@ describe('Phase 3.0 foundation invariants', () => {
       },
     );
 
-    it('@RequiresApproval is applied ONLY to publish_product', () => {
-      // The decorator must appear on exactly one route — the new publish
-      // request-approval handler. If it shows up elsewhere, a new risky
-      // tool was wired and this needs an amendment to the design doc.
+    it('no direct :id/archive write route exists — only :id/archive/request-approval', () => {
+      // Defence in depth: assert there is no bare `@Post(':id/archive')`
+      // or PATCH/DELETE on the archive path. The approval-gated form is
+      // allowed; the direct form would be a bypass of the workflow.
+      for (const file of controllerFiles) {
+        const src = readFileSync(join(AI_CONTROLLERS_DIR, file), 'utf8');
+        const stripped = src
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/^\s*\/\/.*$/gm, '');
+        // Disallowed: `:id/archive` not followed by `/request-approval`.
+        expect(stripped).not.toMatch(/@Post\(':id\/archive'\)/);
+        expect(stripped).not.toMatch(/@Patch\(':id\/archive'/);
+        expect(stripped).not.toMatch(/@Delete\(':id\/archive'/);
+      }
+    });
+
+    it('@RequiresApproval is applied to exactly the publish and archive request-approval routes', () => {
+      // The decorator must appear on exactly two routes — publish +
+      // archive — and both must live on products.ai.controller.ts.
+      // Anything else means a new risky tool slipped in.
       const occurrences: Array<{ file: string; count: number }> = [];
       for (const file of controllerFiles) {
         const src = readFileSync(join(AI_CONTROLLERS_DIR, file), 'utf8');
@@ -256,23 +272,27 @@ describe('Phase 3.0 foundation invariants', () => {
         if (count > 0) occurrences.push({ file, count });
       }
       expect(occurrences).toEqual([
-        { file: 'products.ai.controller.ts', count: 1 },
+        { file: 'products.ai.controller.ts', count: 2 },
       ]);
     });
 
-    it('the publish request-approval route is the ONLY Post path containing "publish" across all AI controllers', () => {
+    it('the publish/archive request-approval routes are the ONLY Post paths containing those verbs', () => {
       const matches: string[] = [];
       for (const file of controllerFiles) {
         const src = readFileSync(join(AI_CONTROLLERS_DIR, file), 'utf8');
         const stripped = src
           .replace(/\/\*[\s\S]*?\*\//g, '')
           .replace(/^\s*\/\/.*$/gm, '');
-        const found = stripped.match(/@Post\([^)]*publish[^)]*\)/g) ?? [];
+        const found =
+          stripped.match(/@Post\([^)]*(publish|archive)[^)]*\)/g) ?? [];
         for (const m of found) matches.push(`${file}: ${m}`);
       }
-      expect(matches).toEqual([
-        "products.ai.controller.ts: @Post(':id/publish/request-approval')",
-      ]);
+      expect(matches.sort()).toEqual(
+        [
+          "products.ai.controller.ts: @Post(':id/publish/request-approval')",
+          "products.ai.controller.ts: @Post(':id/archive/request-approval')",
+        ].sort(),
+      );
     });
   });
 });

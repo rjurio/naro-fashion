@@ -4,6 +4,73 @@ Four phases. Each phase is independently shippable to production behind the `ai-
 
 ---
 
+## Phase 3.1B status — IMPLEMENTED 2026-05-11 ✅ (archive_product only — single-tool extension)
+
+**Scope shipped**: `archive_product` as the second risky tool on the approval workflow. Reuses every piece of Phase 3.1A plumbing (four-eyes, hashed token, payload hash, stale-data, retry cap, cron expiry, audit linkage). NO other Phase 3.1B tools (restore, update_product, status changes, inventory adjust, rental policy, permanent delete, refunds) are wired.
+
+### What's live (in addition to Phase 3.1A)
+
+| Surface | Route | Notes |
+|---|---|---|
+| Initiate (archive_product) | `POST /api/v1/ai/products/:id/archive/request-approval` | Operator perm: `ai-agent:write-drafts`. Risk: HIGH (2-min TTL). `@RequiresApproval(HIGH)` metadata. |
+
+The approve / reject / revoke / cancel / execute / list / get endpoints are unchanged from 3.1A — `ApprovalsAiController` is tool-agnostic and dispatches on `row.toolName`.
+
+### How archive_product differs from publish_product
+
+| Aspect | publish_product | archive_product |
+|---|---|---|
+| Pre-flight validator | `PublishValidationService.validatePublishable` — rejects unless `isActive: false && deletedAt: null && images>=1 && basePrice>0 && variants/rental fields ok` | `ArchiveValidationService.validateArchivable` — rejects unless `isActive: true && deletedAt: null` |
+| `beforeValues` | `{ isActive: false, slug, basePrice }` | `{ isActive: true, slug, name }` |
+| `afterValues` | `{ isActive: true, slug, basePrice }` | `{ isActive: false, slug, name }` |
+| Consume write | `tx.product.update({ data: { isActive: true } })` | `tx.product.update({ data: { isActive: false } })` |
+| Success audit `actionType` | `PUBLISH` | `ARCHIVE` |
+| `deletedAt` touched? | No | **No** — explicit; archive is NOT a soft-delete. The product stays in admin; the recycle-bin path is a separate operation. |
+| Storefront effect | Product becomes visible (GET `/products/:slug` → 200) | Product becomes hidden (GET `/products/:slug` → 404) |
+
+### Dispatch in `execute()`
+
+`ApprovalService.execute()` now `switch`-es on `row.toolName` for both the pre-write validation and the `nextActiveState` boolean:
+
+```typescript
+let nextActiveState: boolean;
+switch (row.toolName) {
+  case APPROVAL_TOOL_NAMES.PUBLISH_PRODUCT:
+    await this.publishValidator.validatePublishable(row.targetResourceId!, tenantId);
+    nextActiveState = true;
+    break;
+  case APPROVAL_TOOL_NAMES.ARCHIVE_PRODUCT:
+    await this.archiveValidator.validateArchivable(row.targetResourceId!, tenantId);
+    nextActiveState = false;
+    break;
+  default:
+    throw new BadRequestException(`Unsupported approval tool '${row.toolName}' for execute().`);
+}
+// ... consume transaction issues: tx.product.update({ data: { isActive: nextActiveState } })
+```
+
+### Tests added
+
+`approval.service.spec.ts` ships +24 archive-specific tests in a dedicated `describe('archive_product …')` block. Covers all 22 mandatory cases plus two extras (linked ARCHIVE audit row + no `deletedAt` mutation invariant).
+
+`phase-3-foundation.spec.ts` updated: the `@RequiresApproval` count assertion now expects **2** occurrences (publish + archive) on `products.ai.controller.ts`. The "only one Post containing `publish`" assertion is generalised to "only Post paths containing `publish` OR `archive` are the two request-approval routes". Direct-write archive paths (`@Post(':id/archive')`, `@Patch(':id/archive')`, `@Delete(':id/archive')`) remain forbidden.
+
+`ai-controllers.shape.spec.ts` allowlist extended with `@Post(':id/archive/request-approval')` for `products.ai.controller.ts`.
+
+Total: 365 tests passing across 12 suites (was 341 in 3.1A → +24).
+
+### What's NOT in Phase 3.1B (deliberately deferred)
+
+- ❌ restore_product (recycle-bin restore) — separate PR.
+- ❌ update_product (with pricing) — Phase 3.1C-ish slot, biggest unknown.
+- ❌ Order/rental status changes.
+- ❌ Inventory adjust.
+- ❌ Rental policy changes (CRITICAL risk, 60s TTL).
+- ❌ Permanent delete — Decision Log #9 — blocked until Phase 4 multi-approver + FK/cascade audit.
+- ❌ Refunds / payment-reversal — Decision Log #10 — out of Phase 3 entirely.
+
+---
+
 ## Phase 3.1A status — IMPLEMENTED 2026-05-11 ✅ (approval workflow live for publish_product only)
 
 **Scope shipped**: full request → approve → execute lifecycle for the **`publish_product`** tool, plus the approval-management surface. No other risky tools are wired yet — Phase 3.1B will add archive/restore, status changes, inventory adjust, etc.
