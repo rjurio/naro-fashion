@@ -15,6 +15,9 @@ import { AiSanitizerService } from './services/ai-sanitizer.service';
 import { AiAuditService } from './services/ai-audit.service';
 import { AiToolRunner } from './services/ai-tool-runner.service';
 import { AiRolesSeederService } from './services/ai-roles-seeder.service';
+import { ApprovalService } from './services/approval.service';
+import { PublishValidationService } from './services/publish-validation.service';
+import { ApprovalExpiryCron } from './services/approval-expiry.cron';
 import { AiPermissionGuard } from './guards/ai-permission.guard';
 import { AiExceptionFilter } from './filters/ai-exception.filter';
 
@@ -28,6 +31,7 @@ import { RentalPoliciesAiController } from './controllers/rental-policies.ai.con
 import { SizeGuideAiController } from './controllers/size-guide.ai.controller';
 import { RecycleBinAiController } from './controllers/recycle-bin.ai.controller';
 import { ReportsAiController } from './controllers/reports.ai.controller';
+import { ApprovalsAiController } from './controllers/approvals.ai.controller';
 
 /**
  * AiModule — Phase 1 (read-only).
@@ -64,6 +68,7 @@ import { ReportsAiController } from './controllers/reports.ai.controller';
     SizeGuideAiController,
     RecycleBinAiController,
     ReportsAiController,
+    ApprovalsAiController,
   ],
   providers: [
     AiSanitizerService,
@@ -72,6 +77,9 @@ import { ReportsAiController } from './controllers/reports.ai.controller';
     AiPermissionGuard,
     AiExceptionFilter,
     AiRolesSeederService,
+    ApprovalService,
+    PublishValidationService,
+    ApprovalExpiryCron,
   ],
 })
 export class AiModule {}

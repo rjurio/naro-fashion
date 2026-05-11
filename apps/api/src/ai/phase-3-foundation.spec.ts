@@ -204,20 +204,25 @@ describe('Phase 3.0 foundation invariants', () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────
-  // E. No risky AI tools are exposed yet
+  // E. Phase 3.1A — only publish_product is wired as a risky tool
   // ─────────────────────────────────────────────────────────────────────
-  describe('No Phase 3 risky tools wired', () => {
-    const RISKY_PATH_FRAGMENTS = [
-      "'publish'",
+  describe('Phase 3.1A — only publish_product is a risky tool', () => {
+    /**
+     * Risky paths that must NEVER appear in any AI controller in Phase
+     * 3.1A. If any of these are wired it means a Phase 3.1B (or later)
+     * change slipped into a 3.1A PR — caught at build time.
+     */
+    const FORBIDDEN_RISKY_PATH_FRAGMENTS = [
       "'archive'",
       "'permanent-delete'",
       "'/permanent-delete'",
-      "':id/publish'",
       "':id/archive'",
       "'/refund'",
       "'/refunds'",
       "'/status'",
       "'inventory/adjust'",
+      "':id/return'",
+      "'rental-policies'",
     ];
 
     const controllerFiles = readdirSync(AI_CONTROLLERS_DIR).filter(
@@ -225,44 +230,49 @@ describe('Phase 3.0 foundation invariants', () => {
     );
 
     it.each(controllerFiles)(
-      'controller %s does NOT declare any risky-action route paths',
+      'controller %s declares no Phase 3.1B+ risky paths',
       (file) => {
         const src = readFileSync(join(AI_CONTROLLERS_DIR, file), 'utf8');
         const stripped = src
           .replace(/\/\*[\s\S]*?\*\//g, '')
           .replace(/^\s*\/\/.*$/gm, '');
-        for (const fragment of RISKY_PATH_FRAGMENTS) {
+        for (const fragment of FORBIDDEN_RISKY_PATH_FRAGMENTS) {
           expect(stripped).not.toContain(fragment);
         }
       },
     );
 
-    it('@RequiresApproval decorator is NOT applied to any route yet', () => {
-      // Phase 3.0 ships the decorator + metadata key only. No route uses it
-      // until Phase 3.1 lands. If a future PR applies the decorator, it
-      // means a risky tool was wired — that's a Phase 3.1 change and must
-      // not slip into a Phase 3.0 PR.
+    it('@RequiresApproval is applied ONLY to publish_product', () => {
+      // The decorator must appear on exactly one route — the new publish
+      // request-approval handler. If it shows up elsewhere, a new risky
+      // tool was wired and this needs an amendment to the design doc.
+      const occurrences: Array<{ file: string; count: number }> = [];
       for (const file of controllerFiles) {
         const src = readFileSync(join(AI_CONTROLLERS_DIR, file), 'utf8');
         const stripped = src
           .replace(/\/\*[\s\S]*?\*\//g, '')
           .replace(/^\s*\/\/.*$/gm, '');
-        expect(stripped).not.toContain('@RequiresApproval(');
+        const count = (stripped.match(/@RequiresApproval\(/g) ?? []).length;
+        if (count > 0) occurrences.push({ file, count });
       }
+      expect(occurrences).toEqual([
+        { file: 'products.ai.controller.ts', count: 1 },
+      ]);
     });
 
-    it('@RequiresAiPermission decorator is NOT applied to any route yet (Phase 3.0 ships scaffold only)', () => {
-      // Same back-compat hinge: as long as no Phase 1/2 controller carries
-      // @RequiresAiPermission(), the AiPermissionGuard's optional-scope
-      // path stays inactive on those routes — confirming "no behaviour
-      // change for existing endpoints".
+    it('the publish request-approval route is the ONLY Post path containing "publish" across all AI controllers', () => {
+      const matches: string[] = [];
       for (const file of controllerFiles) {
         const src = readFileSync(join(AI_CONTROLLERS_DIR, file), 'utf8');
         const stripped = src
           .replace(/\/\*[\s\S]*?\*\//g, '')
           .replace(/^\s*\/\/.*$/gm, '');
-        expect(stripped).not.toContain('@RequiresAiPermission(');
+        const found = stripped.match(/@Post\([^)]*publish[^)]*\)/g) ?? [];
+        for (const m of found) matches.push(`${file}: ${m}`);
       }
+      expect(matches).toEqual([
+        "products.ai.controller.ts: @Post(':id/publish/request-approval')",
+      ]);
     });
   });
 });

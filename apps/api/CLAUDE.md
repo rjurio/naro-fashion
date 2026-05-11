@@ -31,8 +31,18 @@ Lives at `src/ai/`. Adds 17 GET endpoints under `/api/v1/ai/*`, all read-only by
 
 **Phase roadmap** (`docs/ai-agent/IMPLEMENTATION_PLAN.md`):
 - Phase 2: draft creation tools (create_product_draft, add_order_note, draft size guide entries) — no approval needed because drafts are reversible.
-- Phase 3: approval-gated writes via new `AgentApprovalRequest` table (two-phase commit, single-use 5-min token, 60-second token for permanent-delete).
-- Phase 4: full CRUD + recycle-bin restore/permanent-delete + reports export.
+- **Phase 3.1A (LIVE — 2026-05-11)**: approval workflow for `publish_product` ONLY. Routes:
+  - `POST /api/v1/ai/products/:id/publish/request-approval` (initiator, `ai-agent:write-drafts`)
+  - `POST /api/v1/ai/approvals/:id/approve` (approver, `ai-agent:approve`, NOT initiator)
+  - `POST /api/v1/ai/approvals/:id/reject` (approver, NOT initiator, body `{reason}`)
+  - `POST /api/v1/ai/approvals/:id/revoke` (original approver only, body `{reason?}` → clears hash, status REVOKED)
+  - `POST /api/v1/ai/approvals/:id/cancel` (initiator only, PENDING only)
+  - `POST /api/v1/ai/approvals/:id/execute` (initiator only, body `{approvalToken}`)
+  - `GET  /api/v1/ai/approvals?status=` + `GET /api/v1/ai/approvals/:id`
+  Tokens are `randomBytes(32).toString('hex')` returned exactly once on approve; only `sha256(rawToken)` is persisted on `approvalTokenHash` and the hash is cleared on CONSUMED/REVOKED/EXHAUSTED. Payload hashing uses `canonicalJSON` (`apps/api/src/ai/util/canonical-json.ts`) — lexicographic key ordering so a different stringification of the same input produces the same hash. The `executePublishProduct` path runs a Prisma `$transaction` with a conditional `updateMany {status:'APPROVED', approvalTokenHash:hash}` claim — concurrent consume attempts serialise via the compare-and-swap. Execution retries cap at 3 (`MAX_APPROVAL_EXECUTION_ATTEMPTS`); the bump happens in its own pre-flight transaction so the cap survives mid-write crashes. Stale-data check compares `Product.updatedAt` to the snapshot's `expectedUpdatedAt`. `ApprovalExpiryCron` (`@Cron(EVERY_MINUTE)`) flips ttl-exceeded rows to EXPIRED with per-row INFO audit. Four-eyes is the canonical gate — same `requestedByAdminUserId === req.user.id` check on approve AND reject, with a `SELF_APPROVAL_BLOCKED` WARNING audit row when it bites. `@RequiresApproval(AI_RISK_LEVEL.HIGH)` is on the request-approval route as metadata for forensics / future interceptor work; the actual gate is the explicit route split. Phase 3.1A wires ONE tool — the `phase-3-foundation.spec.ts` invariant asserts `@RequiresApproval` appears on exactly one route. **No direct publish endpoint exists by design** — only the request-approval path.
+- Phase 3.1B (NOT STARTED): archive/restore, update_product (with pricing), order/rental status changes, inventory adjust, rental policy. Each wires through `ApprovalService` by adding a new `request*` method + a new `@Post(...)` initiator route + (probably) tool-specific consume dispatch in `execute()`.
+- Phase 3.2 (NOT STARTED): SUPER_ADMIN demotion — one-off script removing `ai-agent:approve` from SUPER_ADMIN. Runs 2-4 weeks after 3.1B production soak.
+- Phase 4: permanent delete (requires Decision Log #9 FK/cascade audit + multi-approver), refunds (own subsystem — Decision Log #10), approval admin UI, multi-approver for CRITICAL actions.
 
 ## Multi-Tenancy
 - **TenantContext** (`src/tenant/tenant.context.ts`): Request-scoped injectable providing `tenantId`. Use `this.tenantContext.requireId` in all Prisma queries. Falls back to decoding JWT from `Authorization` header when `req.user` is not set (for `@Public()` endpoints). `requireId` throws `BadRequestException` (400) with actionable message ("Provide X-Tenant-Id header or a valid Authorization token") instead of generic 500 — cleaner public API responses.

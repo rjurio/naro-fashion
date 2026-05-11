@@ -15,7 +15,16 @@ export type AiActionType =
   | 'ARCHIVE'
   | 'STATUS_CHANGE'
   | 'ADJUST_INVENTORY'
-  | 'NOTE';
+  | 'NOTE'
+  // Approval workflow lifecycle (Phase 3.1+).
+  | 'APPROVAL_REQUESTED'
+  | 'APPROVAL_GRANTED'
+  | 'APPROVAL_REJECTED'
+  | 'APPROVAL_REVOKED'
+  | 'APPROVAL_CANCELLED'
+  | 'APPROVAL_EXPIRED'
+  | 'APPROVAL_EXHAUSTED'
+  | 'SELF_APPROVAL_BLOCKED';
 
 export type AiAuditStatus =
   | 'SUCCESS'
@@ -40,7 +49,16 @@ export interface AiAuditRecordArgs {
   severity?: AiAuditSeverity;
   approvalRequired?: boolean;
   approvalStatus?: string;
+  approvalRequestId?: string;
   durationMs?: number;
+  /**
+   * Phase 3.1+ — override the adminUserId on the audit row. Used by the
+   * cron expiry job which has no request user but still needs to write
+   * audit rows. When unset the service reads from `request.user` (Phase
+   * 1/2 default behaviour).
+   */
+  adminUserIdOverride?: string;
+  tenantIdOverride?: string | null;
 }
 
 /**
@@ -67,7 +85,8 @@ export class AiAuditService {
   async record(args: AiAuditRecordArgs): Promise<string> {
     try {
       const req = this.request as any;
-      const adminUserId: string | undefined = req.user?.sub ?? req.user?.id;
+      const adminUserId: string | undefined =
+        args.adminUserIdOverride ?? req?.user?.sub ?? req?.user?.id;
 
       // No identifiable admin user — refuse to record. This should never
       // happen in production because every AI route is behind AdminGuard,
@@ -75,12 +94,16 @@ export class AiAuditService {
       if (!adminUserId) return '';
 
       // Best-effort tenant scope. AI tool routes always run inside an
-      // authenticated session so this should usually resolve.
-      const tenantId = this.safeTenantId();
+      // authenticated session so this should usually resolve. The cron
+      // expiry job passes its own tenantId since it has no request scope.
+      const tenantId =
+        args.tenantIdOverride !== undefined
+          ? args.tenantIdOverride
+          : this.safeTenantId();
 
       const sessionId = this.extractSessionId(req);
       const ipAddress = this.extractIp(req);
-      const userAgent = req.headers?.['user-agent'] ?? null;
+      const userAgent = req?.headers?.['user-agent'] ?? null;
 
       const inputJson =
         args.input === undefined ? null : (this.sanitizer.sanitize(args.input) as any);
@@ -101,6 +124,7 @@ export class AiAuditService {
           outputJson,
           approvalRequired: args.approvalRequired ?? false,
           approvalStatus: args.approvalStatus ?? 'NOT_REQUIRED',
+          approvalRequestId: args.approvalRequestId,
           status: args.status,
           errorMessage: args.errorMessage,
           severity:

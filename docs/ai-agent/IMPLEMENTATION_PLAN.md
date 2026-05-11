@@ -4,6 +4,64 @@ Four phases. Each phase is independently shippable to production behind the `ai-
 
 ---
 
+## Phase 3.1A status — IMPLEMENTED 2026-05-11 ✅ (approval workflow live for publish_product only)
+
+**Scope shipped**: full request → approve → execute lifecycle for the **`publish_product`** tool, plus the approval-management surface. No other risky tools are wired yet — Phase 3.1B will add archive/restore, status changes, inventory adjust, etc.
+
+### What's live
+
+| Surface | Routes | Notes |
+|---|---|---|
+| Initiate (publish_product) | `POST /api/v1/ai/products/:id/publish/request-approval` | Operator perm: `ai-agent:write-drafts`. Risk: HIGH (2-min TTL). |
+| Approve | `POST /api/v1/ai/approvals/:id/approve` | Approver perm: `ai-agent:approve`. Returns the raw token ONCE in the response body — never persisted. |
+| Reject | `POST /api/v1/ai/approvals/:id/reject` `{reason}` | Approver perm: `ai-agent:approve`. Four-eyes blocks self-rejection. |
+| Revoke | `POST /api/v1/ai/approvals/:id/revoke` `{reason?}` | Original approver only. Clears `approvalTokenHash`. Status → REVOKED. |
+| Cancel | `POST /api/v1/ai/approvals/:id/cancel` | Initiator only, while still PENDING. |
+| Execute | `POST /api/v1/ai/approvals/:id/execute` `{approvalToken}` | Initiator only. Consumes the token, runs the underlying write inside a Prisma `$transaction`. |
+| List | `GET /api/v1/ai/approvals?status=` | Tenant-scoped. |
+| Get | `GET /api/v1/ai/approvals/:id` | Tenant-scoped. |
+
+### Token semantics (Phase 3.1A enforces all four lock-decisions)
+
+1. **Hash-only storage (Decision Log #6)** — raw token is `randomBytes(32).toString('hex')`. The DB only ever sees `sha256(rawToken)` on `approvalTokenHash`. The raw value is returned in the approve response body exactly once, then forgotten. Never written to `AgentAuditLog.outputJson`. Never exposed by the audit GET endpoints. The sanitiser's allowlist (`approvaltoken`) only applies to the consume input — execute calls preserve the token in the audit row so forensics can correlate to the (already-consumed) hash, but no other surface logs it.
+2. **Payload hash binding (canonical-json)** — `payloadHash = sha256(toolName || "::" || canonicalJSON(input))`. Computed at request-approval time; re-computed at execute time from the *stored* `inputJson`. Mismatch → status flips to EXPIRED with `expirationReason='payload_mismatch'` and the hash is cleared.
+3. **Stale-data guard (Decision Log #12)** — `expectedUpdatedAt` is captured atomically with the snapshot at request-approval time. Execute re-reads `Product.updatedAt`; mismatch → status flips to EXPIRED with `expirationReason='stale_data'`, hash cleared. The operator must re-initiate.
+4. **Retry cap (Decision Log #13)** — `executionAttempts` increments via a *separate* `updateMany` transaction BEFORE the main consume transaction starts. After the 3rd attempt the row flips to EXHAUSTED and the hash is cleared. Implementation guarantees the cap is enforced even if the consume transaction crashes mid-write.
+
+### Four-eyes runtime check
+
+Both `approve` and `reject` compare `request.user.id === row.requestedByAdminUserId`. Self-approval blocked → 403 `forbidden_self_approval` + `AgentAuditLog` row with `actionType='SELF_APPROVAL_BLOCKED'`, severity WARNING. The two seeded roles (`AI_AGENT_OPERATOR` carries `:write-drafts` only, `AI_AGENT_APPROVER` carries `:approve` only) make the policy violation impossible without explicit role overlap. SUPER_ADMIN holds both perms via the Phase 3.0 backfill, but four-eyes still bites — the runtime check is the canonical gate, the role split is the policy nudge.
+
+### Cron expiry sweep
+
+`ApprovalExpiryCron.sweep()` runs `@Cron(EVERY_MINUTE)`. For every `PENDING`/`APPROVED` row with `expiresAt < now`:
+1. Flip `status = 'EXPIRED'`, `expirationReason = 'ttl'`, clear `approvalTokenHash`.
+2. Write one `AgentAuditLog` row per request with `actionType='APPROVAL_EXPIRED'`, severity INFO, linked via `approvalRequestId`. Attributed to the request's initiator (the only person who definitely existed at request time).
+Lazy expiry also runs inline in `approve`/`execute` so the cron is purely a cleanup mechanism — up to ~60s of "expired but still PENDING" between ticks is acceptable.
+
+### What's NOT in Phase 3.1A (deliberately deferred)
+
+- ❌ Archive / restore (`POST /:id/archive`, `POST /:id/restore`) — Phase 3.1B.
+- ❌ Update with pricing (`PATCH /ai/products/:id`) — Phase 3.1B.
+- ❌ Order/rental status changes — Phase 3.1B.
+- ❌ Inventory adjust — Phase 3.1B.
+- ❌ Rental policy changes (CRITICAL risk, 60s TTL) — Phase 3.1B.
+- ❌ Permanent delete — Decision Log #9 — blocked until Phase 4 multi-approver + FK/cascade audit.
+- ❌ Refunds / payment-reversal — Decision Log #10 — out of Phase 3 entirely.
+- ❌ Admin UI for approvals — Phase 4.
+- ❌ SUPER_ADMIN demotion script — Phase 3.2, runs 2-4 weeks after 3.1B soak.
+
+### Tests added
+
+`approval.service.spec.ts` ships 24 lifecycle tests + 4 structural assertions:
+1. Operator creates publish approval. 2. Hash-only persistence. 3. Raw token not in audit. 4. Approver approves. 5. Initiator cannot self-approve. 6. Approve route requires `:approve`. 7. Publish initiation requires `:write-drafts`. 8. Payload-hash mismatch invalidates. 9. Stale-data invalidates. 10. Expired cannot execute. 11. Revoked cannot execute. 12. Rejected cannot execute. 13. Consumed cannot re-execute. 14. Retry cap at 3 → EXHAUSTED. 15. Cross-tenant approval invisible (404). 16. Cross-tenant execute fails. 17. Soft-deleted product blocked. 18. Already-active product blocked. 19. Missing-fields product blocked. 20. Successful execute sets `isActive=true`. 21. Successful execute writes linked PUBLISH audit. 22. Phase 1/2 surface intact. 23. Pricing-block still rejects. 24. No Phase 3.1B+ write routes.
+
+Plus the existing `phase-3-foundation.spec.ts` was updated to assert: `@RequiresApproval` appears on *exactly* one route (`products.ai.controller.ts:1`); the only `/publish` route is `POST /:id/publish/request-approval` (no direct publish route). The shape spec's `ALLOWED_POSTS` was extended with the 5 approval-management routes and the new `:id/publish/request-approval` route.
+
+Total: 331 tests passing across 12 suites (was 286 in Phase 3.0 + whitelist).
+
+---
+
 ## Phase 3.0 status — IMPLEMENTED 2026-05-10 ✅ (foundation only — zero runtime behaviour change)
 
 **Scope shipped**: schema migration, permission seeding, role seeding, decorator + guard infrastructure. No risky tools wired. No existing endpoint behaviour changed.

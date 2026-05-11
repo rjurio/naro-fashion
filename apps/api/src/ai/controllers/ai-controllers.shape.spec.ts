@@ -4,22 +4,37 @@ import { join } from 'path';
 /**
  * AI controller shape invariants.
  *
- * Phase 1 forbade ALL writes. Phase 2 introduces a small whitelist of
+ * Phase 1 forbade ALL writes. Phase 2 introduced a small whitelist of
  * @Post handlers (create_product_draft, add_order_note,
- * create_size_guide_entry, create_size). Everything else still 404s on
- * write verbs at runtime AND fails this test at build time.
+ * create_size_guide_entry, create_size). Phase 3.1A adds approval-
+ * workflow @Post handlers — initiate (`publish/request-approval` on
+ * products) and the approvals-management surface (`/approve`, `/reject`,
+ * `/revoke`, `/cancel`, `/execute`).
  *
- * @Patch / @Put / @Delete remain forbidden until Phase 3 (approval
- * workflow). When Phase 3 lands, update PHASE_3_NOTE below.
+ * Direct mutation verbs (@Patch / @Put / @Delete) remain forbidden across
+ * the entire AI surface until Phase 4 / later. The presence of an
+ * `:id/publish` @Post WITHOUT the `/request-approval` suffix would also
+ * indicate a leaked direct-write route — the allowlist below enforces
+ * the exact path.
  */
 
 // Allowlist: file → array of exact @Post(...) decorator strings allowed in
 // that file. Quotes are normalised to single quotes before comparison.
 const ALLOWED_POSTS: Record<string, string[]> = {
-  'products.ai.controller.ts': [`@Post('draft')`],
+  'products.ai.controller.ts': [
+    `@Post('draft')`,
+    `@Post(':id/publish/request-approval')`,
+  ],
   'orders.ai.controller.ts': [`@Post(':id/notes')`],
   'size-guide.ai.controller.ts': [`@Post()`],
   'product-sizes.ai.controller.ts': [`@Post()`],
+  'approvals.ai.controller.ts': [
+    `@Post(':id/approve')`,
+    `@Post(':id/reject')`,
+    `@Post(':id/revoke')`,
+    `@Post(':id/cancel')`,
+    `@Post(':id/execute')`,
+  ],
 };
 
 const FORBIDDEN_DECORATORS = ['@Patch(', '@Put(', '@Delete('];
