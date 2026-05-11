@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { SizeGuidesService, CreateSizeGuideDto, UpdateSizeGuideDto } from './size-guides.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { Public } from '../auth/decorators/public.decorator';
 
 @Controller('size-guides')
@@ -38,55 +39,55 @@ export class SizeGuidesController {
 
   // --- Admin ---
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get('admin')
   findAll() {
     return this.sizeGuidesService.findAll();
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get('deleted')
   findDeleted() {
     return this.sizeGuidesService.findDeleted();
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get(':id')
   findById(@Param('id') id: string) {
     return this.sizeGuidesService.findById(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Post()
   create(@Body() dto: CreateSizeGuideDto) {
     return this.sizeGuidesService.create(dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateSizeGuideDto) {
     return this.sizeGuidesService.update(id, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id/set-default')
   setDefault(@Param('id') id: string) {
     return this.sizeGuidesService.setDefault(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id/toggle-active')
   toggleActive(@Param('id') id: string) {
     return this.sizeGuidesService.toggleActive(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id/restore')
   restore(@Param('id') id: string) {
     return this.sizeGuidesService.restore(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Delete(':id')
   delete(@Param('id') id: string) {
     return this.sizeGuidesService.delete(id);
