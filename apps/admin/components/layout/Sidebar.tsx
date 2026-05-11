@@ -168,6 +168,11 @@ const navItems: NavItem[] = [
       // and gets a toast. Phase 4 may add a `TenantModule.code='ai-agent'`
       // gate so this matches the other sidebar entries.
       { label: 'Approvals', href: '/dashboard/ai/approvals', icon: ShieldCheck },
+      // Role assignments — assign AI_AGENT_OPERATOR / AI_AGENT_APPROVER
+      // to existing admin accounts. Reuses the existing
+      // /admin-users/:id/roles backend endpoints. Backend AdminGuard
+      // 403s non-admin callers; service layer rejects self-modification.
+      { label: 'Role Assignments', href: '/dashboard/ai/role-assignments', icon: UserCog },
     ],
   },
   { label: 'Recycle Bin', href: '/dashboard/recycle-bin', icon: Trash2 },
