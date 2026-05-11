@@ -9,6 +9,8 @@
 
 We **do not** replace `AdminActivityLog`. Every AI tool call writes ONE row to `AdminActivityLog` (existing tooling, exports, dashboards keep working) AND ONE row to `AgentAuditLog` (richer detail for AI debugging). They are linked by `(adminUserId, createdAt)` and by storing the `AgentAuditLog.id` in `AdminActivityLog.details.agentAuditId`.
 
+> **Identity attribution invariant** — both `adminUserId` columns are populated from `req.user.id`, the resolved row that `JwtStrategy.validate()` attaches to the request. **Never** read `req.user.sub` here: `sub` is the JWT payload field and is not preserved onto `req.user`. Reading it yielded `undefined` until 2026-05-11 and silently anonymised every audit row written across both streams. See `docs/SECURITY.md` § 2.X "Identity Attribution" for root cause and the build-time invariant (`apps/api/src/auth/req-user-sub.invariant.spec.ts`) that prevents regression.
+
 ## Why both
 
 - The existing `audit` module already has a controller (`GET /audit`, `GET /audit/export`, filters), permission codes (`audit:view`, `audit:export`), and is already wired into 29 log points across products/categories/orders/rentals/CMS/flash-sales/roles/inventory. Re-using it means AI actions show up in the same admin "Activity" page admins already use. **Don't fork that view.**

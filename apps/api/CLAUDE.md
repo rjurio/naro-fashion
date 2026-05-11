@@ -47,6 +47,14 @@ Lives at `src/ai/`. Adds 17 GET endpoints under `/api/v1/ai/*`, all read-only by
 - Phase 3.2 (NOT STARTED): SUPER_ADMIN demotion — one-off script removing `ai-agent:approve` from SUPER_ADMIN. Runs 2-4 weeks after 3.1B production soak.
 - Phase 4: permanent delete (requires Decision Log #9 FK/cascade audit + multi-approver), refunds (own subsystem — Decision Log #10), approval admin UI, multi-approver for CRITICAL actions.
 
+## Identity attribution — quick rules
+
+- **Do** use `@CurrentUser('id') performedById: string` in controllers.
+- **Do** read `req.user?.id` in services that inject the request directly (e.g. `AuditService`).
+- **Don't** use `req.user.sub` or `req.user?.sub` — that's the JWT payload's `sub` field and **it is not preserved** onto `req.user`. `JwtStrategy.validate()` returns the resolved Prisma row, which exposes `id`. Reading `.sub` yields `undefined` and silently anonymises every audit/forensic column.
+- **`payload.sub` is permitted only in `auth.service.ts` and `jwt.strategy.ts`** where you operate directly on the decoded JWT payload object. Any other file that introduces `payload.sub` trips the global invariant test.
+- **Build-time enforcement**: `src/auth/req-user-sub.invariant.spec.ts` fails the suite on any `req.user.sub` / `user.sub` reintroduction. Full root cause and operational verification in `docs/SECURITY.md` § 2.X.
+
 ## Multi-Tenancy
 - **TenantContext** (`src/tenant/tenant.context.ts`): Request-scoped injectable providing `tenantId`. Use `this.tenantContext.requireId` in all Prisma queries. Falls back to decoding JWT from `Authorization` header when `req.user` is not set (for `@Public()` endpoints). `requireId` throws `BadRequestException` (400) with actionable message ("Provide X-Tenant-Id header or a valid Authorization token") instead of generic 500 — cleaner public API responses.
 - **TenantInterceptor** (`src/tenant/tenant.interceptor.ts`): Global interceptor, extracts tenantId from JWT or `X-Tenant-Id` header. **Registered inside `TenantModule`** (not AppModule) so it can inject `JwtService` + `ConfigService` from the JwtModule already imported there.
