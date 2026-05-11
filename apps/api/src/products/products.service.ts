@@ -17,6 +17,111 @@ const productIncludes = {
   sizeGuideRef: { select: sizeGuideSelect },
 };
 
+/**
+ * Public product card fields — used by the storefront grid (`GET /products`).
+ *
+ * Whitelist, NOT a blacklist. Prisma `include` would return every column on
+ * the row including admin-only fields (`tenantId`, `purchasePrice`,
+ * `minimumStock`, `supplierName`, `supplierContact`, `lastRestockedAt`).
+ * Those leak cost basis + supplier intelligence to anyone curl-ing the
+ * public API.
+ *
+ * If the storefront needs a new field, add it here AND keep
+ * `publicProductDetailSelect` consistent. The admin path (`findAllAdmin`,
+ * `findById`) intentionally keeps its full `include` — admins must see
+ * inventory metadata to do their job.
+ */
+const publicProductListSelect = {
+  id: true,
+  slug: true,
+  name: true,
+  nameSwahili: true,
+  description: true,
+  descriptionSwahili: true,
+  categoryId: true,
+  availabilityMode: true,
+  basePrice: true,
+  compareAtPrice: true,
+  sku: true,
+  isFeatured: true,
+  sizeGuideId: true,
+  specifications: true,
+  rentalPricePerDay: true,
+  latePenaltyPercent: true,
+  rentalDepositAmount: true,
+  rentalDownPaymentPct: true,
+  minRentalDays: true,
+  maxRentalDays: true,
+  bufferDaysOverride: true,
+  avgRating: true,
+  reviewCount: true,
+  model3dUrl: true,
+  model3dPosterUrl: true,
+  createdAt: true,
+  category: { select: { id: true, name: true, slug: true } },
+  images: { orderBy: { sortOrder: 'asc' as const }, take: 1, select: { id: true, url: true, altText: true, sortOrder: true, isPrimary: true } },
+  variants: { where: { isActive: true }, orderBy: { createdAt: 'asc' as const }, take: 1, select: { id: true } },
+} as const;
+
+/**
+ * Public product detail fields — used by the storefront product page
+ * (`GET /products/:slug`). Superset of the list select with full image
+ * gallery, all variants (sans `barcode` — POS-only), the resolved
+ * size guide, and a capped reviews list. Same admin/internal exclusions
+ * as the list select.
+ */
+const publicProductDetailSelect = {
+  id: true,
+  slug: true,
+  name: true,
+  nameSwahili: true,
+  description: true,
+  descriptionSwahili: true,
+  categoryId: true,
+  availabilityMode: true,
+  basePrice: true,
+  compareAtPrice: true,
+  sku: true,
+  isFeatured: true,
+  sizeGuideId: true,
+  specifications: true,
+  rentalPricePerDay: true,
+  latePenaltyPercent: true,
+  rentalDepositAmount: true,
+  rentalDownPaymentPct: true,
+  minRentalDays: true,
+  maxRentalDays: true,
+  bufferDaysOverride: true,
+  avgRating: true,
+  reviewCount: true,
+  model3dUrl: true,
+  model3dPosterUrl: true,
+  createdAt: true,
+  category: {
+    select: { id: true, name: true, slug: true, sizeGuideId: true, sizeGuideRef: { select: sizeGuideSelect } },
+  },
+  variants: {
+    where: { isActive: true },
+    orderBy: { createdAt: 'asc' as const },
+    select: { id: true, name: true, sku: true, size: true, color: true, colorHex: true, price: true, stock: true, isActive: true },
+  },
+  images: { orderBy: { sortOrder: 'asc' as const }, select: { id: true, url: true, altText: true, sortOrder: true, isPrimary: true } },
+  sizeGuideRef: { select: sizeGuideSelect },
+  reviews: {
+    take: 10,
+    orderBy: { createdAt: 'desc' as const },
+    select: {
+      id: true,
+      rating: true,
+      title: true,
+      comment: true,
+      isVerified: true,
+      createdAt: true,
+      user: { select: { firstName: true, lastName: true, avatarUrl: true } },
+    },
+  },
+} as const;
+
 @Injectable()
 export class ProductsService {
   constructor(
@@ -65,11 +170,7 @@ export class ProductsService {
         orderBy,
         skip,
         take: limit,
-        include: {
-          category: { select: { id: true, name: true, slug: true } },
-          images: { orderBy: { sortOrder: 'asc' }, take: 1 },
-          variants: { where: { isActive: true }, orderBy: { createdAt: 'asc' }, take: 1, select: { id: true } },
-        },
+        select: publicProductListSelect,
       }),
       this.prisma.product.count({ where }),
     ]);
@@ -153,16 +254,7 @@ export class ProductsService {
         isActive: true,
         deletedAt: null,
       },
-      include: {
-        ...productIncludes,
-        reviews: {
-          take: 10,
-          orderBy: { createdAt: 'desc' },
-          include: {
-            user: { select: { firstName: true, lastName: true, avatarUrl: true } },
-          },
-        },
-      },
+      select: publicProductDetailSelect,
     });
 
     if (!product) {

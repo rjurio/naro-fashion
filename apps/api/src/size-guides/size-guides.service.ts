@@ -61,6 +61,28 @@ export class UpdateSizeGuideDto {
   isDefault?: boolean;
 }
 
+/**
+ * Public size-guide fields — used by the storefront product page and
+ * `/pages/size-guide` route via the three @Public() endpoints
+ * (findAllPublic, findDefault, findBySlug).
+ *
+ * Whitelist, not blacklist. Prisma's default `findMany`/`findFirst` returns
+ * every column on the row — including `tenantId`, `isActive`, `isDefault`,
+ * `deletedAt`, `createdAt`, `updatedAt`. None of those are useful to
+ * anonymous storefront callers and `tenantId` is internal infra.
+ * The admin path (`findAll`, `findById`) keeps full row access.
+ */
+const publicSizeGuideSelect = {
+  id: true,
+  slug: true,
+  name: true,
+  nameSwahili: true,
+  content: true,
+  contentSwahili: true,
+  pdfUrl: true,
+  pdfUrlSwahili: true,
+} as const;
+
 @Injectable()
 export class SizeGuidesService {
   constructor(
@@ -89,6 +111,7 @@ export class SizeGuidesService {
     return this.prisma.sizeGuide.findMany({
       where: { isActive: true, deletedAt: null, tenantId: this.tenantContext.requireId },
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      select: publicSizeGuideSelect,
     });
   }
 
@@ -116,6 +139,7 @@ export class SizeGuidesService {
         isActive: true,
         deletedAt: null,
       },
+      select: publicSizeGuideSelect,
     });
     if (!guide) throw new NotFoundException('Size guide not found');
     return guide;
@@ -131,12 +155,14 @@ export class SizeGuidesService {
     const tenantId = this.tenantContext.requireId;
     const guide = await this.prisma.sizeGuide.findFirst({
       where: { isDefault: true, isActive: true, deletedAt: null, tenantId },
+      select: publicSizeGuideSelect,
     });
     if (!guide) {
       // Fallback to first active guide
       return this.prisma.sizeGuide.findFirst({
         where: { isActive: true, deletedAt: null, tenantId },
         orderBy: { createdAt: 'asc' },
+        select: publicSizeGuideSelect,
       });
     }
     return guide;

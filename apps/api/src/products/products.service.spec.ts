@@ -40,7 +40,8 @@ describe('ProductsService — public vs admin product lookup', () => {
 
   beforeEach(() => {
     prismaMock = {
-      product: { findFirst: jest.fn() },
+      product: { findFirst: jest.fn(), findMany: jest.fn(), count: jest.fn() },
+      category: { findFirst: jest.fn(), findMany: jest.fn() },
     };
     tenantContextMock = { requireId: TENANT };
     auditServiceMock = { log: jest.fn() };
@@ -56,7 +57,8 @@ describe('ProductsService — public vs admin product lookup', () => {
       prismaMock.product.findFirst.mockResolvedValueOnce(activeProduct());
       const result = await service.findBySlug('active-gown');
       expect(result.id).toBe('p_active');
-      expect(result.isActive).toBe(true);
+      // Note: the public select intentionally drops `isActive` from the
+      // response. We assert against the WHERE clause separately below.
     });
 
     it('throws 404 for an inactive product (DRAFT — was the bug)', async () => {
@@ -168,6 +170,185 @@ describe('ProductsService — public vs admin product lookup', () => {
       expect(slugWhere.deletedAt).toBeNull();
       expect(idWhere.isActive).toBeUndefined();
       expect(idWhere.deletedAt).toBeUndefined();
+    });
+  });
+
+  /**
+   * Response-shape whitelist tests — 2026-05-11.
+   *
+   * Public storefront endpoints (`findAll`, `findBySlug`) must NOT leak
+   * admin-only columns: `tenantId`, `purchasePrice`, `minimumStock`,
+   * `supplierName`, `supplierContact`, `lastRestockedAt`, `deletedAt`,
+   * `updatedAt`. Variant `barcode` is also admin/POS-only.
+   *
+   * Admin endpoints (`findAllAdmin`, `findById`) keep full row access so
+   * the inventory/cost-basis UI keeps working. We assert the diff at the
+   * Prisma-call level — what was passed as `select` vs `include` — so a
+   * future refactor that switches to `include` (or adds an admin field to
+   * the public select) fails the build.
+   */
+  describe('Response whitelist — public must not leak admin/internal fields', () => {
+    const ADMIN_ONLY_FIELDS = [
+      'tenantId',
+      'purchasePrice',
+      'minimumStock',
+      'supplierName',
+      'supplierContact',
+      'lastRestockedAt',
+      'deletedAt',
+      'updatedAt',
+    ] as const;
+
+    const STOREFRONT_REQUIRED_FIELDS = [
+      'id',
+      'slug',
+      'name',
+      'description',
+      'categoryId',
+      'availabilityMode',
+      'basePrice',
+      'compareAtPrice',
+      'sku',
+      'isFeatured',
+      'sizeGuideId',
+      'specifications',
+      'rentalPricePerDay',
+      'rentalDownPaymentPct',
+      'minRentalDays',
+      'maxRentalDays',
+      'bufferDaysOverride',
+      'avgRating',
+      'reviewCount',
+      'model3dUrl',
+      'model3dPosterUrl',
+      'category',
+      'images',
+      'variants',
+    ] as const;
+
+    describe('findAll (GET /products) — public list', () => {
+      beforeEach(() => {
+        prismaMock.product.findMany.mockResolvedValue([]);
+        prismaMock.product.count.mockResolvedValue(0);
+      });
+
+      it.each(ADMIN_ONLY_FIELDS)(
+        'does NOT include %s in the Prisma select',
+        async (field) => {
+          await service.findAll({} as any);
+          const args = prismaMock.product.findMany.mock.calls[0][0];
+          expect(args.select).toBeDefined();
+          expect(args.include).toBeUndefined();
+          expect(args.select[field]).toBeUndefined();
+        },
+      );
+
+      it.each(STOREFRONT_REQUIRED_FIELDS)(
+        'DOES include %s — storefront grid depends on it',
+        async (field) => {
+          await service.findAll({} as any);
+          const args = prismaMock.product.findMany.mock.calls[0][0];
+          expect(args.select[field]).toBeTruthy();
+        },
+      );
+
+      it('isActive: true is still enforced in the where clause (draft-leak fix preserved)', async () => {
+        await service.findAll({} as any);
+        const args = prismaMock.product.findMany.mock.calls[0][0];
+        expect(args.where.isActive).toBe(true);
+        expect(args.where.deletedAt).toBeNull();
+        expect(args.where.tenantId).toBe(TENANT);
+      });
+
+      it('returns only one image per card with a take:1 cap', async () => {
+        await service.findAll({} as any);
+        const args = prismaMock.product.findMany.mock.calls[0][0];
+        expect(args.select.images.take).toBe(1);
+      });
+    });
+
+    describe('findBySlug (GET /products/:slug) — public detail', () => {
+      it.each(ADMIN_ONLY_FIELDS)(
+        'does NOT include %s in the Prisma select',
+        async (field) => {
+          prismaMock.product.findFirst.mockResolvedValueOnce(activeProduct());
+          await service.findBySlug('slug');
+          const args = prismaMock.product.findFirst.mock.calls[0][0];
+          expect(args.select).toBeDefined();
+          expect(args.include).toBeUndefined();
+          expect(args.select[field]).toBeUndefined();
+        },
+      );
+
+      it.each(STOREFRONT_REQUIRED_FIELDS)(
+        'DOES include %s — storefront detail page depends on it',
+        async (field) => {
+          prismaMock.product.findFirst.mockResolvedValueOnce(activeProduct());
+          await service.findBySlug('slug');
+          const args = prismaMock.product.findFirst.mock.calls[0][0];
+          expect(args.select[field]).toBeTruthy();
+        },
+      );
+
+      it('exposes the size guide and reviews block (storefront tabs)', async () => {
+        prismaMock.product.findFirst.mockResolvedValueOnce(activeProduct());
+        await service.findBySlug('slug');
+        const args = prismaMock.product.findFirst.mock.calls[0][0];
+        expect(args.select.sizeGuideRef).toBeTruthy();
+        expect(args.select.reviews).toBeTruthy();
+        expect(args.select.reviews.take).toBe(10);
+        // Reviewer's name + avatar are fine; the review's `tenantId`,
+        // `isApproved`, `updatedAt`, `userId`, and `productId` are NOT
+        // useful to customers — so we select explicit review fields.
+        expect(args.select.reviews.select.user).toBeTruthy();
+        expect(args.select.reviews.include).toBeUndefined();
+      });
+
+      it('variants are filtered to isActive and do NOT expose barcode (POS-only)', async () => {
+        prismaMock.product.findFirst.mockResolvedValueOnce(activeProduct());
+        await service.findBySlug('slug');
+        const args = prismaMock.product.findFirst.mock.calls[0][0];
+        expect(args.select.variants.where.isActive).toBe(true);
+        expect(args.select.variants.select.barcode).toBeUndefined();
+        // Storefront-needed variant fields are present.
+        expect(args.select.variants.select.id).toBe(true);
+        expect(args.select.variants.select.price).toBe(true);
+        expect(args.select.variants.select.stock).toBe(true);
+        expect(args.select.variants.select.size).toBe(true);
+        expect(args.select.variants.select.color).toBe(true);
+      });
+    });
+
+    describe('findAllAdmin (GET /products/admin) — admin path keeps full data', () => {
+      beforeEach(() => {
+        prismaMock.product.findMany.mockResolvedValue([]);
+        prismaMock.product.count.mockResolvedValue(0);
+      });
+
+      it('uses `include` (full row + relations) — NOT a restricted select', async () => {
+        await service.findAllAdmin({} as any);
+        const args = prismaMock.product.findMany.mock.calls[0][0];
+        expect(args.include).toBeDefined();
+        expect(args.select).toBeUndefined();
+      });
+
+      it('does NOT filter by isActive — drafts must be visible to admins', async () => {
+        await service.findAllAdmin({} as any);
+        const args = prismaMock.product.findMany.mock.calls[0][0];
+        expect(args.where.isActive).toBeUndefined();
+        // Tenant scope still enforced.
+        expect(args.where.tenantId).toBe(TENANT);
+      });
+    });
+
+    describe('findById (GET /products/by-id/:id) — admin path keeps full data', () => {
+      it('uses the full productIncludes (so admin UI + AI agent see inventory fields)', async () => {
+        prismaMock.product.findFirst.mockResolvedValueOnce(activeProduct());
+        await service.findById('id1');
+        const args = prismaMock.product.findFirst.mock.calls[0][0];
+        expect(args.include).toBeDefined();
+        expect(args.select).toBeUndefined();
+      });
     });
   });
 });

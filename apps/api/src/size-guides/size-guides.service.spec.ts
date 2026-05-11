@@ -41,7 +41,7 @@ describe('SizeGuidesService — public vs admin guide lookup', () => {
 
   beforeEach(() => {
     prismaMock = {
-      sizeGuide: { findFirst: jest.fn() },
+      sizeGuide: { findFirst: jest.fn(), findMany: jest.fn() },
     };
     tenantContextMock = { requireId: TENANT };
     service = new SizeGuidesService(prismaMock, tenantContextMock);
@@ -52,7 +52,9 @@ describe('SizeGuidesService — public vs admin guide lookup', () => {
       prismaMock.sizeGuide.findFirst.mockResolvedValueOnce(activeGuide());
       const result = await service.findBySlug('active-size-guide');
       expect(result.id).toBe('g_active');
-      expect(result.isActive).toBe(true);
+      // The public select intentionally drops `isActive` from the response —
+      // it's redundant (always true for what survives the WHERE clause) and
+      // is admin-only metadata. WHERE-clause assertion lives below.
     });
 
     it('throws 404 for an inactive (DRAFT) size guide — was the bug', async () => {
@@ -164,6 +166,117 @@ describe('SizeGuidesService — public vs admin guide lookup', () => {
       expect(slugWhere.deletedAt).toBeNull();
       expect(idWhere.isActive).toBeUndefined();
       expect(idWhere.deletedAt).toBeUndefined();
+    });
+  });
+
+  /**
+   * Response-shape whitelist tests — 2026-05-11.
+   *
+   * Public size-guide endpoints (`findAllPublic`, `findDefault`,
+   * `findBySlug`) must NOT leak admin/internal columns: `tenantId`,
+   * `isActive`, `isDefault`, `deletedAt`, `createdAt`, `updatedAt`.
+   * Storefront only needs id, slug, names, content, PDF urls. The admin
+   * path keeps full row access for the recycle bin and toggle UIs.
+   */
+  describe('Response whitelist — public must not leak admin/internal fields', () => {
+    const ADMIN_ONLY_FIELDS = [
+      'tenantId',
+      'isActive',
+      'isDefault',
+      'deletedAt',
+      'createdAt',
+      'updatedAt',
+    ] as const;
+
+    const STOREFRONT_REQUIRED_FIELDS = [
+      'id',
+      'slug',
+      'name',
+      'nameSwahili',
+      'content',
+      'contentSwahili',
+      'pdfUrl',
+      'pdfUrlSwahili',
+    ] as const;
+
+    describe('findAllPublic (GET /size-guides)', () => {
+      beforeEach(() => prismaMock.sizeGuide.findMany.mockResolvedValue([]));
+
+      it.each(ADMIN_ONLY_FIELDS)('does NOT include %s', async (field) => {
+        await service.findAllPublic();
+        const args = prismaMock.sizeGuide.findMany.mock.calls[0][0];
+        expect(args.select).toBeDefined();
+        expect(args.select[field]).toBeUndefined();
+      });
+
+      it.each(STOREFRONT_REQUIRED_FIELDS)(
+        'DOES include %s — storefront needs it',
+        async (field) => {
+          await service.findAllPublic();
+          const args = prismaMock.sizeGuide.findMany.mock.calls[0][0];
+          expect(args.select[field]).toBe(true);
+        },
+      );
+
+      it('still scopes by tenant + isActive + deletedAt', async () => {
+        await service.findAllPublic();
+        const args = prismaMock.sizeGuide.findMany.mock.calls[0][0];
+        expect(args.where.tenantId).toBe(TENANT);
+        expect(args.where.isActive).toBe(true);
+        expect(args.where.deletedAt).toBeNull();
+      });
+    });
+
+    describe('findBySlug (GET /size-guides/by-slug/:slug)', () => {
+      it.each(ADMIN_ONLY_FIELDS)('does NOT include %s', async (field) => {
+        prismaMock.sizeGuide.findFirst.mockResolvedValueOnce(activeGuide());
+        await service.findBySlug('s');
+        const args = prismaMock.sizeGuide.findFirst.mock.calls[0][0];
+        expect(args.select).toBeDefined();
+        expect(args.select[field]).toBeUndefined();
+      });
+
+      it.each(STOREFRONT_REQUIRED_FIELDS)(
+        'DOES include %s',
+        async (field) => {
+          prismaMock.sizeGuide.findFirst.mockResolvedValueOnce(activeGuide());
+          await service.findBySlug('s');
+          const args = prismaMock.sizeGuide.findFirst.mock.calls[0][0];
+          expect(args.select[field]).toBe(true);
+        },
+      );
+    });
+
+    describe('findDefault (GET /size-guides/default)', () => {
+      it('uses the public select on the primary lookup', async () => {
+        prismaMock.sizeGuide.findFirst.mockResolvedValueOnce(activeGuide());
+        await service.findDefault();
+        const args = prismaMock.sizeGuide.findFirst.mock.calls[0][0];
+        expect(args.select.tenantId).toBeUndefined();
+        expect(args.select.id).toBe(true);
+        expect(args.select.content).toBe(true);
+      });
+
+      it('uses the public select on the fallback lookup too', async () => {
+        // First call (isDefault: true) returns null → fallback to first active.
+        prismaMock.sizeGuide.findFirst
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(activeGuide());
+        await service.findDefault();
+        // Second call is the fallback path.
+        const args = prismaMock.sizeGuide.findFirst.mock.calls[1][0];
+        expect(args.select.tenantId).toBeUndefined();
+        expect(args.select.id).toBe(true);
+      });
+    });
+
+    describe('findAll / findById — ADMIN paths keep full data', () => {
+      it('findById does NOT apply the public select (admin sees all fields)', async () => {
+        prismaMock.sizeGuide.findFirst.mockResolvedValueOnce(activeGuide());
+        await service.findById('id1');
+        const args = prismaMock.sizeGuide.findFirst.mock.calls[0][0];
+        expect(args.select).toBeUndefined();
+      });
     });
   });
 });
