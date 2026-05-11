@@ -863,6 +863,192 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
       expect(canonicalJSON({ x: 1 })).not.toBe(canonicalJSON({ x: '1' }));
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────
+  // Token-hardening pass — 2026-05-11
+  //
+  // Surfaced from production: the first Phase 3.1A smoke run on commit
+  // 7ba1522 leaked raw approval tokens into AgentAuditLog because the
+  // sanitiser allowlisted `approvalToken` AND the runner's default
+  // auto-audit captured the approve handler's full return value. Hotfix
+  // 4193e64 + this pass close all known surface area. These 9 tests
+  // assert the invariants so the leak cannot regress.
+  // ──────────────────────────────────────────────────────────────────
+  describe('Token hardening — raw approvalToken must never persist', () => {
+    const productsControllerPath = join(__dirname, '..', 'controllers', 'products.ai.controller.ts');
+    const approvalsControllerPath = join(__dirname, '..', 'controllers', 'approvals.ai.controller.ts');
+    const sanitiserPath = join(__dirname, 'ai-sanitizer.service.ts');
+    const approvalServicePath = join(__dirname, 'approval.service.ts');
+    const productsSrc = readFileSync(productsControllerPath, 'utf8');
+    const approvalsSrc = readFileSync(approvalsControllerPath, 'utf8');
+    const sanitiserSrc = readFileSync(sanitiserPath, 'utf8');
+    const approvalSrc = readFileSync(approvalServicePath, 'utf8');
+
+    it('#H1 approve HTTP response includes the raw approvalToken (return-once contract)', async () => {
+      // We exercise the full approve path with a freshly-constructed
+      // service and verify the summary that comes back DOES contain a
+      // 64-char hex approvalToken field.
+      const local = makeService(
+        activeRequest({ user: { id: APPROVER, sub: APPROVER } }),
+      );
+      prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(approvalRow());
+      prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+      prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+        approvalRow({ status: AGENT_APPROVAL_STATUS.APPROVED, approvedByAdminUserId: APPROVER }),
+      );
+
+      const summary = await local.approve('appr_1');
+
+      expect(summary.tokenIssued).toBe(true);
+      expect(typeof summary.approvalToken).toBe('string');
+      expect(summary.approvalToken).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it('#H2 sanitiser has NO allowlist any more — every key with "approvaltoken" is redacted', () => {
+      // Defence-in-depth: the source should not contain an ALLOWLIST
+      // constant any more. If a future refactor reintroduces one, this
+      // test fails loudly.
+      const stripped = sanitiserSrc
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      expect(stripped).not.toMatch(/ALLOWLIST\s*=/);
+      // And the new redact pattern MUST be in the list.
+      expect(stripped).toMatch(/\/approvaltoken\//);
+    });
+
+    it('#H3 approve route uses auditOutput to strip approvalToken from the runner audit row', () => {
+      // The runner's default behaviour persists the handler's full
+      // return value. The approve handler returns the raw token. The
+      // auditOutput transform MUST destructure it out.
+      const stripped = approvalsSrc
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      // Find the approve method's runner.run({...}) block — match a
+      // generous span from @Post(':id/approve') up to the next @Post.
+      const match = stripped.match(
+        /@Post\(':id\/approve'\)[\s\S]*?(?=@Post\(|@RequiresAiPermission\(AI_PERMISSION_CODES\.APPROVE\)\n\s*@Post\(':id\/reject)/,
+      );
+      expect(match).toBeTruthy();
+      const block = match![0];
+      expect(block).toContain('auditOutput');
+      expect(block).toMatch(/approvalToken\s*,\s*\.\.\.redacted/);
+    });
+
+    it('#H4 execute route logs tokenProvided boolean — NEVER the raw approvalToken', () => {
+      // Belt-and-braces over the sanitiser: the controller MUST NOT
+      // construct an audit input that contains the raw token at all.
+      // The current code uses `input: { id, tokenProvided: !!dto.approvalToken }`.
+      const stripped = approvalsSrc
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      // Locate the execute method block.
+      const match = stripped.match(/@Post\(':id\/execute'\)[\s\S]+?\}\)\s*$/m) ??
+        stripped.match(/@Post\(':id\/execute'\)[\s\S]+?\}\s*\n\}/);
+      expect(match).toBeTruthy();
+      const block = match![0];
+      // tokenProvided boolean appears.
+      expect(block).toMatch(/tokenProvided:\s*!!dto\.approvalToken/);
+      // Raw approvalToken value is NOT passed as audit input.
+      expect(block).not.toMatch(/input:\s*\{[^}]*approvalToken:\s*dto\.approvalToken/);
+      // execute uses auditOutput too, so the handler return value is
+      // redacted before audit even if it ever grew a token field.
+      expect(block).toContain('auditOutput');
+    });
+
+    it('#H5 GET /ai/approvals/:id does NOT expose approvalTokenHash or approvalToken', async () => {
+      // The toSummary serialiser ships id/status/tool/etc. but never
+      // the hash. Confirm with a live row that carries a non-null hash.
+      prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+        approvalRow({
+          status: AGENT_APPROVAL_STATUS.APPROVED,
+          approvalTokenHash: 'live_hash_should_not_leak_to_wire',
+        }),
+      );
+      const summary = await service.getOne('appr_1');
+      const wireShape = JSON.parse(JSON.stringify(summary));
+      expect('approvalTokenHash' in wireShape).toBe(false);
+      expect('approvalToken' in wireShape).toBe(false);
+      expect(wireShape.tokenIssued).toBe(true); // derived boolean, OK
+    });
+
+    it('#H6 GET /ai/approvals (list) never exposes approvalTokenHash or approvalToken', async () => {
+      prismaMock.agentApprovalRequest.findMany.mockResolvedValueOnce([
+        approvalRow({ status: AGENT_APPROVAL_STATUS.APPROVED, approvalTokenHash: 'hash_a' }),
+        approvalRow({
+          id: 'appr_2',
+          status: AGENT_APPROVAL_STATUS.CONSUMED,
+          approvalTokenHash: null,
+        }),
+      ]);
+      const rows = await service.list({});
+      const wire = JSON.parse(JSON.stringify(rows));
+      for (const r of wire) {
+        expect('approvalTokenHash' in r).toBe(false);
+        expect('approvalToken' in r).toBe(false);
+      }
+    });
+
+    it('#H7 successful execute clears approvalTokenHash (defence-in-depth) — verified in the consume transaction', () => {
+      // Source-level invariant: the CONSUMED update writes
+      // approvalTokenHash: null. If a future refactor breaks this, a
+      // leaked raw token might still hash-match a CONSUMED row.
+      const stripped = approvalSrc
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      // Look for the CONSUMED-with-hash-cleared block.
+      expect(stripped).toMatch(
+        /status:\s*AGENT_APPROVAL_STATUS\.CONSUMED[\s\S]{0,200}approvalTokenHash:\s*null/,
+      );
+    });
+
+    it('#H8 revoke clears approvalTokenHash so any leaked raw token cannot execute', () => {
+      const stripped = approvalSrc
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      // Look for the REVOKED transition block; it MUST set hash to null.
+      expect(stripped).toMatch(
+        /status:\s*AGENT_APPROVAL_STATUS\.REVOKED[\s\S]{0,300}approvalTokenHash:\s*null/,
+      );
+    });
+
+    it('#H9 approval-linked PUBLISH audit row contains zero secret-shaped fields after execute', async () => {
+      // Full execute flow — fetch all audit calls and assert the linked
+      // ones don't carry an `approvalToken` key OR a 64-hex literal.
+      const rawToken = 'n'.repeat(64);
+      const local = makeService(
+        activeRequest({ user: { id: OPERATOR, sub: OPERATOR } }),
+      );
+      prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+        approvalRow({
+          status: AGENT_APPROVAL_STATUS.APPROVED,
+          approvedByAdminUserId: APPROVER,
+          approvedAt: NOW,
+          approvalTokenHash: hashApprovalToken(rawToken),
+        }),
+      );
+      prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+      prismaMock.product.findFirst.mockResolvedValueOnce(draftProduct());
+      prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+      prismaMock.product.update.mockResolvedValueOnce({
+        id: 'prod_draft', slug: 'floral-mermaid-gown', isActive: true,
+      });
+      prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+        approvalRow({ status: AGENT_APPROVAL_STATUS.CONSUMED }),
+      );
+
+      await local.execute('appr_1', rawToken);
+
+      const HEX64 = /[a-f0-9]{64}/;
+      for (const call of auditCalls) {
+        const inputStr = JSON.stringify(call.input ?? {});
+        const outputStr = JSON.stringify(call.output ?? {});
+        expect(inputStr).not.toMatch(HEX64);
+        expect(outputStr).not.toMatch(HEX64);
+        expect(inputStr).not.toContain('"approvalToken"');
+        expect(outputStr).not.toContain('"approvalToken"');
+      }
+    });
+  });
 });
 
 function escapeRegex(s: string): string {

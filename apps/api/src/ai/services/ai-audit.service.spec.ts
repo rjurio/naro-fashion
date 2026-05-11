@@ -62,7 +62,11 @@ describe('AiAuditService', () => {
       input: {
         password: 'leak1',
         accessToken: 'leak2',
-        approvalToken: 'safe',
+        // Phase 3.1A hardening (2026-05-11): approvalToken is no longer
+        // allowlisted. The audit row must redact it like any other
+        // secret. The raw value lives only in the direct approve HTTP
+        // response — never in storage.
+        approvalToken: 'should-be-redacted',
       },
       output: {
         items: [{ password: 'leak3', name: 'ok' }],
@@ -72,7 +76,7 @@ describe('AiAuditService', () => {
     const args = prismaMock.agentAuditLog.create.mock.calls[0][0];
     expect(args.data.inputJson.password).toBe('[REDACTED]');
     expect(args.data.inputJson.accessToken).toBe('[REDACTED]');
-    expect(args.data.inputJson.approvalToken).toBe('safe');
+    expect(args.data.inputJson.approvalToken).toBe('[REDACTED]');
     expect(args.data.outputJson.items[0].password).toBe('[REDACTED]');
     expect(args.data.outputJson.items[0].name).toBe('ok');
   });

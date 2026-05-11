@@ -49,22 +49,31 @@ describe('AiSanitizerService', () => {
       expect(out.pin).toBe('[REDACTED]');
     });
 
-    it('preserves approvalToken (allow-listed)', () => {
+    it('redacts approvalToken (Phase 3.1A hardening — was allow-listed before 2026-05-11)', () => {
+      // Allowlist removed after prod smoke surfaced raw approval tokens
+      // in historical AgentAuditLog rows. The raw token now appears
+      // ONLY in the direct approve HTTP response body. Anywhere else
+      // (audit input/output, log lines, in-flight retries) it must
+      // come back as [REDACTED] — including snake_case + kebab variants.
       const out = sanitizer.sanitize({
         approvalToken: 'appr_abc123',
+        approval_token: 'appr_xyz',
+        'approval-token': 'appr_def',
         accessToken: 'leaked',
       }) as any;
-      expect(out.approvalToken).toBe('appr_abc123');
+      expect(out.approvalToken).toBe('[REDACTED]');
+      expect(out.approval_token).toBe('[REDACTED]');
+      expect(out['approval-token']).toBe('[REDACTED]');
       expect(out.accessToken).toBe('[REDACTED]');
     });
 
-    it('redacts a generic "token" key but not "approvalToken"', () => {
+    it('redacts a generic "token" key AND any approvalToken variant', () => {
       const out = sanitizer.sanitize({
         token: 'leaked',
-        approvalToken: 'safe',
+        approvalToken: 'also-leaked',
       }) as any;
       expect(out.token).toBe('[REDACTED]');
-      expect(out.approvalToken).toBe('safe');
+      expect(out.approvalToken).toBe('[REDACTED]');
     });
 
     it('redacts at any nesting level', () => {

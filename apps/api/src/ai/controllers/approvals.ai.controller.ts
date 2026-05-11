@@ -149,19 +149,37 @@ export class ApprovalsAiController {
   }
 
   // POST /api/v1/ai/approvals/:id/execute   (initiator only)
+  //
+  // The raw `approvalToken` from the request body is consumed inside
+  // ApprovalService.execute() — it MUST NEVER end up in the audit
+  // input/output JSON. We log a boolean `tokenProvided` instead so a
+  // forensic reader can tell that a token was offered without seeing
+  // the token itself. After the call succeeds, the linked
+  // AgentApprovalRequest row (and its `status` + cleared
+  // `approvalTokenHash`) is the canonical "what happened" trail.
+  //
+  // Combined with the sanitiser's `approvaltoken` redact pattern (Phase
+  // 3.1A hardening 2026-05-11) this is belt-and-braces: even if a
+  // future caller accidentally passes the raw token through the runner
+  // input, the sanitiser will strip it.
   @RequiresAiPermission(AI_PERMISSION_CODES.WRITE_DRAFTS)
   @Post(':id/execute')
   execute(@Param('id') id: string, @Body() dto: ExecuteApprovalAiDto) {
     return this.runner.run({
       tool: 'execute_approval',
       actionType: 'PUBLISH',
-      // approvalToken is preserved by the sanitiser's allowlist for
-      // forensic traceability. It's already been consumed by the time
-      // this audit row is written.
-      input: { id, approvalToken: dto.approvalToken },
+      input: { id, tokenProvided: !!dto.approvalToken },
       targetResourceType: 'AgentApprovalRequest',
       targetResourceId: id,
       handler: () => this.approvals.execute(id, dto.approvalToken),
+      auditOutput: (data: any) => ({
+        // Defence-in-depth — only the resource-level outcome is logged;
+        // never the approval summary in case it ever grew a token field.
+        approvalRequestId: data?.approvalRequest?.id,
+        approvalRequestStatus: data?.approvalRequest?.status,
+        result: data?.data,
+        tokenValid: true,
+      }),
       message: (data: any) =>
         `Executed approval ${id} — produced ${data?.approvalRequest?.tool} write on ${data?.approvalRequest?.targetResourceType}.`,
     });

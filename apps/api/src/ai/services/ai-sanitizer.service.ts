@@ -8,7 +8,9 @@ import { Injectable } from '@nestjs/common';
  *   - Drop keys whose name (case-insensitive, ignoring underscores/hyphens)
  *     matches any of: password, passwordHash, passwordResetToken, secret,
  *     apiKey, clientSecret, webhookSecret, authorization, bearer, accessToken,
- *     refreshToken, token (when not "approvalToken"), creditCard, cardNumber,
+ *     refreshToken, token, approvalToken (Phase 3.1A hardening — 2026-05-11,
+ *     was previously allowlisted; the leak surfaced in production smoke and
+ *     we now strip the raw value at every layer), creditCard, cardNumber,
  *     cvv, ccv, cardCvc, pin.
  *   - Truncate any string value > 4096 chars with a "(truncated)" suffix.
  *   - Truncate arrays > 200 items.
@@ -17,18 +19,23 @@ import { Injectable } from '@nestjs/common';
  * The sanitiser never throws — failure to sanitise must not break the
  * tool call. On unexpected error we substitute `{ sanitiserError: true }`
  * so the audit row still records something useful.
+ *
+ * **No allowlist**: there are NO key names exempt from redaction. The
+ * previous `approvalToken` allowlist (Phase 3.1A initial commit) was
+ * removed in the hardening pass after we confirmed leaked tokens in
+ * production. Forensic traceability comes from `approvalRequestId` (a
+ * stable, non-secret pointer) plus the `tokenProvided` boolean the
+ * controllers now log instead of the raw value.
  */
 @Injectable()
 export class AiSanitizerService {
-  // Keys that are safe AI-agent control fields and must NOT be redacted
-  // even though they look secret-like. `approvalToken` is the canonical
-  // example: it's already consumed by the time it reaches the audit log
-  // and we want to know which token was used for forensics.
-  private static readonly ALLOWLIST = new Set(['approvaltoken']);
-
-  // Match anywhere in the key (post-normalisation). The `^token$` pattern
-  // catches a generic "token" key while leaving "approvalToken" alone via
-  // the allowlist above.
+  // Match anywhere in the key (post-normalisation).
+  //
+  // `approvaltoken` MUST be redacted: even though the token is single-use
+  // and inert by the time the audit row is written, we want defence-in-
+  // depth — historical logs are still a leak surface (backups, debug
+  // dumps, dev-tool screenshots). Tokens never live in storage anywhere
+  // outside the approver's HTTP response.
   private static readonly REDACT_PATTERNS: RegExp[] = [
     /password/,
     /passwordhash/,
@@ -41,6 +48,7 @@ export class AiSanitizerService {
     /^bearer$/,
     /accesstoken/,
     /refreshtoken/,
+    /approvaltoken/, // NEW 2026-05-11 — Phase 3.1A hardening
     /^token$/,
     /creditcard/,
     /cardnumber/,
@@ -109,11 +117,6 @@ export class AiSanitizerService {
       const out: Record<string, unknown> = {};
       for (const [rawKey, raw] of Object.entries(value as Record<string, unknown>)) {
         const normalised = rawKey.toLowerCase().replace(/[_\-\s]/g, '');
-
-        if (AiSanitizerService.ALLOWLIST.has(normalised)) {
-          out[rawKey] = this.walk(raw, depth + 1);
-          continue;
-        }
 
         if (this.shouldRedact(normalised)) {
           out[rawKey] = AiSanitizerService.REDACTED_PLACEHOLDER;
