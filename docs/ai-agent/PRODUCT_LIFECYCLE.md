@@ -78,25 +78,27 @@ Why this is correct:
 
 ## 3. AI lifecycle tools (approval-gated)
 
-All three tools share the Phase 3.1A approval workflow: HIGH risk (2-min TTL), four-eyes (different admin must approve), hashed token storage, `payloadHash` binding, `expectedUpdatedAt` stale-data guard, 3-attempt retry cap, and audit linkage via `approvalRequestId`.
+All four tools share the Phase 3.1A approval workflow: four-eyes (different admin must approve), hashed token storage, `payloadHash` binding, `expectedUpdatedAt` stale-data guard, 3-attempt retry cap, and audit linkage via `approvalRequestId`. The first three operate on lifecycle state (`isActive` + `archivedAt`); the fourth (`update_draft_product`) operates on metadata fields while keeping the row in DRAFT state.
 
-| Tool | From state | To state | Validator | Consume write |
-|---|---|---|---|---|
-| **publish_product** | DRAFT | ACTIVE | `PublishValidationService.validatePublishable` — requires `isActive=false, archivedAt=null, deletedAt=null` AND name+slug+category+≥1 image+basePrice>0 AND mode-specific variant/rental checks | `{ isActive: true, archivedAt: null }` |
-| **archive_product** | ACTIVE | ARCHIVED | `ArchiveValidationService.validateArchivable` — requires `isActive=true, deletedAt=null` | `{ isActive: false, archivedAt: new Date() }` |
-| **restore_product** | ARCHIVED | ACTIVE | `RestoreValidationService.validateRestorable` — requires `isActive=false, archivedAt: not null, deletedAt=null` | `{ isActive: true, archivedAt: null }` |
+| Tool | From state | To state | Risk / TTL | Validator | Consume write |
+|---|---|---|---|---|---|
+| **publish_product** | DRAFT | ACTIVE | HIGH / 2 min | `PublishValidationService.validatePublishable` — requires `isActive=false, archivedAt=null, deletedAt=null` AND name+slug+category+≥1 image+basePrice>0 AND mode-specific variant/rental checks | `{ isActive: true, archivedAt: null }` |
+| **archive_product** | ACTIVE | ARCHIVED | HIGH / 2 min | `ArchiveValidationService.validateArchivable` — requires `isActive=true, deletedAt=null` | `{ isActive: false, archivedAt: new Date() }` |
+| **restore_product** | ARCHIVED | ACTIVE | HIGH / 2 min | `RestoreValidationService.validateRestorable` — requires `isActive=false, archivedAt: not null, deletedAt=null` | `{ isActive: true, archivedAt: null }` |
+| **update_draft_product** | DRAFT | DRAFT (metadata only) | MEDIUM / 5 min | `UpdateDraftValidationService.validateUpdateDraft` — requires DRAFT lifecycle + per-field business rules (slug uniqueness, fk existence, enum whitelists) + non-empty change-set | sparse: only the allowed fields the operator submitted that actually differ from current values. NEVER `isActive`/`archivedAt`/`deletedAt`/pricing. |
 
 Notice:
 - **publish_product and restore_product produce identical writes**. The difference is solely the validator — publish accepts drafts only (`archivedAt=null`); restore accepts archived rows only (`archivedAt!=null`). The discriminator is `archivedAt`. This is the entire reason the column was added in Phase 3.1B PR-α.
 - **None of the three tools modify `deletedAt`**. Recycle-bin restore is a separate path; permanent delete has no AI equivalent.
 - **All three carry `riskLevel: HIGH`** → 2-min TTL on the approval token.
 
-Initiator routes (all `POST`, all gated by `ai-agent:write-drafts`, all stamped `@RequiresApproval(HIGH)`):
-- `POST /api/v1/ai/products/:id/publish/request-approval`
-- `POST /api/v1/ai/products/:id/archive/request-approval`
-- `POST /api/v1/ai/products/:id/restore/request-approval`
+Initiator routes (all `POST`, all gated by `ai-agent:write-drafts`):
+- `POST /api/v1/ai/products/:id/publish/request-approval` — `@RequiresApproval(HIGH)`
+- `POST /api/v1/ai/products/:id/archive/request-approval` — `@RequiresApproval(HIGH)`
+- `POST /api/v1/ai/products/:id/restore/request-approval` — `@RequiresApproval(HIGH)`
+- `POST /api/v1/ai/products/:id/update-draft/request-approval` — `@RequiresApproval(MEDIUM)`. Body: `UpdateDraftProductAiDto` (DTO whitelist enforces field allow-list; service layer re-filters via `UPDATE_DRAFT_ALLOWED_FIELDS` as defence in depth).
 
-Approve/reject/revoke/cancel/execute routes are shared on `ApprovalsAiController` and dispatch on `row.toolName`.
+Approve/reject/revoke/cancel/execute routes are shared on `ApprovalsAiController` and dispatch on `row.toolName` (4 cases as of Phase 3.1B.γ).
 
 ---
 
@@ -104,12 +106,12 @@ Approve/reject/revoke/cancel/execute routes are shared on `ApprovalsAiController
 
 Every cell in the matrix below is enforced by a precise validator check + has explicit test coverage in [`approval.service.spec.ts`](../../apps/api/src/ai/services/approval.service.spec.ts).
 
-|  | publish_product | archive_product | restore_product |
-|---|:---:|:---:|:---:|
-| DRAFT | ✅ ALLOW | ❌ REJECT (already inactive) | ❌ REJECT ("use publish_product instead") |
-| ACTIVE | ❌ REJECT ("already active") | ✅ ALLOW | ❌ REJECT ("already active") |
-| ARCHIVED | ❌ REJECT ("use restore_product when available") | ❌ REJECT (already inactive) | ✅ ALLOW |
-| SOFT_DELETED | ❌ REJECT (in recycle bin) | ❌ REJECT (in recycle bin) | ❌ REJECT ("restore from recycle bin first") |
+|  | publish_product | archive_product | restore_product | update_draft_product |
+|---|:---:|:---:|:---:|:---:|
+| DRAFT | ✅ ALLOW | ❌ REJECT (already inactive) | ❌ REJECT ("use publish_product instead") | ✅ ALLOW |
+| ACTIVE | ❌ REJECT ("already active") | ✅ ALLOW | ❌ REJECT ("already active") | ❌ REJECT ("ACTIVE — archive first") |
+| ARCHIVED | ❌ REJECT ("use restore_product when available") | ❌ REJECT (already inactive) | ✅ ALLOW | ❌ REJECT ("ARCHIVED — restore first") |
+| SOFT_DELETED | ❌ REJECT (in recycle bin) | ❌ REJECT (in recycle bin) | ❌ REJECT ("restore from recycle bin first") | ❌ REJECT (in recycle bin) |
 
 **Permanent delete is forbidden via every AI route**. There is no AI tool that hard-deletes a product. The admin endpoint `DELETE /products/:id/permanent` exists for irreversible deletion but is admin-only (`@UseGuards(JwtAuthGuard, AdminGuard)`) and has no approval-workflow equivalent. Phase 4 will revisit this with multi-approver + cascade-audit per `PHASE_3_DESIGN.md` Decision Log #9.
 
@@ -239,12 +241,13 @@ Token hardening:
 
 ## 9. Recommended next AI tool
 
-After publish + archive + restore, the next safest tool is a **DRAFT-only metadata update** — e.g. `update_draft_product` that lets the AI agent edit a draft product's name, description, category, or specifications. Constraints (recommended):
+`update_draft_product` shipped 2026-05-11 with four-eyes approval at MEDIUM risk. With drafts now editable through the AI surface, the next safest options are still in DRAFT territory — anything customer-facing remains gated behind Phase 4 design work.
 
-- Validator gates on `isActive=false, archivedAt=null, deletedAt=null` (DRAFT only).
-- Forbidden fields (DTO whitelist already enforces these for Phase 2 drafts): `basePrice`, `compareAtPrice`, `rentalPricePerDay`, `rentalDepositAmount`, `latePenaltyPercent`. Pricing remains out of scope until Phase 4.
-- Risk level: MEDIUM (5-min TTL) or even LOW (10-min) since the change is invisible to customers (draft).
-- Maybe approval-light: a single-admin confirm rather than full four-eyes, since the product hasn't been live yet.
+Candidates (no preference yet — discuss before picking):
+
+- **`reorder_product_images`** — drafts only, reorders existing `ProductImage` rows by sortOrder. No new uploads. Low risk (invisible to customers).
+- **`assign_size_guide`** — drafts only, sets `Product.sizeGuideId`. Already partially covered by `update_draft_product`; could be a no-op if not needed.
+- **`add_size_to_size_guide`** — extend the AI agent's existing Phase 2 `create_size_guide_entry` to APPEND rows to an existing guide. Drafts only initially.
 
 Explicitly NOT yet:
 - Price changes (any field affecting customer-paid amounts) — needs the pricing-audit subsystem.

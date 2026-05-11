@@ -17,6 +17,11 @@ import { AiAuditService } from './ai-audit.service';
 import { PublishValidationService } from './publish-validation.service';
 import { ArchiveValidationService } from './archive-validation.service';
 import { RestoreValidationService } from './restore-validation.service';
+import { UpdateDraftValidationService } from './update-draft-validation.service';
+import {
+  UPDATE_DRAFT_ALLOWED_FIELDS,
+  UpdateDraftProductAiDto,
+} from '../dto/update-draft-product.ai.dto';
 import { payloadHash } from '../util/canonical-json';
 import {
   generateApprovalToken,
@@ -41,6 +46,7 @@ export const APPROVAL_TOOL_NAMES = {
   PUBLISH_PRODUCT: 'publish_product',
   ARCHIVE_PRODUCT: 'archive_product',
   RESTORE_PRODUCT: 'restore_product',
+  UPDATE_DRAFT_PRODUCT: 'update_draft_product',
 } as const;
 
 export type ApprovalToolName =
@@ -95,6 +101,7 @@ export class ApprovalService {
     private readonly publishValidator: PublishValidationService,
     private readonly archiveValidator: ArchiveValidationService,
     private readonly restoreValidator: RestoreValidationService,
+    private readonly updateDraftValidator: UpdateDraftValidationService,
   ) {}
 
   // ────────────────────────────────────────────────────────────────────
@@ -327,6 +334,98 @@ export class ApprovalService {
         riskLevel,
         beforeValues: beforeValues as any,
         afterValues: afterValues as any,
+        expectedUpdatedAt: product.updatedAt,
+        status: AGENT_APPROVAL_STATUS.PENDING,
+        expiresAt,
+      },
+    });
+
+    await this.audit.record({
+      tool,
+      actionType: 'APPROVAL_REQUESTED',
+      input: inputJson,
+      targetResourceType: 'Product',
+      targetResourceId: product.id,
+      approvalRequestId: created.id,
+      approvalRequired: true,
+      approvalStatus: AGENT_APPROVAL_STATUS.PENDING,
+      severity: 'NOTICE',
+      status: 'SUCCESS',
+    });
+
+    return this.toSummary(created);
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  //   request-approval — update_draft_product (Phase 3.1B.γ)
+  // ────────────────────────────────────────────────────────────────────
+
+  /**
+   * Build the AgentApprovalRequest for `update_draft_product`. The first
+   * AI tool that carries a payload beyond just an id — so the payload
+   * hash binds toolName + the canonical form of the change-set, and
+   * the approval row's `inputJson` stores the (sanitised) field-by-
+   * field changes for execute-time replay.
+   *
+   * Risk level: MEDIUM (5-min TTL). Drafts aren't customer-visible, so
+   * the blast radius is bounded, but this is the first AI write tool
+   * that lets the agent push arbitrary text into the product surface —
+   * the four-eyes review is the right discipline. Phase 4 may relax
+   * to approval-light once we have more soak time.
+   *
+   * The validator gates on DRAFT lifecycle (`isActive=false,
+   * archivedAt=null, deletedAt=null`) AND on per-field business rules
+   * (slug uniqueness, category/sizeGuide existence, etc.). Empty
+   * payloads + no-actual-changes payloads → 400.
+   */
+  async requestUpdateDraftProduct(
+    productId: string,
+    dto: UpdateDraftProductAiDto,
+  ): Promise<ApprovalRequestSummary> {
+    const tenantId = this.tenantContext.requireId;
+    const initiatorId = this.requireAdminUserId();
+    const tool = APPROVAL_TOOL_NAMES.UPDATE_DRAFT_PRODUCT;
+    const riskLevel = AI_RISK_LEVEL.MEDIUM;
+
+    const { product, changedFields, beforeValues } =
+      await this.updateDraftValidator.validateUpdateDraft(
+        productId,
+        dto,
+        tenantId,
+      );
+
+    const ttlMs = AI_RISK_LEVEL_TTL_MS[riskLevel];
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + ttlMs);
+
+    // The approval's inputJson stores ONLY the changed fields, not the
+    // operator's full submitted dto. This keeps the payload-hash tight
+    // (same hash if two operators submit the same effective change)
+    // and matches what beforeValues/afterValues record.
+    const inputJson = {
+      productId,
+      changes: { ...changedFields },
+    };
+    const hash = payloadHash(tool, inputJson);
+
+    const created = await this.prisma.agentApprovalRequest.create({
+      data: {
+        tenantId,
+        requestedByAdminUserId: initiatorId,
+        toolName: tool,
+        targetResourceType: 'Product',
+        targetResourceId: product.id,
+        targetResourceName: product.name,
+        inputJson: inputJson as any,
+        payloadHash: hash,
+        actionTitle: `Update draft '${product.name}'`,
+        businessSummary:
+          `Edit ${Object.keys(changedFields).length} field(s) on the draft product. ` +
+          `Fields: ${Object.keys(changedFields).sort().join(', ')}. ` +
+          `Pricing, lifecycle, and inventory fields are NOT editable through this tool.`,
+        riskLevel,
+        beforeValues: beforeValues as any,
+        afterValues: changedFields as any,
         expectedUpdatedAt: product.updatedAt,
         status: AGENT_APPROVAL_STATUS.PENDING,
         expiresAt,
@@ -834,39 +933,71 @@ export class ApprovalService {
 
     // Tool-specific final pre-flight validation — re-runs against the
     // current resource state so a product that became un-publishable /
-    // un-archivable / un-restorable since request time is rejected here.
-    // Each tool has its own validator + its own "what change to write"
-    // semantics.
+    // un-archivable / un-restorable / un-updatable since request time
+    // is rejected here. Each tool has its own validator + its own
+    // "what change to write" semantics.
     //
     // publish_product and restore_product share the consume write
     // (`{ isActive: true, archivedAt: null }`) but DIFFER on the
     // validator: publish requires `archivedAt: null` (drafts only),
-    // restore requires `archivedAt: not null` (archived rows only). The
-    // single-direction state machine is the whole reason the lifecycle
-    // marker was added in PR-α.
-    let nextActiveState: boolean;
+    // restore requires `archivedAt: not null` (archived rows only).
+    //
+    // update_draft_product is the first tool to write a sparse field
+    // update — its writeData is built from the row's stored inputJson
+    // through an explicit allow-list (defence-in-depth even if the
+    // sanitiser ever let an unexpected key through).
+    let writeData: Record<string, unknown>;
     switch (row.toolName) {
       case APPROVAL_TOOL_NAMES.PUBLISH_PRODUCT:
         await this.publishValidator.validatePublishable(
           row.targetResourceId!,
           tenantId,
         );
-        nextActiveState = true;
+        writeData = { isActive: true, archivedAt: null };
         break;
       case APPROVAL_TOOL_NAMES.ARCHIVE_PRODUCT:
         await this.archiveValidator.validateArchivable(
           row.targetResourceId!,
           tenantId,
         );
-        nextActiveState = false;
+        writeData = { isActive: false, archivedAt: new Date() };
         break;
       case APPROVAL_TOOL_NAMES.RESTORE_PRODUCT:
         await this.restoreValidator.validateRestorable(
           row.targetResourceId!,
           tenantId,
         );
-        nextActiveState = true;
+        writeData = { isActive: true, archivedAt: null };
         break;
+      case APPROVAL_TOOL_NAMES.UPDATE_DRAFT_PRODUCT: {
+        // Re-validate the stored changes against the (possibly drifted)
+        // current product state. If the product was archived between
+        // approve and execute the validator will reject and the consume
+        // path won't write.
+        const storedChanges =
+          ((row.inputJson as any)?.changes ?? {}) as Record<string, unknown>;
+        await this.updateDraftValidator.validateUpdateDraft(
+          row.targetResourceId!,
+          storedChanges as UpdateDraftProductAiDto,
+          tenantId,
+        );
+        // Build the write payload via the explicit allow-list. Anything
+        // not on the list is dropped, no matter what's in inputJson.
+        writeData = {};
+        for (const field of UPDATE_DRAFT_ALLOWED_FIELDS) {
+          if (field in storedChanges) {
+            writeData[field] = storedChanges[field];
+          }
+        }
+        if (Object.keys(writeData).length === 0) {
+          // Should never happen — request-time validator rejected empty
+          // change-sets — but defensive in case the row was tampered with.
+          throw new BadRequestException(
+            'Stored update payload contains no allowed fields. Refusing to execute.',
+          );
+        }
+        break;
+      }
       default:
         // Unknown tool stored on the row — defensive. Should never trip
         // because the controller surface only initiates known tools, but
@@ -910,22 +1041,18 @@ export class ApprovalService {
           );
         }
 
-        // Phase 3.1B.α dispatch: every approval-gated product tool flips
-        // `isActive` AND stamps/clears `archivedAt` so the lifecycle
-        // state is unambiguous afterwards:
-        //   publish_product  → isActive=true,  archivedAt=null  (lifts a draft to ACTIVE)
-        //   archive_product  → isActive=false, archivedAt=now   (sends an ACTIVE row to ARCHIVED)
-        // Clearing archivedAt on publish is defensive — publish_product's
-        // validator already rejects archived products with a
-        // "use restore_product" message, so this should be a no-op flip
-        // from null to null in practice. Kept explicit so a future
-        // restore_product tool can share the same write path.
+        // Phase 3.1B.γ dispatch: every approval-gated product tool
+        // computes its own writeData shape (built in the switch above).
+        //   publish_product       → { isActive: true,  archivedAt: null }
+        //   archive_product       → { isActive: false, archivedAt: <Date> }
+        //   restore_product       → { isActive: true,  archivedAt: null }
+        //   update_draft_product  → only whitelisted scalar fields,
+        //                           never isActive/archivedAt/deletedAt/
+        //                           pricing/etc. — see UPDATE_DRAFT_
+        //                           ALLOWED_FIELDS.
         return tx.product.update({
           where: { id: row.targetResourceId! },
-          data: {
-            isActive: nextActiveState,
-            archivedAt: nextActiveState ? null : new Date(),
-          },
+          data: writeData as any,
         });
       });
     } catch (err) {
@@ -966,22 +1093,43 @@ export class ApprovalService {
     // Success — write the final audit row linking the underlying op back
     // to the approval. Severity follows the risk level. actionType
     // tracks the tool so the activity dashboard can render the
-    // operation-specific verb (PUBLISH / ARCHIVE / RESTORE).
-    let successActionType: 'PUBLISH' | 'ARCHIVE' | 'RESTORE' = 'PUBLISH';
+    // operation-specific verb (PUBLISH / ARCHIVE / RESTORE / UPDATE).
+    let successActionType: 'PUBLISH' | 'ARCHIVE' | 'RESTORE' | 'UPDATE' =
+      'PUBLISH';
     if (row.toolName === APPROVAL_TOOL_NAMES.ARCHIVE_PRODUCT) {
       successActionType = 'ARCHIVE';
     } else if (row.toolName === APPROVAL_TOOL_NAMES.RESTORE_PRODUCT) {
       successActionType = 'RESTORE';
+    } else if (row.toolName === APPROVAL_TOOL_NAMES.UPDATE_DRAFT_PRODUCT) {
+      successActionType = 'UPDATE';
     }
+
+    // Build the audit output. For lifecycle tools (publish/archive/
+    // restore) we emit { id, slug, isActive }. For update_draft we emit
+    // { id, slug, fieldsChanged: [...] } so a forensic reader can see
+    // WHICH fields were touched without the full payload re-appearing
+    // in the audit log (the inputJson already carries the changes —
+    // this output is just a compact summary).
+    let auditOutput: Record<string, unknown>;
+    if (row.toolName === APPROVAL_TOOL_NAMES.UPDATE_DRAFT_PRODUCT) {
+      auditOutput = {
+        id: updatedProduct.id,
+        slug: updatedProduct.slug,
+        fieldsChanged: Object.keys(writeData).sort(),
+      };
+    } else {
+      auditOutput = {
+        id: updatedProduct.id,
+        slug: updatedProduct.slug,
+        isActive: (writeData as any).isActive,
+      };
+    }
+
     await this.audit.record({
       tool: row.toolName,
       actionType: successActionType,
       input: { approvalRequestId: row.id, productId: row.targetResourceId },
-      output: {
-        id: updatedProduct.id,
-        slug: updatedProduct.slug,
-        isActive: nextActiveState,
-      },
+      output: auditOutput,
       targetResourceType: 'Product',
       targetResourceId: updatedProduct.id,
       approvalRequestId: row.id,
@@ -996,11 +1144,7 @@ export class ApprovalService {
     });
     return {
       approvalRequest: this.toSummary(after!),
-      data: {
-        id: updatedProduct.id,
-        slug: updatedProduct.slug,
-        isActive: nextActiveState,
-      },
+      data: auditOutput,
     };
   }
 

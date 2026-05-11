@@ -35,6 +35,7 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
   let publishValidatorMock: any;
   let archiveValidatorMock: any;
   let restoreValidatorMock: any;
+  let updateDraftValidatorMock: any;
   let service: ApprovalService;
   let auditCalls: Array<any>;
 
@@ -175,6 +176,16 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
         product: archivedProductFixture(),
       })),
     };
+    updateDraftValidatorMock = {
+      validateUpdateDraft: jest.fn(async (_id, dto) => ({
+        product: draftProduct(),
+        changedFields: { ...dto },
+        beforeValues: Object.keys(dto).reduce((acc: any, k) => {
+          acc[k] = `CURRENT_${k}`;
+          return acc;
+        }, {}),
+      })),
+    };
     prismaMock = {
       product: { findFirst: jest.fn(), update: jest.fn() },
       agentApprovalRequest: {
@@ -194,6 +205,7 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
       publishValidatorMock as PublishValidationService,
       archiveValidatorMock,
       restoreValidatorMock,
+      updateDraftValidatorMock,
     );
   }
 
@@ -775,6 +787,636 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
       await expect(service.execute('appr_1', '')).rejects.toBeInstanceOf(
         BadRequestException,
       );
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // update_draft_product — Phase 3.1B.γ (2026-05-11)
+  //
+  // Fourth risky AI tool. First tool that carries a meaningful payload
+  // (the change-set) beyond the resource id. Validates lifecycle =
+  // DRAFT, business rules (slug uniqueness, fk existence), and rejects
+  // empty payloads. Risk: MEDIUM (5-min TTL).
+  // ══════════════════════════════════════════════════════════════════
+  describe('update_draft_product — request, approve, execute', () => {
+    function approvalUpdateRow(overrides: any = {}) {
+      return approvalRow({
+        id: 'appr_update_1',
+        toolName: 'update_draft_product',
+        riskLevel: AI_RISK_LEVEL.MEDIUM,
+        targetResourceId: 'prod_draft',
+        targetResourceName: 'Floral Mermaid Gown',
+        actionTitle: "Update draft 'Floral Mermaid Gown'",
+        inputJson: {
+          productId: 'prod_draft',
+          changes: { name: 'Renamed Gown', description: 'New desc.' },
+        },
+        beforeValues: { name: 'Floral Mermaid Gown', description: null },
+        afterValues: { name: 'Renamed Gown', description: 'New desc.' },
+        payloadHash: payloadHash('update_draft_product', {
+          productId: 'prod_draft',
+          changes: { name: 'Renamed Gown', description: 'New desc.' },
+        }),
+        ...overrides,
+      });
+    }
+
+    // ─── INITIATE — tests U1–U17 (subset, organised by intent) ─────
+    describe('requestUpdateDraftProduct', () => {
+      it('U1 operator can request update approval on a DRAFT product (MEDIUM risk, 5-min TTL)', async () => {
+        // The mock must reflect the service's computed expiresAt
+        // (now + MEDIUM TTL). approvalUpdateRow() inherits a HIGH
+        // baseline from approvalRow() since most rows are HIGH; we
+        // override for MEDIUM-risk tools.
+        prismaMock.agentApprovalRequest.create.mockResolvedValueOnce(
+          approvalUpdateRow({
+            expiresAt: new Date(
+              NOW.getTime() + AI_RISK_LEVEL_TTL_MS.MEDIUM,
+            ),
+          }),
+        );
+        const summary = await service.requestUpdateDraftProduct(
+          'prod_draft',
+          { name: 'Renamed Gown' },
+        );
+        expect(summary.tool).toBe('update_draft_product');
+        expect(summary.status).toBe(AGENT_APPROVAL_STATUS.PENDING);
+        expect(summary.riskLevel).toBe('MEDIUM');
+        // MEDIUM TTL is 5 minutes — 300s nominal.
+        expect(summary.ttlSeconds).toBeGreaterThanOrEqual(295);
+        expect(summary.ttlSeconds).toBeLessThanOrEqual(300);
+      });
+
+      it('U2 ACTIVE product cannot be updated via update_draft_product', async () => {
+        updateDraftValidatorMock.validateUpdateDraft.mockRejectedValueOnce(
+          new BadRequestException(
+            'Product is ACTIVE. update_draft_product only edits DRAFT products.',
+          ),
+        );
+        await expect(
+          service.requestUpdateDraftProduct('prod_active', { name: 'X' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prismaMock.agentApprovalRequest.create).not.toHaveBeenCalled();
+      });
+
+      it('U3 ARCHIVED product cannot be updated', async () => {
+        updateDraftValidatorMock.validateUpdateDraft.mockRejectedValueOnce(
+          new BadRequestException(
+            'Product is ARCHIVED, not a draft. update_draft_product only edits DRAFT products.',
+          ),
+        );
+        await expect(
+          service.requestUpdateDraftProduct('prod_archived', { name: 'X' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prismaMock.agentApprovalRequest.create).not.toHaveBeenCalled();
+      });
+
+      it('U4 SOFT_DELETED product cannot be updated', async () => {
+        updateDraftValidatorMock.validateUpdateDraft.mockRejectedValueOnce(
+          new BadRequestException(
+            'Product is soft-deleted (in the recycle bin). Restore it first.',
+          ),
+        );
+        await expect(
+          service.requestUpdateDraftProduct('prod_deleted', { name: 'X' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prismaMock.agentApprovalRequest.create).not.toHaveBeenCalled();
+      });
+
+      it('U5 cross-tenant product cannot be updated', async () => {
+        updateDraftValidatorMock.validateUpdateDraft.mockRejectedValueOnce(
+          new BadRequestException(
+            'Product prod_other not found in this tenant — cannot update.',
+          ),
+        );
+        await expect(
+          service.requestUpdateDraftProduct('prod_other', { name: 'X' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      });
+
+      it('U6 empty payload rejected (validator returns no-changes-detected)', async () => {
+        updateDraftValidatorMock.validateUpdateDraft.mockRejectedValueOnce(
+          new BadRequestException(
+            'No changes detected — every submitted field already matches the current product value.',
+          ),
+        );
+        await expect(
+          service.requestUpdateDraftProduct('prod_draft', {}),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prismaMock.agentApprovalRequest.create).not.toHaveBeenCalled();
+        expect(auditMock.record).not.toHaveBeenCalled();
+      });
+
+      it('U7 allowed fields land in the approval row inputJson.changes', async () => {
+        const dto = {
+          name: 'New name',
+          description: 'New description',
+          minimumStock: 7,
+        };
+        updateDraftValidatorMock.validateUpdateDraft.mockResolvedValueOnce({
+          product: draftProduct(),
+          changedFields: dto,
+          beforeValues: { name: 'Old', description: null, minimumStock: 5 },
+        });
+        prismaMock.agentApprovalRequest.create.mockImplementationOnce(
+          async ({ data }: any) => ({ ...approvalUpdateRow(), ...data, id: 'appr_update_1' }),
+        );
+        await service.requestUpdateDraftProduct('prod_draft', dto);
+        const args = prismaMock.agentApprovalRequest.create.mock.calls[0][0];
+        expect(args.data.inputJson.changes).toEqual(dto);
+        expect(args.data.afterValues).toEqual(dto);
+        expect(args.data.beforeValues).toEqual({ name: 'Old', description: null, minimumStock: 5 });
+      });
+
+      it('U15 approval summary contains ONLY changed fields in beforeValues/afterValues', async () => {
+        // Operator submits 4 fields but only 2 differ from current.
+        const dto = {
+          name: 'NEW',
+          description: 'NEW DESC',
+          minimumStock: 5,    // matches current
+          sku: 'CURRENT-SKU', // matches current
+        };
+        updateDraftValidatorMock.validateUpdateDraft.mockResolvedValueOnce({
+          product: draftProduct(),
+          // Validator already filtered to only-changed entries.
+          changedFields: { name: 'NEW', description: 'NEW DESC' },
+          beforeValues: { name: 'OLD', description: 'OLD DESC' },
+        });
+        prismaMock.agentApprovalRequest.create.mockImplementationOnce(
+          async ({ data }: any) => ({ ...approvalUpdateRow(), ...data, id: 'appr_update_1' }),
+        );
+        await service.requestUpdateDraftProduct('prod_draft', dto);
+        const args = prismaMock.agentApprovalRequest.create.mock.calls[0][0];
+        expect(Object.keys(args.data.beforeValues).sort()).toEqual(['description', 'name']);
+        expect(Object.keys(args.data.afterValues).sort()).toEqual(['description', 'name']);
+      });
+
+      it('U16 payloadHash changes when the change-set changes', async () => {
+        updateDraftValidatorMock.validateUpdateDraft.mockResolvedValueOnce({
+          product: draftProduct(),
+          changedFields: { name: 'A' },
+          beforeValues: { name: 'X' },
+        });
+        prismaMock.agentApprovalRequest.create.mockImplementationOnce(
+          async ({ data }: any) => ({ ...approvalUpdateRow(), ...data, id: 'appr_update_1' }),
+        );
+        await service.requestUpdateDraftProduct('prod_draft', { name: 'A' });
+        const hashA = prismaMock.agentApprovalRequest.create.mock.calls[0][0]
+          .data.payloadHash;
+
+        updateDraftValidatorMock.validateUpdateDraft.mockResolvedValueOnce({
+          product: draftProduct(),
+          changedFields: { name: 'B' },
+          beforeValues: { name: 'X' },
+        });
+        prismaMock.agentApprovalRequest.create.mockImplementationOnce(
+          async ({ data }: any) => ({ ...approvalUpdateRow(), ...data, id: 'appr_update_2' }),
+        );
+        await service.requestUpdateDraftProduct('prod_draft', { name: 'B' });
+        const hashB = prismaMock.agentApprovalRequest.create.mock.calls[1][0]
+          .data.payloadHash;
+
+        expect(hashA).not.toBe(hashB);
+        // And both differ from the publish_product hash for the same id
+        // (toolName is in the hash domain).
+        expect(hashA).not.toBe(
+          payloadHash('publish_product', { productId: 'prod_draft' }),
+        );
+      });
+
+      it('U17 expectedUpdatedAt captured from the live product (stale-data baseline)', async () => {
+        const ts = new Date('2026-05-11T09:50:00Z');
+        updateDraftValidatorMock.validateUpdateDraft.mockResolvedValueOnce({
+          product: draftProduct({ updatedAt: ts }),
+          changedFields: { name: 'A' },
+          beforeValues: { name: 'X' },
+        });
+        prismaMock.agentApprovalRequest.create.mockImplementationOnce(
+          async ({ data }: any) => ({ ...approvalUpdateRow(), ...data, id: 'appr_update_1' }),
+        );
+        await service.requestUpdateDraftProduct('prod_draft', { name: 'A' });
+        const args = prismaMock.agentApprovalRequest.create.mock.calls[0][0];
+        expect(args.data.expectedUpdatedAt).toEqual(ts);
+      });
+    });
+
+    // ─── APPROVE — tests U18, U19, U20 ─────────────────────────────
+    describe('approve (update_draft)', () => {
+      beforeEach(() => {
+        service = makeService(
+          activeRequest({ user: { id: APPROVER, sub: APPROVER } }),
+        );
+      });
+
+      it('U18 initiator cannot approve own update request (four-eyes)', async () => {
+        service = makeService(
+          activeRequest({ user: { id: OPERATOR, sub: OPERATOR } }),
+        );
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvalUpdateRow(),
+        );
+        await expect(
+          service.approve('appr_update_1'),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        const blocked = auditCalls.find(
+          (c) => c.actionType === 'SELF_APPROVAL_BLOCKED',
+        );
+        expect(blocked).toBeTruthy();
+        expect(blocked.tool).toBe('update_draft_product');
+        expect(blocked.severity).toBe('WARNING');
+      });
+
+      it('U19 different approver gets raw token exactly once', async () => {
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvalUpdateRow(),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+          approvalUpdateRow({
+            status: AGENT_APPROVAL_STATUS.APPROVED,
+            approvedByAdminUserId: APPROVER,
+          }),
+        );
+        const summary = await service.approve('appr_update_1');
+        expect(summary.status).toBe(AGENT_APPROVAL_STATUS.APPROVED);
+        expect(summary.approvalToken).toMatch(/^[a-f0-9]{64}$/);
+      });
+
+      it('U20 raw token never appears in any audit input/output during approve', async () => {
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvalUpdateRow(),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+          approvalUpdateRow({
+            status: AGENT_APPROVAL_STATUS.APPROVED,
+            approvedByAdminUserId: APPROVER,
+          }),
+        );
+        const summary = await service.approve('appr_update_1');
+        const rawToken = summary.approvalToken!;
+        for (const call of auditCalls) {
+          const inputStr = JSON.stringify(call.input ?? {});
+          const outputStr = JSON.stringify(call.output ?? {});
+          expect(inputStr).not.toContain(rawToken);
+          expect(outputStr).not.toContain(rawToken);
+        }
+      });
+    });
+
+    // ─── EXECUTE — tests U21, U22, U23, U24, U25, U26 ──────────────
+    describe('execute (update_draft)', () => {
+      function approvedUpdateRow(rawToken: string, overrides: any = {}) {
+        return approvalUpdateRow({
+          status: AGENT_APPROVAL_STATUS.APPROVED,
+          approvedByAdminUserId: APPROVER,
+          approvedAt: NOW,
+          approvalTokenHash: hashApprovalToken(rawToken),
+          ...overrides,
+        });
+      }
+
+      it('U21 successful execute writes ONLY allowed fields from the stored changes', async () => {
+        const rawToken = 'u'.repeat(64);
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvedUpdateRow(rawToken),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        prismaMock.product.findFirst.mockResolvedValueOnce(draftProduct());
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        prismaMock.product.update.mockResolvedValueOnce({
+          id: 'prod_draft',
+          slug: 'floral-mermaid-gown',
+          isActive: false,
+        });
+        prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+          approvalUpdateRow({ status: AGENT_APPROVAL_STATUS.CONSUMED }),
+        );
+        await service.execute('appr_update_1', rawToken);
+
+        const writeCall = prismaMock.product.update.mock.calls[0][0];
+        expect(writeCall.where).toEqual({ id: 'prod_draft' });
+        // The row's stored changes were { name, description } — those
+        // and ONLY those land in the update.
+        expect(writeCall.data).toEqual({
+          name: 'Renamed Gown',
+          description: 'New desc.',
+        });
+      });
+
+      it('U22 execute does NOT modify isActive, archivedAt, or deletedAt', async () => {
+        const rawToken = 'v'.repeat(64);
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvedUpdateRow(rawToken),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        prismaMock.product.findFirst.mockResolvedValueOnce(draftProduct());
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        prismaMock.product.update.mockResolvedValueOnce({
+          id: 'prod_draft', slug: 'floral-mermaid-gown', isActive: false,
+        });
+        prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+          approvalUpdateRow({ status: AGENT_APPROVAL_STATUS.CONSUMED }),
+        );
+        await service.execute('appr_update_1', rawToken);
+
+        const writeCall = prismaMock.product.update.mock.calls[0][0];
+        expect('isActive' in writeCall.data).toBe(false);
+        expect('archivedAt' in writeCall.data).toBe(false);
+        expect('deletedAt' in writeCall.data).toBe(false);
+      });
+
+      it('U23 execute does NOT modify pricing fields even if they leaked into inputJson', async () => {
+        // Defence-in-depth: simulate a tampered inputJson where someone
+        // injected a pricing field. The execute path's allow-list MUST
+        // strip it before the Prisma update.
+        const rawToken = 'w'.repeat(64);
+        const tamperedRow = approvedUpdateRow(rawToken, {
+          inputJson: {
+            productId: 'prod_draft',
+            changes: {
+              name: 'NEW',
+              basePrice: 999999,            // FORBIDDEN
+              compareAtPrice: 1000000,      // FORBIDDEN
+              rentalPricePerDay: 50,        // FORBIDDEN
+              isActive: true,               // FORBIDDEN (lifecycle)
+              archivedAt: null,             // FORBIDDEN (lifecycle)
+              stock: 999,                   // FORBIDDEN (inventory)
+            },
+          },
+          payloadHash: payloadHash('update_draft_product', {
+            productId: 'prod_draft',
+            changes: {
+              name: 'NEW',
+              basePrice: 999999,
+              compareAtPrice: 1000000,
+              rentalPricePerDay: 50,
+              isActive: true,
+              archivedAt: null,
+              stock: 999,
+            },
+          }),
+        });
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(tamperedRow);
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        prismaMock.product.findFirst.mockResolvedValueOnce(draftProduct());
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        prismaMock.product.update.mockResolvedValueOnce({
+          id: 'prod_draft', slug: 'floral-mermaid-gown', isActive: false,
+        });
+        prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+          approvalUpdateRow({ status: AGENT_APPROVAL_STATUS.CONSUMED }),
+        );
+        // We also need the validator to accept the tampered inputJson —
+        // the re-validation runs on the stored changes, and our mocked
+        // validator returns success by default.
+        updateDraftValidatorMock.validateUpdateDraft.mockResolvedValueOnce({
+          product: draftProduct(),
+          changedFields: { name: 'NEW' },
+          beforeValues: { name: 'OLD' },
+        });
+
+        await service.execute('appr_update_1', rawToken);
+
+        const writeCall = prismaMock.product.update.mock.calls[0][0];
+        // The allow-list MUST filter out everything except `name`.
+        expect(writeCall.data).toEqual({ name: 'NEW' });
+        expect('basePrice' in writeCall.data).toBe(false);
+        expect('compareAtPrice' in writeCall.data).toBe(false);
+        expect('rentalPricePerDay' in writeCall.data).toBe(false);
+        expect('isActive' in writeCall.data).toBe(false);
+        expect('archivedAt' in writeCall.data).toBe(false);
+        expect('stock' in writeCall.data).toBe(false);
+      });
+
+      it('U24 success writes a linked UPDATE audit row (not PUBLISH/ARCHIVE/RESTORE)', async () => {
+        const rawToken = 'x'.repeat(64);
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvedUpdateRow(rawToken),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        prismaMock.product.findFirst.mockResolvedValueOnce(draftProduct());
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        prismaMock.product.update.mockResolvedValueOnce({
+          id: 'prod_draft', slug: 'floral-mermaid-gown', isActive: false,
+        });
+        prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+          approvalUpdateRow({ status: AGENT_APPROVAL_STATUS.CONSUMED }),
+        );
+        await service.execute('appr_update_1', rawToken);
+
+        const update = auditCalls.find((c) => c.actionType === 'UPDATE');
+        expect(update).toBeTruthy();
+        expect(update.tool).toBe('update_draft_product');
+        expect(update.approvalRequestId).toBe('appr_update_1');
+        expect(update.severity).toBe('NOTICE');
+        // The output records WHICH fields changed but not their values
+        // (the values are in inputJson on the approval row).
+        expect(update.output.fieldsChanged).toEqual(['description', 'name']);
+        // No raw token literal anywhere.
+        expect(JSON.stringify(update.input)).not.toMatch(/[a-f0-9]{64}/);
+        expect(JSON.stringify(update.output)).not.toMatch(/[a-f0-9]{64}/);
+        // No PUBLISH/ARCHIVE/RESTORE rows emitted for this approval.
+        expect(auditCalls.find((c) => c.actionType === 'PUBLISH')).toBeFalsy();
+        expect(auditCalls.find((c) => c.actionType === 'ARCHIVE')).toBeFalsy();
+        expect(auditCalls.find((c) => c.actionType === 'RESTORE')).toBeFalsy();
+      });
+
+      it('U25a expired approval cannot execute', async () => {
+        const rawToken = 'y'.repeat(64);
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvedUpdateRow(rawToken, {
+            expiresAt: new Date(NOW.getTime() - 1000),
+          }),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        await expect(
+          service.execute('appr_update_1', rawToken),
+        ).rejects.toMatchObject({ response: { code: 'approval_expired' } });
+      });
+
+      it('U25b rejected/revoked/consumed approval cannot execute (hash cleared → no row)', async () => {
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(null);
+        await expect(
+          service.execute('appr_update_1', 'z'.repeat(64)),
+        ).rejects.toMatchObject({
+          response: { code: 'approval_invalid_or_consumed' },
+        });
+      });
+
+      it('U25c stale expectedUpdatedAt fails with stale_data + invalidates', async () => {
+        const rawToken = '1'.repeat(64);
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvedUpdateRow(rawToken),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        // Product's updatedAt drifted
+        prismaMock.product.findFirst.mockResolvedValueOnce(
+          draftProduct({ updatedAt: new Date('2026-05-11T09:59:59Z') }),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+        await expect(
+          service.execute('appr_update_1', rawToken),
+        ).rejects.toMatchObject({ response: { code: 'stale_data' } });
+      });
+
+      it('U26a tenant A cannot execute tenant B update (token-hash lookup tenant-scoped)', async () => {
+        const rawToken = '2'.repeat(64);
+        service = makeService(
+          activeRequest({ user: { id: OPERATOR, sub: OPERATOR } }),
+          TENANT_A,
+        );
+        prismaMock.agentApprovalRequest.findFirst.mockImplementationOnce(
+          ({ where }: any) =>
+            Promise.resolve(
+              where.tenantId === TENANT_B ? approvalUpdateRow() : null,
+            ),
+        );
+        await expect(
+          service.execute('appr_update_b', rawToken),
+        ).rejects.toMatchObject({
+          response: { code: 'approval_invalid_or_consumed' },
+        });
+      });
+
+      it('U26b tenant A cannot approve tenant B update request (404 not 403)', async () => {
+        service = makeService(
+          activeRequest({ user: { id: APPROVER, sub: APPROVER } }),
+          TENANT_A,
+        );
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(null);
+        await expect(
+          service.approve('appr_update_from_tenant_b'),
+        ).rejects.toBeInstanceOf(NotFoundException);
+      });
+    });
+
+    // ─── STRUCTURAL — tests U27–U34 ─────────────────────────────────
+    describe('Phase 3.1B.γ structural invariants', () => {
+      const productsControllerPath = join(
+        __dirname,
+        '..',
+        'controllers',
+        'products.ai.controller.ts',
+      );
+      const productsSrc = readFileSync(productsControllerPath, 'utf8');
+
+      it('U27 existing publish_product flow still wired (sanity)', () => {
+        expect(productsSrc).toMatch(/@Post\(':id\/publish\/request-approval'\)/);
+      });
+
+      it('U28 existing archive_product flow still wired (sanity)', () => {
+        expect(productsSrc).toMatch(/@Post\(':id\/archive\/request-approval'\)/);
+      });
+
+      it('U29 existing restore_product flow still wired (sanity)', () => {
+        expect(productsSrc).toMatch(/@Post\(':id\/restore\/request-approval'\)/);
+      });
+
+      it('U30 Phase 2 draft-creation DTO still rejects pricing (defence)', () => {
+        const dtoPath = join(__dirname, '..', 'dto', 'create-product-draft.ai.dto.ts');
+        const dtoSrc = readFileSync(dtoPath, 'utf8');
+        const FORBIDDEN = [
+          'basePrice',
+          'compareAtPrice',
+          'rentalPricePerDay',
+          'rentalDepositAmount',
+          'price',
+        ];
+        for (const f of FORBIDDEN) {
+          expect(dtoSrc).not.toMatch(new RegExp(`^\\s+${f}\\s*[!?:]`, 'm'));
+        }
+      });
+
+      it('U31 no direct PATCH/PUT/DELETE update route on products controller', () => {
+        const stripped = productsSrc
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/^\s*\/\/.*$/gm, '');
+        expect(stripped).not.toMatch(/@Patch\(':id'\)/);
+        expect(stripped).not.toMatch(/@Put\(/);
+        expect(stripped).not.toMatch(/@Delete\(/);
+        // No direct update-draft route — only the request-approval form.
+        expect(stripped).not.toMatch(/@Post\(':id\/update-draft'\)/);
+        expect(stripped).not.toMatch(/@Patch\(':id\/update-draft'/);
+      });
+
+      it('U32 no inventory/order/rental/payment/permanent-delete routes exist', () => {
+        const forbidden = [
+          '/adjust',
+          ':id/return',
+          '/permanent-delete',
+          '/refund',
+          ':id/status',
+          'rental-policies',
+        ];
+        const fs = require('fs');
+        const dir = join(__dirname, '..', 'controllers');
+        const files = fs
+          .readdirSync(dir)
+          .filter(
+            (f: string) =>
+              f.endsWith('.ai.controller.ts') && !f.endsWith('.spec.ts'),
+          );
+        for (const file of files) {
+          const src = readFileSync(join(dir, file), 'utf8');
+          const stripped = src
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/^\s*\/\/.*$/gm, '');
+          for (const f of forbidden) {
+            const re = new RegExp(
+              `@(Post|Patch|Put|Delete)\\([^)]*${escapeRegex(f)}[^)]*\\)`,
+            );
+            if (re.test(stripped)) {
+              throw new Error(`Forbidden write route found in ${file}: ${f}`);
+            }
+          }
+        }
+      });
+
+      it('U33 token hardening invariants still pass (tokenProvided + tokenHashPrefix in execute audit)', () => {
+        const approvalsCtrlPath = join(
+          __dirname,
+          '..',
+          'controllers',
+          'approvals.ai.controller.ts',
+        );
+        const src = readFileSync(approvalsCtrlPath, 'utf8');
+        const stripped = src
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/^\s*\/\/.*$/gm, '');
+        expect(stripped).toMatch(/tokenProvided:\s*!!dto\.approvalToken/);
+        expect(stripped).toMatch(
+          /hashApprovalToken\([^)]*\)\.slice\(\s*0\s*,\s*6\s*\)/,
+        );
+        expect(stripped).not.toMatch(
+          /input:\s*\{[^}]*approvalToken:\s*dto\.approvalToken/,
+        );
+      });
+
+      it('U34 public response whitelist remains intact (regression guard)', () => {
+        // Spot-check: the storefront selects on products.service.ts
+        // STILL exclude archivedAt + admin-only fields. The full table
+        // is asserted via products.service.spec.ts ADMIN_ONLY_FIELDS.
+        const productsServicePath = join(
+          __dirname, '..', '..', 'products', 'products.service.ts',
+        );
+        const src = readFileSync(productsServicePath, 'utf8');
+        const listSelectMatch = src.match(
+          /const publicProductListSelect = \{[\s\S]+?\}\s*as const;/,
+        );
+        expect(listSelectMatch).toBeTruthy();
+        const listBlock = listSelectMatch![0];
+        // None of the admin-only fields are in the public list select.
+        for (const field of [
+          'tenantId',
+          'archivedAt',
+          'purchasePrice',
+          'supplierName',
+          'minimumStock',
+        ]) {
+          expect(listBlock).not.toMatch(new RegExp(`^\\s+${field}:\\s*true`, 'm'));
+        }
+      });
     });
   });
 

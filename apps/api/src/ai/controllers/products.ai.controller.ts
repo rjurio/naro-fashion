@@ -13,6 +13,7 @@ import {
 import { AiToolRunner } from '../services/ai-tool-runner.service';
 import { ApprovalService } from '../services/approval.service';
 import { CreateProductDraftAiDto } from '../dto/create-product-draft.ai.dto';
+import { UpdateDraftProductAiDto } from '../dto/update-draft-product.ai.dto';
 
 /**
  * AI tools for the products module.
@@ -160,6 +161,48 @@ export class ProductsAiController {
       handler: () => this.approvals.requestArchiveProduct(id),
       message: () =>
         'Approval requested. A different admin must approve before archiving.',
+    });
+  }
+
+  // POST /api/v1/ai/products/:id/update-draft/request-approval  (Phase 3.1B.γ)
+  //
+  // Edit non-pricing, non-lifecycle fields on a DRAFT product through
+  // the approval workflow. First AI write tool that carries a payload
+  // beyond just an id — the body is the proposed change-set, validated
+  // by `UpdateDraftValidationService` at both request time AND consume
+  // time. Risk: MEDIUM (5-min TTL).
+  //
+  // Allowed fields (whitelist enforced by both DTO + service):
+  //   name, nameSwahili, slug, description, descriptionSwahili,
+  //   categoryId, availabilityMode, specifications, sku,
+  //   minimumStock, supplierName, supplierContact,
+  //   minRentalDays, maxRentalDays, bufferDaysOverride, sizeGuideId
+  //
+  // Forbidden (DTO whitelist returns 400 `should not exist`):
+  //   basePrice, compareAtPrice, rentalPricePerDay, rentalDepositAmount,
+  //   rentalDownPaymentPct, latePenaltyPercent, isActive, archivedAt,
+  //   deletedAt, published, status, stock, any payment/order/rental
+  //   transactional field.
+  //
+  // No direct PATCH/PUT update endpoint exists — only this request-
+  // approval form. The `ai-controllers.shape.spec.ts` allowlist + the
+  // global forbidden-decorators rule guarantee this at build time.
+  @RequiresAiPermission(AI_PERMISSION_CODES.WRITE_DRAFTS)
+  @RequiresApproval(AI_RISK_LEVEL.MEDIUM)
+  @Post(':id/update-draft/request-approval')
+  requestUpdateDraft(
+    @Param('id') id: string,
+    @Body() dto: UpdateDraftProductAiDto,
+  ) {
+    return this.runner.run({
+      tool: 'update_draft_product',
+      actionType: 'APPROVAL_REQUESTED',
+      input: { productId: id, changes: dto },
+      targetResourceType: 'Product',
+      targetResourceId: id,
+      handler: () => this.approvals.requestUpdateDraftProduct(id, dto),
+      message: () =>
+        'Approval requested. A different admin must approve before the draft is updated.',
     });
   }
 

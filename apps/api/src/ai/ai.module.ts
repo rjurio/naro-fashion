@@ -19,6 +19,7 @@ import { ApprovalService } from './services/approval.service';
 import { PublishValidationService } from './services/publish-validation.service';
 import { ArchiveValidationService } from './services/archive-validation.service';
 import { RestoreValidationService } from './services/restore-validation.service';
+import { UpdateDraftValidationService } from './services/update-draft-validation.service';
 import { ApprovalExpiryCron } from './services/approval-expiry.cron';
 import { AiPermissionGuard } from './guards/ai-permission.guard';
 import { AiExceptionFilter } from './filters/ai-exception.filter';
@@ -83,6 +84,7 @@ import { ApprovalsAiController } from './controllers/approvals.ai.controller';
     PublishValidationService,
     ArchiveValidationService,
     RestoreValidationService,
+    UpdateDraftValidationService,
     ApprovalExpiryCron,
   ],
 })

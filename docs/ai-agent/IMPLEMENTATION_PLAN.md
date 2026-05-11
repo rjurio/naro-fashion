@@ -4,6 +4,108 @@ Four phases. Each phase is independently shippable to production behind the `ai-
 
 ---
 
+## Phase 3.1B.γ status — IMPLEMENTED 2026-05-11 ✅ (update_draft_product)
+
+**Scope shipped**: fourth risky AI tool — `update_draft_product`. Edits non-pricing, non-lifecycle metadata on DRAFT products through the approval workflow. First AI write tool that carries a meaningful payload beyond just an id. Risk: MEDIUM (5-min TTL).
+
+### What's live (in addition to all prior phases)
+
+| Surface | Route | Notes |
+|---|---|---|
+| Initiate (update_draft_product) | `POST /api/v1/ai/products/:id/update-draft/request-approval` | Operator perm: `ai-agent:write-drafts`. Risk: MEDIUM (5-min TTL). `@RequiresApproval(MEDIUM)` metadata. Body: `UpdateDraftProductAiDto`. |
+
+### Allowed fields (DTO whitelist + service-layer allow-list)
+
+```
+name, nameSwahili, slug, description, descriptionSwahili,
+categoryId, availabilityMode, specifications, sku,
+minimumStock, supplierName, supplierContact,
+minRentalDays, maxRentalDays, bufferDaysOverride, sizeGuideId
+```
+
+Single source of truth: `UPDATE_DRAFT_ALLOWED_FIELDS` in [`update-draft-product.ai.dto.ts`](../../apps/api/src/ai/dto/update-draft-product.ai.dto.ts). Used by:
+1. The DTO (one decorated property per field) — wire-level rejection of unknown keys via the global `ValidationPipe` `forbidNonWhitelisted: true`.
+2. The execute-time filter in `ApprovalService.execute()` — defence-in-depth, even if a tampered `inputJson` row sneaks a forbidden key through the sanitiser, the consume transaction's `writeData` only picks fields from this list.
+
+### Forbidden fields (return 400 `property X should not exist`)
+
+```
+basePrice, compareAtPrice, purchasePrice
+rentalPricePerDay, rentalDepositAmount, rentalDownPaymentPct,
+latePenaltyPercent
+isActive, archivedAt, deletedAt, published, status, isFeatured
+stock, paymentMethodId, orderStatus, rentalStatus, transactionRef
+… any other field
+```
+
+### Lifecycle gate
+
+The validator (`UpdateDraftValidationService.validateUpdateDraft`) accepts ONLY products in DRAFT state:
+- `isActive === false`
+- `archivedAt === null`
+- `deletedAt === null`
+
+ACTIVE, ARCHIVED, SOFT_DELETED, and cross-tenant products are rejected with precise messages directing the operator to the right verb (archive_product, restore_product, recycle-bin restore, etc.).
+
+### Per-field business validation
+
+- **categoryId** must exist in the same tenant.
+- **sizeGuideId** must exist in the same tenant.
+- **slug** must be unique within the tenant (excluding the product's own row).
+- **availabilityMode** must be in `{PURCHASE_ONLY, RENTAL_ONLY, BOTH}`.
+- **minRentalDays ≤ maxRentalDays** when both are provided.
+- **Empty payload** → 400 ("Update payload is empty. Provide at least one allowed field to change.")
+- **No-actual-changes** (every submitted field already matches current) → 400 ("No changes detected — every submitted field already matches the current product value.")
+
+### Approval-row shape
+
+- `inputJson = { productId, changes: { ...onlyChangedFields } }` — sanitised.
+- `payloadHash = sha256('update_draft_product::' + canonicalJSON(inputJson))` — distinct from publish_product's hash for the same id because the toolName is in the hash domain.
+- `beforeValues = { ...currentValuesOfChangedFields }` (snapshot, only changed fields).
+- `afterValues = { ...proposedValuesOfChangedFields }` (only changed fields).
+- `expectedUpdatedAt` = `product.updatedAt` at request time (stale-data baseline).
+- `riskLevel = 'MEDIUM'`, `expiresAt = createdAt + 5min`.
+
+### Consume-time write
+
+```typescript
+case APPROVAL_TOOL_NAMES.UPDATE_DRAFT_PRODUCT: {
+  // Re-validate the stored changes against current state.
+  await this.updateDraftValidator.validateUpdateDraft(targetId, storedChanges, tenantId);
+  // Build write payload via the explicit allow-list.
+  writeData = {};
+  for (const field of UPDATE_DRAFT_ALLOWED_FIELDS) {
+    if (field in storedChanges) writeData[field] = storedChanges[field];
+  }
+  if (Object.keys(writeData).length === 0) throw new BadRequestException(...);
+  break;
+}
+```
+
+Success audit row: `actionType: 'UPDATE'`, `output: { id, slug, fieldsChanged: [...sorted field names] }`. The values are NOT in the audit output — they're already in the approval row's `inputJson` for forensics, and we don't want the values appearing twice (one log entry one source of truth).
+
+### Tests added
+
+`approval.service.spec.ts` ships **+29** lifecycle tests in a `describe('update_draft_product …')` block (U1–U34 + sub-variants). Covers all 34 mandatory cases from the user's scope plus extras:
+
+Initiate: U1 (happy path MEDIUM/5-min TTL), U2 (ACTIVE rejected), U3 (ARCHIVED rejected), U4 (SOFT_DELETED rejected), U5 (cross-tenant rejected), U6 (empty payload rejected), U7 (changes stored), U15 (only-changed-fields in before/after), U16 (payload hash differs per change-set + per tool), U17 (expectedUpdatedAt captured).
+Approve: U18 (four-eyes), U19 (raw token once), U20 (no token leak).
+Execute: U21 (writes only allowed fields), U22 (no lifecycle mutation), U23 (defence-in-depth strips forbidden fields from tampered inputJson), U24 (linked UPDATE audit, no PUBLISH/ARCHIVE/RESTORE), U25 (expired / rejected / stale), U26 (cross-tenant approve + execute).
+Structural: U27/U28/U29 (publish + archive + restore still wired), U30 (Phase 2 pricing block), U31 (no direct update routes), U32 (no other risky routes), U33 (token hardening), U34 (public response whitelist).
+
+`update-draft-product.ai.dto.spec.ts` adds **18** DTO-level whitelist tests covering pricing/lifecycle/inventory field rejection, field-by-field validation rules (max lengths, integer constraints, availabilityMode enum), and a single-source-of-truth assertion on the `UPDATE_DRAFT_ALLOWED_FIELDS` array.
+
+`phase-3-foundation.spec.ts` updated:
+- `@RequiresApproval` count expected = **4** (publish + archive + restore + update-draft).
+- "Only `@Post` paths containing those verbs" assertion extended to include `update-draft`.
+- New `:id/update-draft` direct-route guards (no `@Post`, `@Patch`, `@Delete` on the bare path).
+
+`ai-controllers.shape.spec.ts` allowlist extended with `@Post(':id/update-draft/request-approval')`.
+
+Total: 470 tests passing across 13 suites (was 411 → +59).
+
+---
+
 ## Phase 3.1B.β status — IMPLEMENTED 2026-05-11 ✅ (restore_product)
 
 **Scope shipped**: the third risky AI tool — `restore_product`. Brings a previously-archived product (`isActive: false, archivedAt: not null, deletedAt: null`) back to ACTIVE via the same approval workflow as publish + archive. Validator rejects drafts (`archivedAt: null`) with a "use publish_product instead" hint so the operator picks the right verb for the lifecycle state.
