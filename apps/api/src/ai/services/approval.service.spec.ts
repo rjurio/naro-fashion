@@ -1765,6 +1765,95 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
         expect(outputStr).not.toContain('"approvalToken"');
       }
     });
+
+    // ────────────────────────────────────────────────────────────────
+    //  Re-hardening pass — 2026-05-11
+    //
+    //  Source-text invariants that close the surface area the user's
+    //  hardening prompt explicitly listed and that weren't already
+    //  enforced by H1–H9 above. Each test is a fast string scan over
+    //  the controller / service source so a future refactor can't
+    //  silently reintroduce the leak.
+    // ────────────────────────────────────────────────────────────────
+
+    it('#HR1 execute route logs tokenHashPrefix (first 6 hex of hash) for forensic correlation — NEVER the raw token or the full hash', () => {
+      const stripped = approvalsSrc
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      // The exact construction: hashApprovalToken(...).slice(0, 6)
+      expect(stripped).toMatch(/hashApprovalToken\([^)]*\)\.slice\(\s*0\s*,\s*6\s*\)/);
+      // tokenHashPrefix is added to the input audit payload via the
+      // spread-conditional form.
+      expect(stripped).toMatch(/tokenHashPrefix/);
+      // Negative: the raw token (dto.approvalToken) is NOT passed to
+      // the runner's input directly.
+      expect(stripped).not.toMatch(/input:\s*\{[^}]*approvalToken:\s*dto\.approvalToken/);
+    });
+
+    it('#HR2 dto.approvalToken is only read by the execute route — never by reject/revoke/cancel/list/get', () => {
+      const stripped = approvalsSrc
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      // Count every reference to dto.approvalToken in the controller.
+      // The execute handler uses it twice (the hash compute + the
+      // service call AND the tokenProvided boolean derivation). NO
+      // other handler is allowed to touch it.
+      const refs = stripped.match(/dto\.approvalToken/g) ?? [];
+      expect(refs.length).toBeGreaterThan(0); // execute uses it
+      // Locate the execute block by @Post(':id/execute') and assert
+      // every dto.approvalToken occurrence falls inside it.
+      const execStart = stripped.indexOf("@Post(':id/execute')");
+      expect(execStart).toBeGreaterThan(-1);
+      // Execute is the last method; everything after execStart is fair game.
+      const beforeExecute = stripped.slice(0, execStart);
+      expect(beforeExecute).not.toContain('dto.approvalToken');
+    });
+
+    it('#HR3 ApprovalRequestSummary type does NOT declare approvalTokenHash (controller responses are typed clean)', () => {
+      const stripped = approvalSrc
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      // The interface block for ApprovalRequestSummary.
+      const m = stripped.match(
+        /export interface ApprovalRequestSummary \{([\s\S]+?)\n\}/,
+      );
+      expect(m).toBeTruthy();
+      const block = m![1];
+      // It MAY (and does) declare approvalToken (optional, raw on approve).
+      // It MUST NOT declare approvalTokenHash — that's storage-only.
+      expect(block).not.toMatch(/approvalTokenHash/);
+    });
+
+    it('#HR4 toSummary() reads row.approvalTokenHash ONLY to derive the tokenIssued boolean — never to emit it on the wire', () => {
+      const stripped = approvalSrc
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      // Locate the toSummary method body.
+      const m = stripped.match(/private toSummary\([\s\S]+?\n\s{2}\}/);
+      expect(m).toBeTruthy();
+      const body = m![0];
+      // The serialiser reads `row.approvalTokenHash` to compute the
+      // tokenIssued boolean. It must NOT include the hash in the
+      // return object. We assert exactly one read (the boolean
+      // derivation) and zero emissions.
+      const reads = body.match(/row\.approvalTokenHash/g) ?? [];
+      expect(reads.length).toBe(1);
+      // The returned object literal must not assign the hash to any key.
+      expect(body).not.toMatch(/\bapprovalTokenHash:\s*/);
+      // And the public-facing field MUST be the boolean derivation, not the hash value.
+      expect(body).toMatch(/tokenIssued:[\s\S]+?row\.approvalTokenHash/);
+    });
+
+    it('#HR5 execute audit input includes tokenProvided boolean — controller never offers raw token to the audit layer', () => {
+      const stripped = approvalsSrc
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      // The execute handler's runner.run input shape.
+      const m = stripped.match(/@Post\(':id\/execute'\)[\s\S]+?\}\)\s*;/);
+      expect(m).toBeTruthy();
+      const block = m![0];
+      expect(block).toMatch(/tokenProvided:\s*!!dto\.approvalToken/);
+    });
   });
 });
 

@@ -18,6 +18,7 @@ import {
   RejectApprovalAiDto,
   RevokeApprovalAiDto,
 } from '../dto/approval-action.ai.dto';
+import { hashApprovalToken } from '../util/approval-token';
 
 /**
  * Approvals management surface — Phase 3.1A.
@@ -165,10 +166,32 @@ export class ApprovalsAiController {
   @RequiresAiPermission(AI_PERMISSION_CODES.WRITE_DRAFTS)
   @Post(':id/execute')
   execute(@Param('id') id: string, @Body() dto: ExecuteApprovalAiDto) {
+    // Forensic correlation breadcrumb (Phase 3.1A re-hardening 2026-05-11):
+    // Compute the SHA-256 of the incoming raw token, then keep only the
+    // first 6 hex chars. This lets a future investigator correlate "this
+    // execute attempt used the token whose hash starts with abc123…"
+    // against the AgentApprovalRequest row (which stored the FULL hash
+    // before consume cleared it). 6 hex chars = 24 bits of the hash — no
+    // realistic preimage threat (the underlying token is also already
+    // single-use + consumed by the time anyone reads this row), but
+    // enough to disambiguate concurrent execute attempts in audit
+    // forensics. The raw token NEVER leaves this expression.
+    const tokenHashPrefix =
+      typeof dto.approvalToken === 'string' && dto.approvalToken.length > 0
+        ? hashApprovalToken(dto.approvalToken).slice(0, 6)
+        : undefined;
+
     return this.runner.run({
       tool: 'execute_approval',
       actionType: 'PUBLISH',
-      input: { id, tokenProvided: !!dto.approvalToken },
+      input: {
+        id,
+        tokenProvided: !!dto.approvalToken,
+        // First 6 hex of sha256(rawToken). Not the raw token. Not the
+        // full hash (which is also wiped from the DB after consume).
+        // Inert breadcrumb for forensic correlation only.
+        ...(tokenHashPrefix ? { tokenHashPrefix } : {}),
+      },
       targetResourceType: 'AgentApprovalRequest',
       targetResourceId: id,
       handler: () => this.approvals.execute(id, dto.approvalToken),
