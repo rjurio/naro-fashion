@@ -5,6 +5,7 @@
 **Purpose**: single canonical reference for the AI agent's product-management surface. Every product-related AI route, validator, permission, lifecycle transition, audit invariant, and out-of-scope tool is listed here. If you want to know "what can the agent do to a product" — start here.
 
 **Cross-references**:
+- [`PRODUCT_AI_V1_OPERATOR_GUIDE.md`](./PRODUCT_AI_V1_OPERATOR_GUIDE.md) — **business / operator counterpart** to this document. Same scope, written for tenant admins, approvers, and store managers (lifecycle in plain English, dashboard usage, common workflows, troubleshooting glossary, release note). Point new operators here first.
 - [`PHASE_3_DESIGN.md`](./PHASE_3_DESIGN.md) — approval workflow design (token hashing, four-eyes, TTL, etc.)
 - [`PRODUCT_LIFECYCLE.md`](./PRODUCT_LIFECYCLE.md) — state machine + admin paths
 - [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) — per-phase rollout history
