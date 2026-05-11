@@ -25,6 +25,7 @@ const ALLOWED_POSTS: Record<string, string[]> = {
     `@Post('draft')`,
     `@Post(':id/publish/request-approval')`,
     `@Post(':id/archive/request-approval')`,
+    `@Post(':id/restore/request-approval')`,
   ],
   'orders.ai.controller.ts': [`@Post(':id/notes')`],
   'size-guide.ai.controller.ts': [`@Post()`],

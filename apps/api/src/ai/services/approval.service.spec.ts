@@ -34,6 +34,7 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
   let auditMock: any;
   let publishValidatorMock: any;
   let archiveValidatorMock: any;
+  let restoreValidatorMock: any;
   let service: ApprovalService;
   let auditCalls: Array<any>;
 
@@ -85,8 +86,29 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
       slug: 'ivory-beaded-ball-gown',
       isActive: true,
       deletedAt: null,
+      archivedAt: null,
       basePrice: '750000',
       availabilityMode: 'PURCHASE_ONLY',
+      updatedAt: new Date('2026-05-11T09:50:00Z'),
+      ...overrides,
+    };
+  }
+
+  /**
+   * Archived product fixture for restore_product tests — was active, now
+   * inactive with `archivedAt` stamped. Returned by the mocked
+   * RestoreValidationService.validateRestorable() in the default factory.
+   */
+  function archivedProductFixture(overrides: any = {}) {
+    return {
+      id: 'prod_archived',
+      tenantId: TENANT_A,
+      name: 'Previously Active Gown',
+      slug: 'previously-active-gown',
+      isActive: false,
+      deletedAt: null,
+      archivedAt: new Date('2026-05-10T08:00:00Z'),
+      basePrice: '900000',
       updatedAt: new Date('2026-05-11T09:50:00Z'),
       ...overrides,
     };
@@ -148,6 +170,11 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
         product: activeProduct(),
       })),
     };
+    restoreValidatorMock = {
+      validateRestorable: jest.fn(async () => ({
+        product: archivedProductFixture(),
+      })),
+    };
     prismaMock = {
       product: { findFirst: jest.fn(), update: jest.fn() },
       agentApprovalRequest: {
@@ -166,6 +193,7 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
       auditMock,
       publishValidatorMock as PublishValidationService,
       archiveValidatorMock,
+      restoreValidatorMock,
     );
   }
 
@@ -747,6 +775,551 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
       await expect(service.execute('appr_1', '')).rejects.toBeInstanceOf(
         BadRequestException,
       );
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // restore_product — Phase 3.1B.β (2026-05-11)
+  //
+  // Third lifecycle verb after publish + archive. Brings an ARCHIVED
+  // row back to ACTIVE. Validator gates on archivedAt: not null so a
+  // DRAFT can NOT use this verb. Consume write is functionally
+  // identical to publish (`isActive: true, archivedAt: null`); the
+  // only difference between publish and restore is which validator
+  // runs at request-approval AND execute time.
+  // ══════════════════════════════════════════════════════════════════
+  describe('restore_product — request, approve, execute', () => {
+    function approvalRestoreRow(overrides: any = {}) {
+      return approvalRow({
+        id: 'appr_restore_1',
+        toolName: 'restore_product',
+        targetResourceId: 'prod_archived',
+        targetResourceName: 'Previously Active Gown',
+        actionTitle: "Restore 'Previously Active Gown'",
+        beforeValues: {
+          isActive: false,
+          archivedAt: '2026-05-10T08:00:00.000Z',
+        },
+        afterValues: { isActive: true, archivedAt: null },
+        payloadHash: payloadHash('restore_product', {
+          productId: 'prod_archived',
+        }),
+        inputJson: { productId: 'prod_archived' },
+        ...overrides,
+      });
+    }
+
+    // ─── INITIATE — tests R1, R2, R3, R4, R5, R6, R7 ────────────────
+    describe('requestRestoreProduct (initiate)', () => {
+      it('R1 operator can create restore approval for an archived product', async () => {
+        prismaMock.agentApprovalRequest.create.mockResolvedValueOnce(
+          approvalRestoreRow(),
+        );
+        const summary = await service.requestRestoreProduct('prod_archived');
+        expect(summary.tool).toBe('restore_product');
+        expect(summary.status).toBe(AGENT_APPROVAL_STATUS.PENDING);
+        expect(summary.riskLevel).toBe('HIGH');
+        expect(summary.tokenIssued).toBe(false);
+        expect(summary.approvalToken).toBeUndefined();
+      });
+
+      it('R1b writes APPROVAL_REQUESTED audit row linked to the new approval', async () => {
+        prismaMock.agentApprovalRequest.create.mockResolvedValueOnce(
+          approvalRestoreRow(),
+        );
+        await service.requestRestoreProduct('prod_archived');
+        expect(auditMock.record).toHaveBeenCalledTimes(1);
+        const audit = auditCalls[0];
+        expect(audit.actionType).toBe('APPROVAL_REQUESTED');
+        expect(audit.tool).toBe('restore_product');
+        expect(audit.approvalRequestId).toBe('appr_restore_1');
+        expect(audit.approvalRequired).toBe(true);
+      });
+
+      it('R2 draft product (archivedAt: null) cannot be restored', async () => {
+        restoreValidatorMock.validateRestorable.mockRejectedValueOnce(
+          new BadRequestException(
+            'This product is a draft, not an archived product. Use publish_product instead.',
+          ),
+        );
+        await expect(
+          service.requestRestoreProduct('prod_draft_only'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prismaMock.agentApprovalRequest.create).not.toHaveBeenCalled();
+        expect(auditMock.record).not.toHaveBeenCalled();
+      });
+
+      it('R3 active product cannot be restored', async () => {
+        restoreValidatorMock.validateRestorable.mockRejectedValueOnce(
+          new BadRequestException(
+            'Product is already active. Nothing to restore.',
+          ),
+        );
+        await expect(
+          service.requestRestoreProduct('prod_active_running'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prismaMock.agentApprovalRequest.create).not.toHaveBeenCalled();
+      });
+
+      it('R4 soft-deleted product cannot be restored via restore_product (recycle-bin path is separate)', async () => {
+        restoreValidatorMock.validateRestorable.mockRejectedValueOnce(
+          new BadRequestException(
+            'Product is soft-deleted (in the recycle bin).',
+          ),
+        );
+        await expect(
+          service.requestRestoreProduct('prod_in_recycle'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prismaMock.agentApprovalRequest.create).not.toHaveBeenCalled();
+      });
+
+      it('R5 cross-tenant product cannot be restored (validator returns "not found" for wrong tenant)', async () => {
+        restoreValidatorMock.validateRestorable.mockRejectedValueOnce(
+          new BadRequestException(
+            'Product prod_other_tenant not found in this tenant — cannot restore.',
+          ),
+        );
+        await expect(
+          service.requestRestoreProduct('prod_other_tenant'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prismaMock.agentApprovalRequest.create).not.toHaveBeenCalled();
+      });
+
+      it('R6 stored row carries correct before/after values (state flip + archivedAt)', async () => {
+        prismaMock.agentApprovalRequest.create.mockImplementationOnce(
+          async ({ data }: any) => ({
+            ...approvalRestoreRow(),
+            ...data,
+            id: 'appr_restore_1',
+          }),
+        );
+        await service.requestRestoreProduct('prod_archived');
+        const args =
+          prismaMock.agentApprovalRequest.create.mock.calls[0][0];
+        expect(args.data.beforeValues).toMatchObject({
+          isActive: false,
+          archivedAt: expect.any(String), // ISO timestamp of pre-restore state
+        });
+        expect(args.data.afterValues).toMatchObject({
+          isActive: true,
+          archivedAt: null,
+        });
+        expect(args.data.actionTitle).toMatch(/^Restore '.+'$/);
+        expect(args.data.targetResourceType).toBe('Product');
+      });
+
+      it('R7 stored row carries expectedUpdatedAt + payloadHash bound to (toolName, productId)', async () => {
+        const ts = new Date('2026-05-11T09:50:00Z');
+        restoreValidatorMock.validateRestorable.mockResolvedValueOnce({
+          product: archivedProductFixture({ updatedAt: ts }),
+        });
+        prismaMock.agentApprovalRequest.create.mockImplementationOnce(
+          async ({ data }: any) => ({
+            ...approvalRestoreRow(),
+            ...data,
+            id: 'appr_restore_1',
+          }),
+        );
+        await service.requestRestoreProduct('prod_archived');
+        const args =
+          prismaMock.agentApprovalRequest.create.mock.calls[0][0];
+        expect(args.data.expectedUpdatedAt).toEqual(ts);
+        expect(args.data.payloadHash).toBe(
+          payloadHash('restore_product', { productId: 'prod_archived' }),
+        );
+        // Distinct from publish_product's hash for the same id.
+        expect(args.data.payloadHash).not.toBe(
+          payloadHash('publish_product', { productId: 'prod_archived' }),
+        );
+        // approvalTokenHash NEVER persists at request time.
+        expect(args.data.approvalTokenHash).toBeUndefined();
+      });
+    });
+
+    // ─── APPROVE — tests R8, R9, R10 ─────────────────────────────────
+    describe('approve (restore)', () => {
+      beforeEach(() => {
+        service = makeService(
+          activeRequest({ user: { id: APPROVER, sub: APPROVER } }),
+        );
+      });
+
+      it('R8 initiator cannot approve own restore request', async () => {
+        service = makeService(
+          activeRequest({ user: { id: OPERATOR, sub: OPERATOR } }),
+        );
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvalRestoreRow(),
+        );
+        await expect(
+          service.approve('appr_restore_1'),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        const blocked = auditCalls.find(
+          (c) => c.actionType === 'SELF_APPROVAL_BLOCKED',
+        );
+        expect(blocked).toBeTruthy();
+        expect(blocked.tool).toBe('restore_product');
+        expect(blocked.severity).toBe('WARNING');
+      });
+
+      it('R9 different approver approves + receives raw token exactly once', async () => {
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvalRestoreRow(),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+          approvalRestoreRow({
+            status: AGENT_APPROVAL_STATUS.APPROVED,
+            approvedByAdminUserId: APPROVER,
+          }),
+        );
+        const summary = await service.approve('appr_restore_1');
+        expect(summary.status).toBe(AGENT_APPROVAL_STATUS.APPROVED);
+        expect(summary.approvalToken).toMatch(/^[a-f0-9]{64}$/);
+        expect(summary.tokenIssued).toBe(true);
+      });
+
+      it('R10 raw token never appears in any audit input/output during restore approve', async () => {
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvalRestoreRow(),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+          approvalRestoreRow({
+            status: AGENT_APPROVAL_STATUS.APPROVED,
+            approvedByAdminUserId: APPROVER,
+          }),
+        );
+        const summary = await service.approve('appr_restore_1');
+        const rawToken = summary.approvalToken!;
+        for (const call of auditCalls) {
+          const inputStr = JSON.stringify(call.input ?? {});
+          const outputStr = JSON.stringify(call.output ?? {});
+          expect(inputStr).not.toContain(rawToken);
+          expect(outputStr).not.toContain(rawToken);
+          expect(inputStr).not.toMatch(/[a-f0-9]{64}/);
+          expect(outputStr).not.toMatch(/[a-f0-9]{64}/);
+        }
+      });
+    });
+
+    // ─── EXECUTE — tests R11, R12, R13, R14, R15, R16, R17 ─────────
+    describe('execute (restore)', () => {
+      function approvedRestoreRow(rawToken: string, overrides: any = {}) {
+        return approvalRestoreRow({
+          status: AGENT_APPROVAL_STATUS.APPROVED,
+          approvedByAdminUserId: APPROVER,
+          approvedAt: NOW,
+          approvalTokenHash: hashApprovalToken(rawToken),
+          ...overrides,
+        });
+      }
+
+      it('R11 successful execute flips product to isActive=true AND archivedAt=null', async () => {
+        const rawToken = 'a'.repeat(64);
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvedRestoreRow(rawToken),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        prismaMock.product.findFirst.mockResolvedValueOnce(
+          archivedProductFixture(),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        prismaMock.product.update.mockResolvedValueOnce({
+          id: 'prod_archived',
+          slug: 'previously-active-gown',
+          isActive: true,
+        });
+        prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+          approvalRestoreRow({ status: AGENT_APPROVAL_STATUS.CONSUMED }),
+        );
+        const result = await service.execute('appr_restore_1', rawToken);
+        expect(result.data.isActive).toBe(true);
+        expect(result.approvalRequest.status).toBe(
+          AGENT_APPROVAL_STATUS.CONSUMED,
+        );
+        const writeCall = prismaMock.product.update.mock.calls[0][0];
+        expect(writeCall.where).toEqual({ id: 'prod_archived' });
+        expect(writeCall.data.isActive).toBe(true);
+        expect(writeCall.data.archivedAt).toBeNull();
+      });
+
+      it('R12 execute does NOT modify deletedAt (restore is not a recycle-bin operation)', async () => {
+        const rawToken = 'b'.repeat(64);
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvedRestoreRow(rawToken),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        prismaMock.product.findFirst.mockResolvedValueOnce(
+          archivedProductFixture(),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        prismaMock.product.update.mockResolvedValueOnce({
+          id: 'prod_archived',
+          slug: 'previously-active-gown',
+          isActive: true,
+        });
+        prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+          approvalRestoreRow({ status: AGENT_APPROVAL_STATUS.CONSUMED }),
+        );
+        await service.execute('appr_restore_1', rawToken);
+        const writeCall = prismaMock.product.update.mock.calls[0][0];
+        expect('deletedAt' in writeCall.data).toBe(false);
+      });
+
+      it('R13 success writes a linked RESTORE audit row (not PUBLISH, not ARCHIVE)', async () => {
+        const rawToken = 'c'.repeat(64);
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvedRestoreRow(rawToken),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        prismaMock.product.findFirst.mockResolvedValueOnce(
+          archivedProductFixture(),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        prismaMock.product.update.mockResolvedValueOnce({
+          id: 'prod_archived',
+          slug: 'previously-active-gown',
+          isActive: true,
+        });
+        prismaMock.agentApprovalRequest.findUnique.mockResolvedValueOnce(
+          approvalRestoreRow({ status: AGENT_APPROVAL_STATUS.CONSUMED }),
+        );
+        await service.execute('appr_restore_1', rawToken);
+        const restoreAudit = auditCalls.find(
+          (c) => c.actionType === 'RESTORE',
+        );
+        expect(restoreAudit).toBeTruthy();
+        expect(restoreAudit.tool).toBe('restore_product');
+        expect(restoreAudit.approvalRequestId).toBe('appr_restore_1');
+        expect(restoreAudit.severity).toBe('NOTICE');
+        // No raw token literal anywhere.
+        expect(JSON.stringify(restoreAudit.input)).not.toMatch(
+          /[a-f0-9]{64}/,
+        );
+        expect(JSON.stringify(restoreAudit.output)).not.toMatch(
+          /[a-f0-9]{64}/,
+        );
+        // Verify no ARCHIVE / PUBLISH audit rows were also written —
+        // the dispatch should hit exactly ONE successActionType.
+        expect(auditCalls.find((c) => c.actionType === 'ARCHIVE')).toBeFalsy();
+        expect(auditCalls.find((c) => c.actionType === 'PUBLISH')).toBeFalsy();
+      });
+
+      it('R14 stale expectedUpdatedAt fails with stale_data + invalidates approval', async () => {
+        const rawToken = 'd'.repeat(64);
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvedRestoreRow(rawToken),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        // Live product's updatedAt drifted compared to expectedUpdatedAt.
+        prismaMock.product.findFirst.mockResolvedValueOnce(
+          archivedProductFixture({
+            updatedAt: new Date('2026-05-11T09:59:59Z'),
+          }),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        await expect(
+          service.execute('appr_restore_1', rawToken),
+        ).rejects.toMatchObject({ response: { code: 'stale_data' } });
+        const invalidate = prismaMock.agentApprovalRequest.updateMany.mock.calls.find(
+          (c: any) => c[0].data.expirationReason === 'stale_data',
+        );
+        expect(invalidate).toBeTruthy();
+        expect(invalidate[0].data.status).toBe(
+          AGENT_APPROVAL_STATUS.EXPIRED,
+        );
+        expect(invalidate[0].data.approvalTokenHash).toBeNull();
+      });
+
+      it('R15 payload hash mismatch blocks execution + invalidates approval', async () => {
+        const rawToken = 'e'.repeat(64);
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvedRestoreRow(rawToken, {
+            payloadHash: 'completely_different_hash',
+          }),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        prismaMock.product.findFirst.mockResolvedValueOnce(
+          archivedProductFixture(),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        await expect(
+          service.execute('appr_restore_1', rawToken),
+        ).rejects.toBeInstanceOf(ConflictException);
+        const invalidate = prismaMock.agentApprovalRequest.updateMany.mock.calls.find(
+          (c: any) => c[0].data.expirationReason === 'payload_mismatch',
+        );
+        expect(invalidate).toBeTruthy();
+        expect(invalidate[0].data.status).toBe(
+          AGENT_APPROVAL_STATUS.EXPIRED,
+        );
+        expect(invalidate[0].data.approvalTokenHash).toBeNull();
+      });
+
+      it('R16a expired approval cannot execute', async () => {
+        const rawToken = 'f'.repeat(64);
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(
+          approvedRestoreRow(rawToken, {
+            expiresAt: new Date(NOW.getTime() - 1000),
+          }),
+        );
+        prismaMock.agentApprovalRequest.updateMany.mockResolvedValueOnce({
+          count: 1,
+        });
+        await expect(
+          service.execute('appr_restore_1', rawToken),
+        ).rejects.toMatchObject({ response: { code: 'approval_expired' } });
+      });
+
+      it('R16b rejected/revoked/consumed approval cannot execute (hash cleared → no row matches)', async () => {
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(null);
+        await expect(
+          service.execute('appr_restore_1', 'x'.repeat(64)),
+        ).rejects.toMatchObject({
+          response: { code: 'approval_invalid_or_consumed' },
+        });
+      });
+
+      it('R17a tenant A cannot execute tenant B restore (token-hash lookup is tenant-scoped)', async () => {
+        const rawToken = 'g'.repeat(64);
+        service = makeService(
+          activeRequest({ user: { id: OPERATOR, sub: OPERATOR } }),
+          TENANT_A,
+        );
+        prismaMock.agentApprovalRequest.findFirst.mockImplementationOnce(
+          ({ where }: any) =>
+            Promise.resolve(
+              where.tenantId === TENANT_B ? approvalRestoreRow() : null,
+            ),
+        );
+        await expect(
+          service.execute('appr_restore_b', rawToken),
+        ).rejects.toMatchObject({
+          response: { code: 'approval_invalid_or_consumed' },
+        });
+      });
+
+      it('R17b tenant A cannot approve tenant B restore request (404, not 403)', async () => {
+        service = makeService(
+          activeRequest({ user: { id: APPROVER, sub: APPROVER } }),
+          TENANT_A,
+        );
+        prismaMock.agentApprovalRequest.findFirst.mockResolvedValueOnce(null);
+        await expect(
+          service.approve('appr_restore_from_tenant_b'),
+        ).rejects.toBeInstanceOf(NotFoundException);
+      });
+    });
+
+    // ─── STRUCTURAL — tests R18, R19, R20, R21, R22 ─────────────────
+    describe('Phase 3.1B.β structural invariants', () => {
+      const productsControllerPath = join(
+        __dirname,
+        '..',
+        'controllers',
+        'products.ai.controller.ts',
+      );
+      const productsSrc = readFileSync(productsControllerPath, 'utf8');
+
+      it('R18 existing publish_product flow still wired (sanity)', () => {
+        expect(productsSrc).toMatch(/@Post\(':id\/publish\/request-approval'\)/);
+      });
+
+      it('R19 existing archive_product flow still wired (sanity)', () => {
+        expect(productsSrc).toMatch(/@Post\(':id\/archive\/request-approval'\)/);
+      });
+
+      it('R20 no direct restore route — only :id/restore/request-approval', () => {
+        const stripped = productsSrc
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/^\s*\/\/.*$/gm, '');
+        expect(stripped).not.toMatch(/@Post\(':id\/restore'\)/);
+        expect(stripped).not.toMatch(/@Patch\(':id\/restore'/);
+        expect(stripped).not.toMatch(/@Delete\(':id\/restore'/);
+        // And the request-approval form is the only legitimate path.
+        expect(stripped).toMatch(/@Post\(':id\/restore\/request-approval'\)/);
+      });
+
+      it('R21 no inventory/order/rental/payment/permanent-delete routes exist', () => {
+        const forbidden = [
+          '/adjust',
+          ':id/return',
+          '/permanent-delete',
+          '/refund',
+          ':id/status',
+          'rental-policies',
+        ];
+        const fs = require('fs');
+        const dir = join(__dirname, '..', 'controllers');
+        const files = fs
+          .readdirSync(dir)
+          .filter(
+            (f: string) =>
+              f.endsWith('.ai.controller.ts') && !f.endsWith('.spec.ts'),
+          );
+        for (const file of files) {
+          const src = readFileSync(join(dir, file), 'utf8');
+          const stripped = src
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/^\s*\/\/.*$/gm, '');
+          for (const f of forbidden) {
+            const re = new RegExp(
+              `@(Post|Patch|Put|Delete)\\([^)]*${escapeRegex(f)}[^)]*\\)`,
+            );
+            if (re.test(stripped)) {
+              throw new Error(`Forbidden write route found in ${file}: ${f}`);
+            }
+          }
+        }
+      });
+
+      it('R22 token hardening invariants still pass: execute audit input shape is still tokenProvided/tokenHashPrefix only (regression guard)', () => {
+        const approvalsCtrlPath = join(
+          __dirname,
+          '..',
+          'controllers',
+          'approvals.ai.controller.ts',
+        );
+        const src = readFileSync(approvalsCtrlPath, 'utf8');
+        const stripped = src
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/^\s*\/\/.*$/gm, '');
+        // The tokenProvided boolean + tokenHashPrefix (6 hex) must still
+        // be the only shape the controller hands to the runner.
+        expect(stripped).toMatch(/tokenProvided:\s*!!dto\.approvalToken/);
+        expect(stripped).toMatch(
+          /hashApprovalToken\([^)]*\)\.slice\(\s*0\s*,\s*6\s*\)/,
+        );
+        // And the controller must NEVER hand the raw token to runner.input.
+        expect(stripped).not.toMatch(
+          /input:\s*\{[^}]*approvalToken:\s*dto\.approvalToken/,
+        );
+      });
     });
   });
 

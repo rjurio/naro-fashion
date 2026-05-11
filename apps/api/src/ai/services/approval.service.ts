@@ -16,6 +16,7 @@ import { TenantContext } from '../../tenant/tenant.context';
 import { AiAuditService } from './ai-audit.service';
 import { PublishValidationService } from './publish-validation.service';
 import { ArchiveValidationService } from './archive-validation.service';
+import { RestoreValidationService } from './restore-validation.service';
 import { payloadHash } from '../util/canonical-json';
 import {
   generateApprovalToken,
@@ -39,6 +40,7 @@ import {
 export const APPROVAL_TOOL_NAMES = {
   PUBLISH_PRODUCT: 'publish_product',
   ARCHIVE_PRODUCT: 'archive_product',
+  RESTORE_PRODUCT: 'restore_product',
 } as const;
 
 export type ApprovalToolName =
@@ -92,6 +94,7 @@ export class ApprovalService {
     private readonly audit: AiAuditService,
     private readonly publishValidator: PublishValidationService,
     private readonly archiveValidator: ArchiveValidationService,
+    private readonly restoreValidator: RestoreValidationService,
   ) {}
 
   // ────────────────────────────────────────────────────────────────────
@@ -229,6 +232,97 @@ export class ApprovalService {
         businessSummary:
           `Hide this product from the storefront. It will remain in admin ` +
           `for restore. Customers will get 404 on its slug. ` +
+          `Current price: TZS ${Number(product.basePrice ?? 0).toLocaleString('en-US')}.`,
+        riskLevel,
+        beforeValues: beforeValues as any,
+        afterValues: afterValues as any,
+        expectedUpdatedAt: product.updatedAt,
+        status: AGENT_APPROVAL_STATUS.PENDING,
+        expiresAt,
+      },
+    });
+
+    await this.audit.record({
+      tool,
+      actionType: 'APPROVAL_REQUESTED',
+      input: inputJson,
+      targetResourceType: 'Product',
+      targetResourceId: product.id,
+      approvalRequestId: created.id,
+      approvalRequired: true,
+      approvalStatus: AGENT_APPROVAL_STATUS.PENDING,
+      severity: 'NOTICE',
+      status: 'SUCCESS',
+    });
+
+    return this.toSummary(created);
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  //   request-approval — restore_product (Phase 3.1B.β)
+  // ────────────────────────────────────────────────────────────────────
+
+  /**
+   * Build the AgentApprovalRequest for `restore_product`. Mirror of
+   * `requestArchiveProduct` with the state direction inverted: archived
+   * → active. The validator gates on `archivedAt: not null` so DRAFT
+   * products (`isActive: false, archivedAt: null`) cannot be restored
+   * through this verb — operators must use `publish_product` for drafts
+   * because the publish flow runs the full readiness checks.
+   *
+   * Write semantics on consume: `{ isActive: true, archivedAt: null }`.
+   * Functionally identical to publish_product's consume — they differ
+   * only in the validator (publish gates on archivedAt: null for drafts,
+   * restore gates on archivedAt: not null for archived rows). One verb,
+   * one state-machine arc, no ambiguity.
+   */
+  async requestRestoreProduct(
+    productId: string,
+  ): Promise<ApprovalRequestSummary> {
+    const tenantId = this.tenantContext.requireId;
+    const initiatorId = this.requireAdminUserId();
+    const tool = APPROVAL_TOOL_NAMES.RESTORE_PRODUCT;
+    const riskLevel = AI_RISK_LEVEL.HIGH;
+
+    const { product } = await this.restoreValidator.validateRestorable(
+      productId,
+      tenantId,
+    );
+
+    const ttlMs = AI_RISK_LEVEL_TTL_MS[riskLevel];
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + ttlMs);
+
+    const inputJson = { productId };
+    const hash = payloadHash(tool, inputJson);
+
+    const beforeValues = {
+      isActive: false,
+      archivedAt: product.archivedAt?.toISOString() ?? null,
+      slug: product.slug,
+      name: product.name,
+    };
+    const afterValues = {
+      isActive: true,
+      archivedAt: null,
+      slug: product.slug,
+      name: product.name,
+    };
+
+    const created = await this.prisma.agentApprovalRequest.create({
+      data: {
+        tenantId,
+        requestedByAdminUserId: initiatorId,
+        toolName: tool,
+        targetResourceType: 'Product',
+        targetResourceId: product.id,
+        targetResourceName: product.name,
+        inputJson: inputJson as any,
+        payloadHash: hash,
+        actionTitle: `Restore '${product.name}'`,
+        businessSummary:
+          `Bring this previously-archived product back to the storefront. ` +
+          `Customers will see it at https://www.narofashion.co.tz/products/${product.slug}. ` +
           `Current price: TZS ${Number(product.basePrice ?? 0).toLocaleString('en-US')}.`,
         riskLevel,
         beforeValues: beforeValues as any,
@@ -739,9 +833,17 @@ export class ApprovalService {
     }
 
     // Tool-specific final pre-flight validation — re-runs against the
-    // current resource state so a product that became un-publishable or
-    // un-archivable since request time is rejected here. Each tool has
-    // its own validator + its own "what change to write" semantics.
+    // current resource state so a product that became un-publishable /
+    // un-archivable / un-restorable since request time is rejected here.
+    // Each tool has its own validator + its own "what change to write"
+    // semantics.
+    //
+    // publish_product and restore_product share the consume write
+    // (`{ isActive: true, archivedAt: null }`) but DIFFER on the
+    // validator: publish requires `archivedAt: null` (drafts only),
+    // restore requires `archivedAt: not null` (archived rows only). The
+    // single-direction state machine is the whole reason the lifecycle
+    // marker was added in PR-α.
     let nextActiveState: boolean;
     switch (row.toolName) {
       case APPROVAL_TOOL_NAMES.PUBLISH_PRODUCT:
@@ -757,6 +859,13 @@ export class ApprovalService {
           tenantId,
         );
         nextActiveState = false;
+        break;
+      case APPROVAL_TOOL_NAMES.RESTORE_PRODUCT:
+        await this.restoreValidator.validateRestorable(
+          row.targetResourceId!,
+          tenantId,
+        );
+        nextActiveState = true;
         break;
       default:
         // Unknown tool stored on the row — defensive. Should never trip
@@ -857,11 +966,13 @@ export class ApprovalService {
     // Success — write the final audit row linking the underlying op back
     // to the approval. Severity follows the risk level. actionType
     // tracks the tool so the activity dashboard can render the
-    // operation-specific verb (PUBLISH vs ARCHIVE).
-    const successActionType =
-      row.toolName === APPROVAL_TOOL_NAMES.ARCHIVE_PRODUCT
-        ? 'ARCHIVE'
-        : 'PUBLISH';
+    // operation-specific verb (PUBLISH / ARCHIVE / RESTORE).
+    let successActionType: 'PUBLISH' | 'ARCHIVE' | 'RESTORE' = 'PUBLISH';
+    if (row.toolName === APPROVAL_TOOL_NAMES.ARCHIVE_PRODUCT) {
+      successActionType = 'ARCHIVE';
+    } else if (row.toolName === APPROVAL_TOOL_NAMES.RESTORE_PRODUCT) {
+      successActionType = 'RESTORE';
+    }
     await this.audit.record({
       tool: row.toolName,
       actionType: successActionType,

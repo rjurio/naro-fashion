@@ -4,6 +4,94 @@ Four phases. Each phase is independently shippable to production behind the `ai-
 
 ---
 
+## Phase 3.1B.β status — IMPLEMENTED 2026-05-11 ✅ (restore_product)
+
+**Scope shipped**: the third risky AI tool — `restore_product`. Brings a previously-archived product (`isActive: false, archivedAt: not null, deletedAt: null`) back to ACTIVE via the same approval workflow as publish + archive. Validator rejects drafts (`archivedAt: null`) with a "use publish_product instead" hint so the operator picks the right verb for the lifecycle state.
+
+### What's live (in addition to Phase 3.1A + 3.1B archive + 3.1B.α schema)
+
+| Surface | Route | Notes |
+|---|---|---|
+| Initiate (restore_product) | `POST /api/v1/ai/products/:id/restore/request-approval` | Operator perm: `ai-agent:write-drafts`. Risk: HIGH (2-min TTL). `@RequiresApproval(HIGH)` metadata. |
+
+Approve / reject / revoke / cancel / execute / list / get are unchanged — `ApprovalsAiController` is tool-agnostic and dispatches via `row.toolName` (now switching on three cases instead of two).
+
+### How restore_product differs from the other two
+
+| Aspect | publish_product | archive_product | **restore_product** |
+|---|---|---|---|
+| Validator | `validatePublishable` — drafts only (`isActive: false, archivedAt: null`) + readiness checks | `validateArchivable` — active rows only (`isActive: true`) | **`validateRestorable`** — archived rows only (`isActive: false, archivedAt: not null, deletedAt: null`) |
+| `beforeValues` | `{ isActive: false, slug, basePrice }` | `{ isActive: true, slug, name }` | `{ isActive: false, archivedAt: "<ISO>", slug, name }` |
+| `afterValues` | `{ isActive: true, slug, basePrice }` | `{ isActive: false, slug, name }` | `{ isActive: true, archivedAt: null, slug, name }` |
+| Consume write | `{ isActive: true, archivedAt: null }` | `{ isActive: false, archivedAt: new Date() }` | **`{ isActive: true, archivedAt: null }`** — functionally identical to publish |
+| Success audit `actionType` | `PUBLISH` | `ARCHIVE` | **`RESTORE`** |
+| `deletedAt` touched? | No | No | **No** — restore is NOT a recycle-bin restore; the regular admin endpoint `PATCH /products/:id/restore` handles `deletedAt: null` separately |
+| Drafts accepted? | YES (the canonical verb for drafts) | NO (already inactive) | **NO** — drafts must go through `publish_product` because the publish flow runs the full readiness checks; archived rows already passed them once |
+
+### Dispatch in `execute()`
+
+`ApprovalService.execute()` `switch`-es on `row.toolName` for both the pre-write validator AND the `nextActiveState` boolean:
+
+```typescript
+switch (row.toolName) {
+  case APPROVAL_TOOL_NAMES.PUBLISH_PRODUCT:
+    await this.publishValidator.validatePublishable(...); nextActiveState = true;  break;
+  case APPROVAL_TOOL_NAMES.ARCHIVE_PRODUCT:
+    await this.archiveValidator.validateArchivable(...);  nextActiveState = false; break;
+  case APPROVAL_TOOL_NAMES.RESTORE_PRODUCT:
+    await this.restoreValidator.validateRestorable(...);  nextActiveState = true;  break;
+  default:
+    throw new BadRequestException(`Unsupported approval tool '${row.toolName}' for execute().`);
+}
+// consume transaction:
+await tx.product.update({
+  where: { id: row.targetResourceId! },
+  data: {
+    isActive: nextActiveState,
+    archivedAt: nextActiveState ? null : new Date(),
+  },
+});
+```
+
+### Tests added
+
+`approval.service.spec.ts` ships **+25** restore-specific tests in a `describe('restore_product …')` block:
+
+| # | Test |
+|---|---|
+| R1, R1b | Operator can create restore approval + linked APPROVAL_REQUESTED audit |
+| R2 | Draft (archivedAt: null) rejected |
+| R3 | Active product rejected |
+| R4 | Soft-deleted rejected (recycle-bin path is separate) |
+| R5 | Cross-tenant rejected |
+| R6 | beforeValues/afterValues correct (archivedAt ISO in before, null in after) |
+| R7 | expectedUpdatedAt + payloadHash bound to (toolName, productId); hash distinct from publish's |
+| R8 | Initiator cannot self-approve restore |
+| R9 | Different approver gets raw token once |
+| R10 | Raw token never in audit during approve |
+| R11 | Execute flips to `{ isActive: true, archivedAt: null }` |
+| R12 | Execute does NOT modify deletedAt |
+| R13 | Linked RESTORE audit row written (not PUBLISH, not ARCHIVE); no raw token |
+| R14 | Stale expectedUpdatedAt → 409 + invalidate |
+| R15 | Payload hash mismatch → 409 + invalidate |
+| R16a/b | Expired and rejected/revoked/consumed cannot execute |
+| R17a/b | Cross-tenant execute + approve both blocked |
+| R18, R19 | publish + archive routes still wired (sanity) |
+| R20 | No direct `:id/restore` route — only request-approval form |
+| R21 | No inventory/order/rental/payment/permanent-delete routes |
+| R22 | Token hardening invariants still pass (tokenProvided + tokenHashPrefix, no raw token in runner input) |
+
+`phase-3-foundation.spec.ts` updated:
+- `@RequiresApproval` count expected = **3** (publish + archive + restore).
+- "Only `@Post` paths containing publish/archive/restore are the three request-approval routes" assertion (sorted equality).
+- Direct `:id/restore` write routes (`@Post`, `@Patch`, `@Delete`) explicitly rejected.
+
+`ai-controllers.shape.spec.ts` allowlist extended with `@Post(':id/restore/request-approval')`.
+
+Total: 405 tests passing across 12 suites (was 380 → +25).
+
+---
+
 ## Phase 3.1B.α status — IMPLEMENTED 2026-05-11 ✅ (Product.archivedAt lifecycle marker)
 
 **Scope shipped**: Adds the `archivedAt: DateTime?` column to `Product` so `restore_product` (PR-β, not in this PR) can safely distinguish drafts from previously-archived products. Updates `archive_product` execute to stamp the field and `publish_product` execute to clear it. Tightens `publish_product`'s validator to reject archived rows with a "use restore_product" hint.

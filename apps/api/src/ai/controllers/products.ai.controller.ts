@@ -162,4 +162,30 @@ export class ProductsAiController {
         'Approval requested. A different admin must approve before archiving.',
     });
   }
+
+  // POST /api/v1/ai/products/:id/restore/request-approval  (Phase 3.1B.β)
+  //
+  // Un-archive: bring a previously-archived product back to the
+  // storefront. Same approval workflow as publish/archive (HIGH risk,
+  // 2-min TTL, four-eyes, hashed token, payloadHash, expectedUpdatedAt
+  // stale-data, 3-attempt cap). The validator gates on
+  // `archivedAt: not null` so DRAFT products cannot use this verb —
+  // drafts go through `publish_product` because that runs the full
+  // readiness checks. No direct restore endpoint — only the
+  // request-approval initiator route.
+  @RequiresAiPermission(AI_PERMISSION_CODES.WRITE_DRAFTS)
+  @RequiresApproval(AI_RISK_LEVEL.HIGH)
+  @Post(':id/restore/request-approval')
+  requestRestore(@Param('id') id: string) {
+    return this.runner.run({
+      tool: 'restore_product',
+      actionType: 'APPROVAL_REQUESTED',
+      input: { productId: id },
+      targetResourceType: 'Product',
+      targetResourceId: id,
+      handler: () => this.approvals.requestRestoreProduct(id),
+      message: () =>
+        'Approval requested. A different admin must approve before restoring.',
+    });
+  }
 }

@@ -230,7 +230,7 @@ describe('Phase 3.0 foundation invariants', () => {
   // E. Phase 3.1A + 3.1B — only publish_product + archive_product are
   //                       wired as risky tools
   // ─────────────────────────────────────────────────────────────────────
-  describe('Phase 3.1A+3.1B — only publish_product and archive_product are risky tools', () => {
+  describe('Phase 3.1A+3.1B — publish_product, archive_product, restore_product are the risky tools', () => {
     /**
      * Risky paths that must NEVER appear in any AI controller until the
      * design adds the relevant tool. archive_product is allowed under
@@ -265,26 +265,31 @@ describe('Phase 3.0 foundation invariants', () => {
       },
     );
 
-    it('no direct :id/archive write route exists — only :id/archive/request-approval', () => {
-      // Defence in depth: assert there is no bare `@Post(':id/archive')`
-      // or PATCH/DELETE on the archive path. The approval-gated form is
-      // allowed; the direct form would be a bypass of the workflow.
+    it('no direct :id/archive or :id/restore write route exists — only :id/<verb>/request-approval', () => {
+      // Defence in depth: assert there is no bare `@Post(':id/archive')`,
+      // `@Post(':id/restore')`, or PATCH/DELETE on either path. The
+      // approval-gated forms are allowed; the direct forms would be a
+      // bypass of the workflow.
       for (const file of controllerFiles) {
         const src = readFileSync(join(AI_CONTROLLERS_DIR, file), 'utf8');
         const stripped = src
           .replace(/\/\*[\s\S]*?\*\//g, '')
           .replace(/^\s*\/\/.*$/gm, '');
-        // Disallowed: `:id/archive` not followed by `/request-approval`.
+        // archive
         expect(stripped).not.toMatch(/@Post\(':id\/archive'\)/);
         expect(stripped).not.toMatch(/@Patch\(':id\/archive'/);
         expect(stripped).not.toMatch(/@Delete\(':id\/archive'/);
+        // restore
+        expect(stripped).not.toMatch(/@Post\(':id\/restore'\)/);
+        expect(stripped).not.toMatch(/@Patch\(':id\/restore'/);
+        expect(stripped).not.toMatch(/@Delete\(':id\/restore'/);
       }
     });
 
-    it('@RequiresApproval is applied to exactly the publish and archive request-approval routes', () => {
-      // The decorator must appear on exactly two routes — publish +
-      // archive — and both must live on products.ai.controller.ts.
-      // Anything else means a new risky tool slipped in.
+    it('@RequiresApproval is applied to exactly the publish, archive, and restore request-approval routes', () => {
+      // The decorator must appear on exactly three routes — publish +
+      // archive + restore — all on products.ai.controller.ts. Anything
+      // else means a new risky tool slipped in.
       const occurrences: Array<{ file: string; count: number }> = [];
       for (const file of controllerFiles) {
         const src = readFileSync(join(AI_CONTROLLERS_DIR, file), 'utf8');
@@ -295,11 +300,11 @@ describe('Phase 3.0 foundation invariants', () => {
         if (count > 0) occurrences.push({ file, count });
       }
       expect(occurrences).toEqual([
-        { file: 'products.ai.controller.ts', count: 2 },
+        { file: 'products.ai.controller.ts', count: 3 },
       ]);
     });
 
-    it('the publish/archive request-approval routes are the ONLY Post paths containing those verbs', () => {
+    it('the publish/archive/restore request-approval routes are the ONLY Post paths containing those verbs', () => {
       const matches: string[] = [];
       for (const file of controllerFiles) {
         const src = readFileSync(join(AI_CONTROLLERS_DIR, file), 'utf8');
@@ -307,13 +312,14 @@ describe('Phase 3.0 foundation invariants', () => {
           .replace(/\/\*[\s\S]*?\*\//g, '')
           .replace(/^\s*\/\/.*$/gm, '');
         const found =
-          stripped.match(/@Post\([^)]*(publish|archive)[^)]*\)/g) ?? [];
+          stripped.match(/@Post\([^)]*(publish|archive|restore)[^)]*\)/g) ?? [];
         for (const m of found) matches.push(`${file}: ${m}`);
       }
       expect(matches.sort()).toEqual(
         [
           "products.ai.controller.ts: @Post(':id/publish/request-approval')",
           "products.ai.controller.ts: @Post(':id/archive/request-approval')",
+          "products.ai.controller.ts: @Post(':id/restore/request-approval')",
         ].sort(),
       );
     });
