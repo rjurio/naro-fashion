@@ -1,10 +1,17 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { AdminUsersService } from './admin-users.service';
 import { CreateAdminUserDto } from './dto/create-admin-user.dto';
 import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
+// JwtStrategy.validate() returns { id, email, ... } — the AdminUser row.
+// `sub` only exists on the raw JWT payload, NOT on req.user. Reading
+// req.user.sub yields undefined, which silently defeats the
+// self-modification guards in AdminUsersService (e.g. `if (id === performedById)`
+// evaluates false when performedById is undefined). Always pull the id via
+// `@CurrentUser('id')`.
 @Controller('admin-users')
 @UseGuards(JwtAuthGuard, AdminGuard)
 export class AdminUsersController {
@@ -29,8 +36,8 @@ export class AdminUsersController {
   }
 
   @Post()
-  create(@Body() dto: CreateAdminUserDto, @Request() req: any) {
-    return this.adminUsersService.create(dto, req.user.sub);
+  create(@Body() dto: CreateAdminUserDto, @CurrentUser('id') performedById: string) {
+    return this.adminUsersService.create(dto, performedById);
   }
 
   @Patch(':id')
@@ -39,13 +46,13 @@ export class AdminUsersController {
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string, @Request() req: any) {
-    return this.adminUsersService.remove(id, req.user.sub);
+  remove(@Param('id') id: string, @CurrentUser('id') performedById: string) {
+    return this.adminUsersService.remove(id, performedById);
   }
 
   @Patch(':id/toggle')
-  toggle(@Param('id') id: string, @Request() req: any) {
-    return this.adminUsersService.toggle(id, req.user.sub);
+  toggle(@Param('id') id: string, @CurrentUser('id') performedById: string) {
+    return this.adminUsersService.toggle(id, performedById);
   }
 
   @Patch(':id/unlock')
@@ -54,13 +61,21 @@ export class AdminUsersController {
   }
 
   @Post(':id/roles')
-  assignRole(@Param('id') id: string, @Body() body: { roleId: string }, @Request() req: any) {
-    return this.adminUsersService.assignRole(id, body.roleId, req.user.sub);
+  assignRole(
+    @Param('id') id: string,
+    @Body() body: { roleId: string },
+    @CurrentUser('id') performedById: string,
+  ) {
+    return this.adminUsersService.assignRole(id, body.roleId, performedById);
   }
 
   @Delete(':id/roles/:roleId')
-  removeRole(@Param('id') id: string, @Param('roleId') roleId: string, @Request() req: any) {
-    return this.adminUsersService.removeRole(id, roleId, req.user.sub);
+  removeRole(
+    @Param('id') id: string,
+    @Param('roleId') roleId: string,
+    @CurrentUser('id') performedById: string,
+  ) {
+    return this.adminUsersService.removeRole(id, roleId, performedById);
   }
 
   @Get(':id/activity')
