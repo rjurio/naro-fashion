@@ -133,7 +133,19 @@ export class AdminUsersService {
   async assignRole(adminUserId: string, roleId: string, performedById: string) {
     const tenantId = this.tenantContext.requireId;
     if (adminUserId === performedById) throw new ForbiddenException('Cannot change your own roles');
-    const role = await this.prisma.role.findUnique({ where: { id: roleId, tenantId } });
+    // System roles (e.g. AI_AGENT_OPERATOR, AI_AGENT_APPROVER, SUPER_ADMIN,
+    // MANAGER, STAFF) are seeded with `tenantId: null, isSystem: true` and
+    // shared across every tenant. Custom roles are tenant-scoped. The
+    // findFirst below matches either shape — same pattern used by
+    // RolesService.findAll() when surfacing roles in the admin UI.
+    // Without this the AI role-assignment workflow can't find the
+    // seeded roles by id.
+    const role = await this.prisma.role.findFirst({
+      where: {
+        id: roleId,
+        OR: [{ tenantId }, { tenantId: null, isSystem: true }],
+      },
+    });
     if (!role) throw new NotFoundException('Role not found');
     if (role.name === 'SUPER_ADMIN') {
       const performer = await this.prisma.adminUser.findUnique({ where: { id: performedById, tenantId } });
