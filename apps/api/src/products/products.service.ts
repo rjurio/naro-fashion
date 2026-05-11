@@ -590,15 +590,47 @@ export class ProductsService {
     return updated;
   }
 
+  /**
+   * Admin shortcut for flipping a product's published status. Kept for
+   * UI ergonomics — admins can toggle from the products list page
+   * without going through the AI agent's approval workflow. The two
+   * paths produce IDENTICAL state shapes so a row is always in one of
+   * the four documented lifecycle states (DRAFT / ACTIVE / ARCHIVED /
+   * SOFT_DELETED) — see docs/ai-agent/PRODUCT_LIFECYCLE.md.
+   *
+   * Lifecycle symmetry with archive_product / publish_product (Phase
+   * 3.1B fix 2026-05-11): every flip of `isActive` ALSO stamps or
+   * clears `archivedAt` so we never produce an "active + archivedAt
+   * set" or "inactive previously-active + archivedAt null" hybrid.
+   *
+   *   ACTIVE   (isActive=true,  archivedAt=null)
+   *     → toggle → ARCHIVED (isActive=false, archivedAt=now)
+   *   ARCHIVED (isActive=false, archivedAt=Date)
+   *     → toggle → ACTIVE   (isActive=true,  archivedAt=null)
+   *   DRAFT    (isActive=false, archivedAt=null)
+   *     → toggle → ACTIVE   (isActive=true,  archivedAt=null)
+   *
+   * Admins remain trusted at the platform level — the four-eyes rule
+   * is an AI-agent control, not a product-management gate. Operators
+   * with AdminGuard access can flip visibility directly; the audit
+   * row records who and when.
+   */
   async toggleActive(id: string) {
     const product = await this.prisma.product.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!product || product.deletedAt) {
       throw new NotFoundException('Product not found');
     }
 
+    const nextActiveState = !product.isActive;
     const toggled = await this.prisma.product.update({
       where: { id },
-      data: { isActive: !product.isActive },
+      data: {
+        isActive: nextActiveState,
+        // Mirror the AI tools' write pattern: every isActive flip on a
+        // non-deleted row produces a fully-documented lifecycle state.
+        // Going active → archived: stamp. Going inactive → active: clear.
+        archivedAt: nextActiveState ? null : new Date(),
+      },
       include: {
         category: { select: { id: true, name: true, slug: true } },
       },

@@ -40,7 +40,12 @@ describe('ProductsService — public vs admin product lookup', () => {
 
   beforeEach(() => {
     prismaMock = {
-      product: { findFirst: jest.fn(), findMany: jest.fn(), count: jest.fn() },
+      product: {
+        findFirst: jest.fn(),
+        findMany: jest.fn(),
+        count: jest.fn(),
+        update: jest.fn(),
+      },
       category: { findFirst: jest.fn(), findMany: jest.fn() },
     };
     tenantContextMock = { requireId: TENANT };
@@ -354,6 +359,94 @@ describe('ProductsService — public vs admin product lookup', () => {
         expect(args.include).toBeDefined();
         expect(args.select).toBeUndefined();
       });
+    });
+  });
+
+  /**
+   * Lifecycle symmetry for the admin shortcut `PATCH /products/:id/
+   * toggle-active`. The button bypasses the AI agent's approval flow
+   * (admins are trusted at the platform level) but MUST produce the
+   * same row shape as the AI write paths so any product is always in
+   * one of the four documented lifecycle states (DRAFT / ACTIVE /
+   * ARCHIVED / SOFT_DELETED) — see docs/ai-agent/PRODUCT_LIFECYCLE.md.
+   *
+   * Before the 2026-05-11 lifecycle review, toggleActive only flipped
+   * isActive without touching archivedAt. That created two unreachable
+   * states:
+   *   - ACTIVE → toggle → (isActive=false, archivedAt=null) — looks
+   *     like DRAFT but was actually an active product
+   *   - ARCHIVED → toggle → (isActive=true, archivedAt=Date) — no
+   *     valid state in the matrix
+   * The fix mirrors the AI tools' write pattern.
+   */
+  describe('toggleActive — lifecycle symmetry with AI tools', () => {
+    function rawProduct(overrides: any = {}) {
+      return {
+        id: 'p_x',
+        tenantId: TENANT,
+        slug: 'p-x',
+        name: 'Product X',
+        isActive: true,
+        archivedAt: null,
+        deletedAt: null,
+        ...overrides,
+      };
+    }
+
+    it('ACTIVE → toggleActive stamps archivedAt = Date and clears isActive (lands in ARCHIVED)', async () => {
+      prismaMock.product.findFirst.mockResolvedValueOnce(
+        rawProduct({ isActive: true, archivedAt: null }),
+      );
+      prismaMock.product.update.mockResolvedValueOnce({});
+      await service.toggleActive('p_x');
+      const args = prismaMock.product.update.mock.calls[0][0];
+      expect(args.data.isActive).toBe(false);
+      expect(args.data.archivedAt).toBeInstanceOf(Date);
+    });
+
+    it('ARCHIVED → toggleActive clears archivedAt and sets isActive (lands in ACTIVE)', async () => {
+      // Note: this admin shortcut intentionally bypasses the AI
+      // restore_product approval flow. Documented in the lifecycle doc.
+      // Lifecycle symmetry: the row lands in a valid documented state.
+      prismaMock.product.findFirst.mockResolvedValueOnce(
+        rawProduct({ isActive: false, archivedAt: new Date('2026-05-10T10:00:00Z') }),
+      );
+      prismaMock.product.update.mockResolvedValueOnce({});
+      await service.toggleActive('p_x');
+      const args = prismaMock.product.update.mock.calls[0][0];
+      expect(args.data.isActive).toBe(true);
+      expect(args.data.archivedAt).toBeNull();
+    });
+
+    it('DRAFT → toggleActive clears archivedAt (idempotent null) and sets isActive (lands in ACTIVE)', async () => {
+      prismaMock.product.findFirst.mockResolvedValueOnce(
+        rawProduct({ isActive: false, archivedAt: null }),
+      );
+      prismaMock.product.update.mockResolvedValueOnce({});
+      await service.toggleActive('p_x');
+      const args = prismaMock.product.update.mock.calls[0][0];
+      expect(args.data.isActive).toBe(true);
+      // archivedAt was already null on the row — write keeps it null
+      // (the AI restore/publish paths do the same idempotent clear).
+      expect(args.data.archivedAt).toBeNull();
+    });
+
+    it('does NOT modify deletedAt (toggleActive is never a recycle-bin operation)', async () => {
+      prismaMock.product.findFirst.mockResolvedValueOnce(rawProduct());
+      prismaMock.product.update.mockResolvedValueOnce({});
+      await service.toggleActive('p_x');
+      const args = prismaMock.product.update.mock.calls[0][0];
+      expect('deletedAt' in args.data).toBe(false);
+    });
+
+    it('rejects toggleActive on a soft-deleted row (admin must restore from recycle-bin first)', async () => {
+      prismaMock.product.findFirst.mockResolvedValueOnce(
+        rawProduct({ deletedAt: new Date('2026-05-01T00:00:00Z') }),
+      );
+      await expect(service.toggleActive('p_x')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(prismaMock.product.update).not.toHaveBeenCalled();
     });
   });
 });

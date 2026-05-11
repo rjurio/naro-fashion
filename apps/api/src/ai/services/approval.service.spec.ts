@@ -1567,6 +1567,22 @@ describe('ApprovalService — Phase 3.1A publish_product approval workflow', () 
         expect(auditMock.record).not.toHaveBeenCalled();
       });
 
+      it('#A2b ARCHIVED product (already inactive) cannot be archived again — lifecycle matrix cell ARCHIVED/archive_product', async () => {
+        // Cell #8 of the 12-row lifecycle matrix. The validator rejects
+        // any inactive row regardless of whether it's a DRAFT or
+        // already ARCHIVED — re-archiving an archived row is a no-op
+        // that would clobber the audit chain with no business effect.
+        archiveValidatorMock.validateArchivable.mockRejectedValueOnce(
+          new BadRequestException(
+            'Product is already inactive (archived). Nothing to archive.',
+          ),
+        );
+        await expect(
+          service.requestArchiveProduct('prod_already_archived'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prismaMock.agentApprovalRequest.create).not.toHaveBeenCalled();
+      });
+
       it('#A3 soft-deleted product cannot be archived', async () => {
         archiveValidatorMock.validateArchivable.mockRejectedValueOnce(
           new BadRequestException(
