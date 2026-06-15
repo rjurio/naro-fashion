@@ -3,9 +3,9 @@
 **Status**: design approved 2026-05-10.
 
 **Implementation progress**:
-- ✅ **Phase 3.0** — IMPLEMENTED 2026-05-10. Schema + permissions + roles + decorators/guard scaffold. **Zero runtime behaviour change** for existing endpoints. See [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) → "Phase 3.0 status" section.
-- ⏳ **Phase 3.1** — risky tools + four-eyes + cron + 40 tests. **Not started.**
-- ⏳ **Phase 3.2** — SUPER_ADMIN demotion migration script. Not started; runs 2–4 weeks after 3.1 in production.
+- ✅ **Phase 3.0** — IMPLEMENTED 2026-05-10. Schema + permissions + roles + decorators/guard scaffold. **Zero runtime behaviour change** for existing endpoints.
+- ✅ **Phase 3.1** — IMPLEMENTED 2026-05-11 through 3.1B.γ. publish_product (3.1A), archive_product (3.1B), restore_product (3.1B.β), update_draft_product (3.1B.γ). All four wired through `@RequiresApproval` + the approval state machine.
+- ✅ **Phase 3.2** — IMPLEMENTED 2026-05-29. `AiSuperAdminDemotionService` removes `ai-agent:approve` from every SUPER_ADMIN role at `OnApplicationBootstrap`. `AiRolesSeederService.backfillSuperAdmin()` no longer grants `:approve` either. End state: AI approval power must be explicitly assigned via `AI_AGENT_APPROVER`.
 
 **Cross-references**:
 - [`AI_TOOLS.md`](./AI_TOOLS.md) — tool catalogue (Phase 3 introduces the risky/write tools)

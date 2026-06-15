@@ -15,6 +15,7 @@ import { AiSanitizerService } from './services/ai-sanitizer.service';
 import { AiAuditService } from './services/ai-audit.service';
 import { AiToolRunner } from './services/ai-tool-runner.service';
 import { AiRolesSeederService } from './services/ai-roles-seeder.service';
+import { AiSuperAdminDemotionService } from './services/ai-super-admin-demotion.service';
 import { ApprovalService } from './services/approval.service';
 import { PublishValidationService } from './services/publish-validation.service';
 import { ArchiveValidationService } from './services/archive-validation.service';
@@ -80,6 +81,7 @@ import { ApprovalsAiController } from './controllers/approvals.ai.controller';
     AiPermissionGuard,
     AiExceptionFilter,
     AiRolesSeederService,
+    AiSuperAdminDemotionService,
     ApprovalService,
     PublishValidationService,
     ArchiveValidationService,

@@ -90,7 +90,7 @@ describe('AiRolesSeederService — Phase 3.0', () => {
   }
 
   describe('SUPER_ADMIN backfill — tenantId=null layout', () => {
-    it('grants all 4 AI permissions to a tenantId=null SUPER_ADMIN', async () => {
+    it('grants :use, :read, :write-drafts to a tenantId=null SUPER_ADMIN (Phase 3.2: :approve excluded)', async () => {
       const { prismaMock, createdRolePermissionsByCall } = buildPrismaMock({
         superAdminRoles: [{ id: 'sa_null', tenantId: null }],
         operatorExists: true,
@@ -107,14 +107,17 @@ describe('AiRolesSeederService — Phase 3.0', () => {
       );
       expect(saCall).toBeDefined();
       const grantedPermIds = saCall!.map((r) => r.permissionId).sort();
+      // Phase 3.2 cutover: SUPER_ADMIN no longer auto-granted :approve.
+      // Approval power must be explicitly assigned via AI_AGENT_APPROVER.
       expect(grantedPermIds).toEqual(
-        ['perm_approve', 'perm_drafts', 'perm_read', 'perm_use'].sort(),
+        ['perm_drafts', 'perm_read', 'perm_use'].sort(),
       );
+      expect(grantedPermIds).not.toContain('perm_approve');
     });
   });
 
   describe('SUPER_ADMIN backfill — tenant-scoped layout (the prod case)', () => {
-    it('grants all 4 AI permissions to a tenant-scoped SUPER_ADMIN', async () => {
+    it('grants :use, :read, :write-drafts to a tenant-scoped SUPER_ADMIN (Phase 3.2: :approve excluded)', async () => {
       const { prismaMock, createdRolePermissionsByCall } = buildPrismaMock({
         superAdminRoles: [{ id: 'sa_t1', tenantId: 'tenant_t1' }],
         operatorExists: true,
@@ -129,7 +132,7 @@ describe('AiRolesSeederService — Phase 3.0', () => {
       );
       expect(saCall).toBeDefined();
       expect(saCall!.map((r) => r.permissionId).sort()).toEqual(
-        ['perm_approve', 'perm_drafts', 'perm_read', 'perm_use'].sort(),
+        ['perm_drafts', 'perm_read', 'perm_use'].sort(),
       );
     });
 
@@ -175,16 +178,18 @@ describe('AiRolesSeederService — Phase 3.0', () => {
       const seeder = new AiRolesSeederService(prismaMock as any);
       await seeder.onApplicationBootstrap();
 
-      // Each SUPER_ADMIN should have its own batch of 4 grants.
+      // Each SUPER_ADMIN should have its own batch of 3 grants
+      // (Phase 3.2: :approve excluded).
       for (const roleId of ['sa_null', 'sa_t1', 'sa_t2']) {
         const batch = createdRolePermissionsByCall.find((b) =>
           b.every((row) => row.roleId === roleId),
         );
         expect(batch).toBeDefined();
-        expect(batch!.length).toBe(4);
+        expect(batch!.length).toBe(3);
         expect(batch!.map((r) => r.permissionId).sort()).toEqual(
-          ['perm_approve', 'perm_drafts', 'perm_read', 'perm_use'].sort(),
+          ['perm_drafts', 'perm_read', 'perm_use'].sort(),
         );
+        expect(batch!.map((r) => r.permissionId)).not.toContain('perm_approve');
       }
     });
   });

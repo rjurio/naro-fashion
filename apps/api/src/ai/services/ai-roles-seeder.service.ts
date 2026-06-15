@@ -156,9 +156,11 @@ export class AiRolesSeederService implements OnApplicationBootstrap {
    * which is idempotent at the DB level (the `(roleId, permissionId)`
    * primary key on `RolePermission` enforces uniqueness).
    *
-   * Phase 3.2 will REMOVE :approve from SUPER_ADMIN via a separate one-off
-   * migration script. End state — AI approval rights must be intentionally
+   * Phase 3.2 (LIVE 2026-05-29) — :approve is NO LONGER granted to
+   * SUPER_ADMIN. End state: AI approval rights must be intentionally
    * granted via AI_AGENT_APPROVER, not implicit through SUPER_ADMIN.
+   * `AiSuperAdminDemotionService` handles the one-time cleanup of the
+   * existing :approve grant on already-deployed databases.
    */
   private async backfillSuperAdmin(): Promise<void> {
     const superAdminRoles = await this.prisma.role.findMany({
@@ -171,11 +173,13 @@ export class AiRolesSeederService implements OnApplicationBootstrap {
       return;
     }
 
+    // Phase 3.2: SUPER_ADMIN gets the three "operator" AI permissions —
+    // :use, :read, :write-drafts. Approval power is NOT auto-granted;
+    // operators must assign AI_AGENT_APPROVER to the right people.
     const aiPermissionCodes: ReadonlyArray<AiPermissionCode> = [
       AI_PERMISSION_CODES.USE,
       AI_PERMISSION_CODES.READ,
       AI_PERMISSION_CODES.WRITE_DRAFTS,
-      AI_PERMISSION_CODES.APPROVE,
     ];
     const permissionIds = await this.permissionIdsByCode(aiPermissionCodes);
 
