@@ -98,16 +98,38 @@ export class CategoriesService {
     return categories.map(attachFallback);
   }
 
+  /**
+   * PUBLIC category-by-slug lookup. Wired to `@Public() @Get(':slug')`
+   * in CategoriesController — anonymous storefront visitors hit this.
+   *
+   * Filters MUST happen in the WHERE clause, not after the fetch. Pre-fix,
+   * this method matched on (slug, tenantId) only and post-checked
+   * `category.deletedAt` — categories with `isActive: false` (admin-
+   * deactivated) were silently publicly reachable by direct URL. Audit
+   * surfaced this 2026-06-15 alongside the same pattern in
+   * `findPageBySlug` (fixed in the same commit) and earlier products +
+   * size-guides + sizes (Phase 2 hotfix).
+   *
+   * Admin endpoints use the unfiltered category tree (deactivated
+   * categories visible in the admin tree) so admins can re-activate them.
+   * Children are still filtered by `deletedAt: null` AND `isActive: true`
+   * so we don't leak deactivated subcategories through the include.
+   */
   async findBySlug(slug: string) {
     const category = await this.prisma.category.findFirst({
-      where: { slug, tenantId: this.tenantContext.requireId },
+      where: {
+        slug,
+        tenantId: this.tenantContext.requireId,
+        isActive: true,
+        deletedAt: null,
+      },
       include: {
-        children: { where: { deletedAt: null } },
+        children: { where: { deletedAt: null, isActive: true } },
         parent: { select: { id: true, name: true, slug: true } },
       },
     });
 
-    if (!category || category.deletedAt) {
+    if (!category) {
       throw new NotFoundException('Category not found');
     }
 

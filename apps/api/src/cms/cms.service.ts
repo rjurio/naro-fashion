@@ -251,9 +251,31 @@ export class CmsService {
     });
   }
 
+  /**
+   * PUBLIC page-by-slug lookup. Wired to `@Public() @Get('pages/:slug')`
+   * in CmsController — anonymous storefront visitors hit this.
+   *
+   * Filters MUST happen in the WHERE clause, not after the fetch. Pre-fix,
+   * this method matched on (slug, tenantId) only and post-checked
+   * `page.deletedAt` — DRAFT pages (`isPublished: false`, the schema
+   * default) were silently publicly reachable by direct URL. Audit
+   * surfaced this 2026-06-15 alongside the same pattern in
+   * `findBySlug` on products + size-guides (already fixed) and
+   * categories (fixed in the same commit as this).
+   *
+   * Admin endpoints use `findAllPages()` (no isPublished filter — drafts
+   * deliberately visible) via the CMS admin pages screen.
+   */
   async findPageBySlug(slug: string) {
-    const page = await this.prisma.page.findFirst({ where: { slug, tenantId: this.tenantContext.requireId } });
-    if (!page || page.deletedAt) throw new NotFoundException('Page not found');
+    const page = await this.prisma.page.findFirst({
+      where: {
+        slug,
+        tenantId: this.tenantContext.requireId,
+        isPublished: true,
+        deletedAt: null,
+      },
+    });
+    if (!page) throw new NotFoundException('Page not found');
     return page;
   }
 
