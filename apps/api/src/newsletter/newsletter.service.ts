@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException, BadRequestException, ConflictExc
 import { IsEmail, IsOptional, IsString } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../notifications/email.service';
+import { TenantContext } from '../tenant/tenant.context';
 
 export class SubscribeDto {
   @IsEmail()
@@ -50,13 +51,15 @@ export class NewsletterService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
+    private readonly tenantContext: TenantContext,
   ) {}
 
   // --- Subscribers ---
 
   async subscribe(dto: SubscribeDto) {
+    const tenantId = this.tenantContext.requireId;
     const existing = await this.prisma.newsletterSubscriber.findFirst({
-      where: { email: dto.email.toLowerCase().trim() },
+      where: { email: dto.email.toLowerCase().trim(), tenantId },
     });
 
     if (existing) {
@@ -73,6 +76,7 @@ export class NewsletterService {
 
     await this.prisma.newsletterSubscriber.create({
       data: {
+        tenantId,
         email: dto.email.toLowerCase().trim(),
         name: dto.name || null,
         source: dto.source || 'STOREFRONT',
@@ -81,6 +85,10 @@ export class NewsletterService {
     return { message: 'Successfully subscribed' };
   }
 
+  // Unsubscribe is intentionally NOT tenant-scoped: the unsubscribeToken is
+  // globally unique (NewsletterSubscriber.unsubscribeToken @unique) and serves
+  // as the auth itself. The email link a recipient clicks won't carry a
+  // tenant cookie, so requiring TenantContext here would break unsubscribe.
   async unsubscribe(token: string) {
     const subscriber = await this.prisma.newsletterSubscriber.findFirst({
       where: { unsubscribeToken: token },
@@ -99,8 +107,9 @@ export class NewsletterService {
   }
 
   async getSubscribers(page = 1, limit = 20, search?: string) {
+    const tenantId = this.tenantContext.requireId;
     const skip = (page - 1) * limit;
-    const where: any = {};
+    const where: any = { tenantId };
     if (search) {
       where.OR = [
         { email: { contains: search, mode: 'insensitive' } },
@@ -122,10 +131,11 @@ export class NewsletterService {
   }
 
   async getSubscriberStats() {
+    const tenantId = this.tenantContext.requireId;
     const [total, active, unsubscribed] = await Promise.all([
-      this.prisma.newsletterSubscriber.count(),
-      this.prisma.newsletterSubscriber.count({ where: { isActive: true } }),
-      this.prisma.newsletterSubscriber.count({ where: { isActive: false } }),
+      this.prisma.newsletterSubscriber.count({ where: { tenantId } }),
+      this.prisma.newsletterSubscriber.count({ where: { tenantId, isActive: true } }),
+      this.prisma.newsletterSubscriber.count({ where: { tenantId, isActive: false } }),
     ]);
     return { total, active, unsubscribed };
   }
@@ -133,8 +143,10 @@ export class NewsletterService {
   // --- Newsletters ---
 
   async createNewsletter(dto: CreateNewsletterDto, adminId?: string) {
+    const tenantId = this.tenantContext.requireId;
     return this.prisma.newsletter.create({
       data: {
+        tenantId,
         subject: dto.subject,
         bodyHtml: dto.bodyHtml || '',
         templateType: dto.templateType || 'CUSTOM',
@@ -144,9 +156,11 @@ export class NewsletterService {
   }
 
   async getNewsletters(page = 1, limit = 20) {
+    const tenantId = this.tenantContext.requireId;
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
       this.prisma.newsletter.findMany({
+        where: { tenantId },
         skip,
         take: limit,
         orderBy: { createdAt: 'desc' },
@@ -154,7 +168,7 @@ export class NewsletterService {
           _count: { select: { deliveries: true, products: true } },
         },
       }),
-      this.prisma.newsletter.count(),
+      this.prisma.newsletter.count({ where: { tenantId } }),
     ]);
 
     // Enrich with delivery stats
@@ -170,8 +184,9 @@ export class NewsletterService {
   }
 
   async getNewsletter(id: string) {
-    const newsletter = await this.prisma.newsletter.findUnique({
-      where: { id },
+    const tenantId = this.tenantContext.requireId;
+    const newsletter = await this.prisma.newsletter.findFirst({
+      where: { id, tenantId },
       include: {
         _count: { select: { deliveries: true, products: true } },
         products: true,
@@ -187,7 +202,10 @@ export class NewsletterService {
   }
 
   async updateNewsletter(id: string, dto: UpdateNewsletterDto) {
-    const newsletter = await this.prisma.newsletter.findUnique({ where: { id } });
+    const tenantId = this.tenantContext.requireId;
+    const newsletter = await this.prisma.newsletter.findFirst({
+      where: { id, tenantId },
+    });
     if (!newsletter) throw new NotFoundException('Newsletter not found');
     if (newsletter.status !== 'DRAFT') {
       throw new BadRequestException('Only draft newsletters can be edited');
@@ -196,7 +214,10 @@ export class NewsletterService {
   }
 
   async deleteNewsletter(id: string) {
-    const newsletter = await this.prisma.newsletter.findUnique({ where: { id } });
+    const tenantId = this.tenantContext.requireId;
+    const newsletter = await this.prisma.newsletter.findFirst({
+      where: { id, tenantId },
+    });
     if (!newsletter) throw new NotFoundException('Newsletter not found');
     if (newsletter.status !== 'DRAFT') {
       throw new BadRequestException('Only draft newsletters can be deleted');
@@ -208,7 +229,10 @@ export class NewsletterService {
   // --- Sending ---
 
   async sendNewsletter(id: string) {
-    const newsletter = await this.prisma.newsletter.findUnique({ where: { id } });
+    const tenantId = this.tenantContext.requireId;
+    const newsletter = await this.prisma.newsletter.findFirst({
+      where: { id, tenantId },
+    });
     if (!newsletter) throw new NotFoundException('Newsletter not found');
     if (newsletter.status !== 'DRAFT') {
       throw new BadRequestException('Newsletter has already been sent or is sending');
@@ -220,9 +244,9 @@ export class NewsletterService {
       data: { status: 'SENDING' },
     });
 
-    // Get all active subscribers
+    // Only this tenant's active subscribers
     const subscribers = await this.prisma.newsletterSubscriber.findMany({
-      where: { isActive: true },
+      where: { tenantId, isActive: true },
     });
 
     if (subscribers.length === 0) {
@@ -251,6 +275,9 @@ export class NewsletterService {
     return { message: 'Newsletter sending started', total: subscribers.length };
   }
 
+  // processDeliveries operates by newsletterId; the parent newsletter is
+  // already tenant-scoped at the entry points (sendNewsletter / resendFailed),
+  // so deliveries created here cannot cross tenants.
   private async processDeliveries(newsletterId: string, newsletter: any) {
     const deliveries = await this.prisma.newsletterDelivery.findMany({
       where: { newsletterId, status: 'PENDING' },
@@ -315,6 +342,16 @@ export class NewsletterService {
   // --- Delivery Tracking ---
 
   async getDeliveryStats(newsletterId: string) {
+    // Verify the newsletter belongs to the current tenant before exposing
+    // delivery counts. Without this, any admin could pass any newsletterId
+    // and read the SENT/FAILED breakdown for another tenant's campaign.
+    const tenantId = this.tenantContext.requireId;
+    const owned = await this.prisma.newsletter.findFirst({
+      where: { id: newsletterId, tenantId },
+      select: { id: true },
+    });
+    if (!owned) throw new NotFoundException('Newsletter not found');
+
     const [total, sent, failed, pending] = await Promise.all([
       this.prisma.newsletterDelivery.count({ where: { newsletterId } }),
       this.prisma.newsletterDelivery.count({ where: { newsletterId, status: 'SENT' } }),
@@ -325,6 +362,13 @@ export class NewsletterService {
   }
 
   async getFailedDeliveries(newsletterId: string) {
+    const tenantId = this.tenantContext.requireId;
+    const owned = await this.prisma.newsletter.findFirst({
+      where: { id: newsletterId, tenantId },
+      select: { id: true },
+    });
+    if (!owned) throw new NotFoundException('Newsletter not found');
+
     return this.prisma.newsletterDelivery.findMany({
       where: { newsletterId, status: 'FAILED' },
       include: { subscriber: { select: { email: true, name: true } } },
@@ -333,7 +377,10 @@ export class NewsletterService {
   }
 
   async resendFailed(newsletterId: string) {
-    const newsletter = await this.prisma.newsletter.findUnique({ where: { id: newsletterId } });
+    const tenantId = this.tenantContext.requireId;
+    const newsletter = await this.prisma.newsletter.findFirst({
+      where: { id: newsletterId, tenantId },
+    });
     if (!newsletter) throw new NotFoundException('Newsletter not found');
 
     // Reset failed deliveries to PENDING
@@ -363,16 +410,22 @@ export class NewsletterService {
   // --- Dashboard ---
 
   async getDashboardStats() {
-    const [subscriberStats, totalNewsletters, draftCount, sentCount, totalDeliveries, deliveredCount, failedCount] =
-      await Promise.all([
-        this.getSubscriberStats(),
-        this.prisma.newsletter.count(),
-        this.prisma.newsletter.count({ where: { status: 'DRAFT' } }),
-        this.prisma.newsletter.count({ where: { status: 'SENT' } }),
-        this.prisma.newsletterDelivery.count(),
-        this.prisma.newsletterDelivery.count({ where: { status: 'SENT' } }),
-        this.prisma.newsletterDelivery.count({ where: { status: 'FAILED' } }),
-      ]);
+    const tenantId = this.tenantContext.requireId;
+    const subscriberStats = await this.getSubscriberStats();
+    const [totalNewsletters, draftCount, sentCount] = await Promise.all([
+      this.prisma.newsletter.count({ where: { tenantId } }),
+      this.prisma.newsletter.count({ where: { tenantId, status: 'DRAFT' } }),
+      this.prisma.newsletter.count({ where: { tenantId, status: 'SENT' } }),
+    ]);
+
+    // Delivery counts must filter via the parent newsletter's tenantId.
+    // NewsletterDelivery has no tenantId column itself (it's a child of Newsletter).
+    const deliveryWhere = { newsletter: { tenantId } } as const;
+    const [totalDeliveries, deliveredCount, failedCount] = await Promise.all([
+      this.prisma.newsletterDelivery.count({ where: deliveryWhere }),
+      this.prisma.newsletterDelivery.count({ where: { ...deliveryWhere, status: 'SENT' } }),
+      this.prisma.newsletterDelivery.count({ where: { ...deliveryWhere, status: 'FAILED' } }),
+    ]);
 
     return {
       subscribers: subscriberStats,
@@ -391,20 +444,24 @@ export class NewsletterService {
   // --- New Arrivals Product Preview ---
 
   async getNewArrivalsProducts() {
-    // Find last sent NEW_ARRIVALS newsletter
+    const tenantId = this.tenantContext.requireId;
+    // Find this tenant's last sent NEW_ARRIVALS newsletter
     const lastNewArrivals = await this.prisma.newsletter.findFirst({
-      where: { templateType: 'NEW_ARRIVALS', status: 'SENT' },
+      where: { tenantId, templateType: 'NEW_ARRIVALS', status: 'SENT' },
       orderBy: { sentAt: 'desc' },
     });
 
-    // Get product IDs already included in any newsletter
+    // Get product IDs already included in any of THIS tenant's newsletters.
+    // NewsletterProduct has no tenantId; scope via parent newsletter relation.
     const usedProductIds = await this.prisma.newsletterProduct.findMany({
+      where: { newsletter: { tenantId } },
       select: { productId: true },
     });
     const usedIds = usedProductIds.map((p) => p.productId);
 
-    // Find new products since last newsletter
+    // Find new products since last newsletter (this tenant only)
     const where: any = {
+      tenantId,
       isActive: true,
       deletedAt: null,
     };
@@ -435,6 +492,8 @@ export class NewsletterService {
 
   /**
    * Link products to a newsletter (for tracking which products were included).
+   * Tenant scope is enforced at the parent via createNewsletter / getNewsletter
+   * before this is ever called.
    */
   async linkProducts(newsletterId: string, productIds: string[]) {
     if (productIds.length === 0) return;

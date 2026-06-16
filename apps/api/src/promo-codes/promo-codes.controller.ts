@@ -11,6 +11,7 @@ import {
 import { PromoCodesService } from './promo-codes.service';
 import { CreatePromoCodeDto, ValidatePromoCodeDto } from './dto/create-promo-code.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
@@ -24,18 +25,21 @@ export class PromoCodesController {
 
   // Admin: Create promo code
   @Post()
+  @UseGuards(AdminGuard)
   create(@Body() dto: CreatePromoCodeDto, @CurrentUser('id') createdBy: string) {
     return this.promoCodesService.create(dto, createdBy);
   }
 
   // Admin: List all promo codes
   @Get()
+  @UseGuards(AdminGuard)
   findAll() {
     return this.promoCodesService.findAll();
   }
 
   // Admin: Get promo code details
   @Get(':id')
+  @UseGuards(AdminGuard)
   findOne(@Param('id') id: string) {
     return this.promoCodesService.findOne(id);
   }
@@ -55,12 +59,14 @@ export class PromoCodesController {
 
   // Admin: Update promo code
   @Patch(':id')
+  @UseGuards(AdminGuard)
   update(@Param('id') id: string, @Body() dto: Partial<CreatePromoCodeDto>) {
     return this.promoCodesService.update(id, dto);
   }
 
   // Admin: Delete promo code
   @Delete(':id')
+  @UseGuards(AdminGuard)
   remove(@Param('id') id: string) {
     return this.promoCodesService.remove(id);
   }

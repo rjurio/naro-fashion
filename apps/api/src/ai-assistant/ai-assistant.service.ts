@@ -65,6 +65,41 @@ interface ToolDef {
 
 const API_BASE = process.env.AI_ASSISTANT_API_BASE || 'http://localhost:4000/api/v1';
 
+/**
+ * Defence-in-depth URL guard: resolves the path returned by a tool's
+ * `buildUrl` against `API_BASE`, parses through WHATWG `URL` so any `..`
+ * segments are normalised, and asserts the resolved URL stays inside
+ * `/api/v1/ai/` on the same origin.
+ *
+ * If a tool ever interpolates an attacker-controlled value like
+ * `../../admin-users`, Node's `fetch` would happily resolve the result to a
+ * non-AI endpoint with the operator's bearer token. This guard throws before
+ * the request goes out.
+ *
+ * Exported for unit testing; see `ai-assistant-url-guard.spec.ts`.
+ */
+export function assertAiUrlSafe(
+  toolPath: string,
+  apiBase: string,
+  toolName: string,
+): URL {
+  const url = `${apiBase}${toolPath}`;
+  let resolved: URL;
+  try {
+    resolved = new URL(url);
+  } catch {
+    throw new Error(`${toolName}: invalid URL`);
+  }
+  const expectedBase = new URL(apiBase);
+  if (
+    resolved.origin !== expectedBase.origin ||
+    !resolved.pathname.startsWith('/api/v1/ai/')
+  ) {
+    throw new Error(`${toolName}: blocked non-AI URL ${resolved.pathname}`);
+  }
+  return resolved;
+}
+
 const TOOLS: ToolDef[] = [
   // ---- READ TOOLS (17) ----
   {
@@ -99,7 +134,7 @@ const TOOLS: ToolDef[] = [
       properties: { id: { type: 'string', description: 'Product id (cm...)' } },
       required: ['id'],
     },
-    buildUrl: (input) => `/ai/products/${input.id}`,
+    buildUrl: (input) => `/ai/products/${encodeURIComponent(input.id)}`,
   },
   {
     name: 'list_categories',
@@ -147,7 +182,7 @@ const TOOLS: ToolDef[] = [
       properties: { id: { type: 'string' } },
       required: ['id'],
     },
-    buildUrl: (input) => `/ai/orders/${input.id}`,
+    buildUrl: (input) => `/ai/orders/${encodeURIComponent(input.id)}`,
   },
   {
     name: 'list_rentals',
@@ -179,7 +214,7 @@ const TOOLS: ToolDef[] = [
       properties: { id: { type: 'string' } },
       required: ['id'],
     },
-    buildUrl: (input) => `/ai/rentals/${input.id}`,
+    buildUrl: (input) => `/ai/rentals/${encodeURIComponent(input.id)}`,
   },
   {
     name: 'get_inventory',
@@ -328,7 +363,7 @@ const TOOLS: ToolDef[] = [
     },
     method: 'POST',
     body: (input) => ({ note: input.note }),
-    buildUrl: (input) => `/ai/orders/${input.id}/notes`,
+    buildUrl: (input) => `/ai/orders/${encodeURIComponent(input.id)}/notes`,
   },
   {
     name: 'create_size_guide_entry',
@@ -538,7 +573,8 @@ export class AiAssistantService {
     bearerToken: string,
     tenantId: string,
   ): Promise<any> {
-    const url = `${API_BASE}${tool.buildUrl(input)}`;
+    const resolved = assertAiUrlSafe(tool.buildUrl(input), API_BASE, tool.name);
+
     const method = tool.method || 'GET';
     const headers: Record<string, string> = {
       Authorization: `Bearer ${bearerToken}`,
@@ -550,7 +586,7 @@ export class AiAssistantService {
       body = JSON.stringify(tool.body ? tool.body(input) : input);
     }
 
-    const resp = await fetch(url, { method, headers, body });
+    const resp = await fetch(resolved.toString(), { method, headers, body });
     const text = await resp.text();
     let parsed: any;
     try {

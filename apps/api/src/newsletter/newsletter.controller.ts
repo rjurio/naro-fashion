@@ -16,6 +16,7 @@ import {
   UpdateNewsletterDto,
 } from './newsletter.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
@@ -39,7 +40,7 @@ export class NewsletterController {
 
   // --- Admin: Subscribers ---
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get('subscribers')
   getSubscribers(
     @Query('page') page?: string,
@@ -53,7 +54,7 @@ export class NewsletterController {
     );
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get('subscribers/stats')
   getSubscriberStats() {
     return this.newsletterService.getSubscriberStats();
@@ -61,7 +62,7 @@ export class NewsletterController {
 
   // --- Admin: Dashboard ---
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get('dashboard')
   getDashboard() {
     return this.newsletterService.getDashboardStats();
@@ -69,7 +70,7 @@ export class NewsletterController {
 
   // --- Admin: New Arrivals Preview ---
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get('new-arrivals-preview')
   getNewArrivalsPreview() {
     return this.newsletterService.getNewArrivalsProducts();
@@ -77,7 +78,7 @@ export class NewsletterController {
 
   // --- Admin: Newsletters CRUD ---
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Post()
   createNewsletter(
     @Body() dto: CreateNewsletterDto,
@@ -86,7 +87,7 @@ export class NewsletterController {
     return this.newsletterService.createNewsletter(dto, createdBy);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get()
   getNewsletters(
     @Query('page') page?: string,
@@ -98,19 +99,19 @@ export class NewsletterController {
     );
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get(':id')
   getNewsletter(@Param('id') id: string) {
     return this.newsletterService.getNewsletter(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id')
   updateNewsletter(@Param('id') id: string, @Body() dto: UpdateNewsletterDto) {
     return this.newsletterService.updateNewsletter(id, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Delete(':id')
   deleteNewsletter(@Param('id') id: string) {
     return this.newsletterService.deleteNewsletter(id);
@@ -118,25 +119,25 @@ export class NewsletterController {
 
   // --- Admin: Sending ---
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Post(':id/send')
   sendNewsletter(@Param('id') id: string) {
     return this.newsletterService.sendNewsletter(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get(':id/deliveries')
   getDeliveryStats(@Param('id') id: string) {
     return this.newsletterService.getDeliveryStats(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get(':id/failed')
   getFailedDeliveries(@Param('id') id: string) {
     return this.newsletterService.getFailedDeliveries(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Post(':id/resend-failed')
   resendFailed(@Param('id') id: string) {
     return this.newsletterService.resendFailed(id);

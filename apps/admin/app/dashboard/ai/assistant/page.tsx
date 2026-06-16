@@ -63,8 +63,28 @@ function renderMarkdown(text: string): string {
   // Italic
   html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
 
-  // Links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-brand-gold underline hover:no-underline" target="_blank" rel="noopener">$1</a>');
+  // Links — allowlist http(s) + relative URLs only; reject javascript:, data:,
+  // and other schemes that would fire JS when clicked. The href value goes
+  // through dangerouslySetInnerHTML so an LLM-emitted `[click](javascript:alert(1))`
+  // would otherwise execute on click.
+  const isSafeHref = (href: string): boolean => {
+    const trimmed = href.trim();
+    if (!trimmed) return false;
+    if (trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../') || trimmed.startsWith('#')) return true;
+    try {
+      const u = new URL(trimmed);
+      return u.protocol === 'http:' || u.protocol === 'https:' || u.protocol === 'mailto:';
+    } catch {
+      return false;
+    }
+  };
+  const escapeHtmlAttr = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, href) => {
+    if (!isSafeHref(href)) return label; // strip the link, keep the label text
+    const safeHref = escapeHtmlAttr(href);
+    return `<a href="${safeHref}" class="text-brand-gold underline hover:no-underline" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  });
 
   // Tables — pipe-separated. Detect and convert blocks.
   html = html.replace(/(?:^\|.+\|\n)+/gm, (match) => {

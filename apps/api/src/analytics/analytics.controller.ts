@@ -1,10 +1,11 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AnalyticsService, RevenuePeriod } from './analytics.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
-@UseGuards(JwtAuthGuard, ModuleGuard)
+@UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
 @RequiresModule('analytics')
 @Controller('analytics')
 export class AnalyticsController {

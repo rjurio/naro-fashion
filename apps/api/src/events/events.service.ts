@@ -333,6 +333,14 @@ export class EventsService {
   }
 
   async removeMedia(eventId: string, mediaId: string) {
+    // Verify the parent event belongs to the current tenant before mutating
+    // child rows. Without this, any admin who knew an event id from another
+    // tenant could delete its media via this route.
+    const event = await this.prisma.customerEvent.findUnique({
+      where: { id: eventId, tenantId: this.tenantContext.requireId },
+    });
+    if (!event) throw new NotFoundException('Event not found');
+
     const media = await this.prisma.eventMedia.findUnique({ where: { id: mediaId } });
     if (!media || media.eventId !== eventId) throw new NotFoundException('Media not found');
     await this.prisma.eventMedia.delete({ where: { id: mediaId } });
@@ -340,6 +348,22 @@ export class EventsService {
   }
 
   async reorderMedia(eventId: string, dto: ReorderMediaDto) {
+    // Tenant check on the parent event (see removeMedia comment).
+    const event = await this.prisma.customerEvent.findUnique({
+      where: { id: eventId, tenantId: this.tenantContext.requireId },
+    });
+    if (!event) throw new NotFoundException('Event not found');
+
+    // Ensure every mediaId in the payload actually belongs to this event so
+    // a tenant admin can't reorder another event's media by id-stuffing.
+    const existing = await this.prisma.eventMedia.findMany({
+      where: { id: { in: dto.mediaIds }, eventId },
+      select: { id: true },
+    });
+    if (existing.length !== dto.mediaIds.length) {
+      throw new NotFoundException('One or more media items not found for this event');
+    }
+
     const updates = dto.mediaIds.map((id, index) =>
       this.prisma.eventMedia.update({
         where: { id },

@@ -3,10 +3,11 @@ import { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { QueryAuditLogDto } from './dto/query-audit-log.dto';
 
 @Controller('audit')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 export class AuditController {
   constructor(
     private readonly prisma: PrismaService,

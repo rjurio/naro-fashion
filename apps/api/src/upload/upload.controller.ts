@@ -11,13 +11,19 @@ import { FileInterceptor } from '@nestjs/platform-express';
 /// <reference types="multer" />
 import { UploadService } from './upload.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 
+// Every route here is admin-only EXCEPT /id-document, which logged-in
+// customers hit during the rental ID-verification flow. AdminGuard is wired
+// per-method so id-document stays customer-accessible; everything else is
+// gated so a customer JWT can't upload product / branding / hero / etc. assets.
 @UseGuards(JwtAuthGuard)
 @Controller('upload')
 export class UploadController {
   constructor(private readonly uploadService: UploadService) {}
 
   @Post('image')
+  @UseGuards(AdminGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 5 * 1024 * 1024 },
@@ -35,6 +41,7 @@ export class UploadController {
   }
 
   @Post('hero-slide')
+  @UseGuards(AdminGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 5 * 1024 * 1024 },
@@ -52,6 +59,7 @@ export class UploadController {
   }
 
   @Post('category')
+  @UseGuards(AdminGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 5 * 1024 * 1024 },
@@ -69,6 +77,7 @@ export class UploadController {
   }
 
   @Post('banner')
+  @UseGuards(AdminGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 5 * 1024 * 1024 },
@@ -86,6 +95,7 @@ export class UploadController {
   }
 
   @Post('instagram-post')
+  @UseGuards(AdminGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 5 * 1024 * 1024 },
@@ -103,6 +113,7 @@ export class UploadController {
   }
 
   @Post('event')
+  @UseGuards(AdminGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 5 * 1024 * 1024 },
@@ -120,6 +131,7 @@ export class UploadController {
   }
 
   @Post('branding')
+  @UseGuards(AdminGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 5 * 1024 * 1024 },
@@ -137,6 +149,7 @@ export class UploadController {
   }
 
   @Post('document')
+  @UseGuards(AdminGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 10 * 1024 * 1024 },
@@ -153,6 +166,7 @@ export class UploadController {
     return this.uploadService.uploadToFolder(file, 'documents');
   }
 
+  // Customer-accessible: rental ID-verification flow uploads here.
   @Post('id-document')
   @UseInterceptors(FileInterceptor('file'))
   uploadIdDocument(
@@ -162,8 +176,8 @@ export class UploadController {
     return this.uploadService.uploadIdDocument(file, side);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post('payment-icon')
+  @UseGuards(AdminGuard)
   @UseInterceptors(FileInterceptor('file'))
   async uploadPaymentIcon(@UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('No file provided');
@@ -175,6 +189,7 @@ export class UploadController {
   }
 
   @Post('3d-model')
+  @UseGuards(AdminGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 25 * 1024 * 1024 }, // 25MB for 3D models

@@ -3,11 +3,12 @@ import { ExpenseCategoriesService } from './expense-categories.service';
 import { CreateExpenseCategoryDto } from './dto/create-expense-category.dto';
 import { UpdateExpenseCategoryDto } from './dto/update-expense-category.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 
 @Controller('expense-categories')
-@UseGuards(JwtAuthGuard, ModuleGuard)
+@UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
 @RequiresModule('expenses')
 export class ExpenseCategoriesController {
   constructor(private readonly service: ExpenseCategoriesService) {}
