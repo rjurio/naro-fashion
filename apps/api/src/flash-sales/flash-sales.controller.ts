@@ -14,6 +14,7 @@ import {
   UpdateFlashSaleDto,
 } from './flash-sales.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
@@ -30,7 +31,7 @@ export class FlashSalesController {
     return this.flashSalesService.findAllActive();
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get('deleted')
   findDeleted() {
     return this.flashSalesService.findDeleted();
@@ -42,25 +43,25 @@ export class FlashSalesController {
     return this.flashSalesService.findOne(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Post()
   create(@Body() dto: CreateFlashSaleDto) {
     return this.flashSalesService.create(dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateFlashSaleDto) {
     return this.flashSalesService.update(id, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id/restore')
   restore(@Param('id') id: string) {
     return this.flashSalesService.restore(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Delete(':id')
   delete(@Param('id') id: string) {
     return this.flashSalesService.delete(id);

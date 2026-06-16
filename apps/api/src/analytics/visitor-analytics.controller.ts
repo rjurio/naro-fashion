@@ -13,6 +13,7 @@ import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { Request } from 'express';
 import { VisitorAnalyticsService } from './visitor-analytics.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { Public } from '../auth/decorators/public.decorator';
@@ -61,51 +62,51 @@ export class VisitorAnalyticsController {
     });
   }
 
-  // ---- Admin stats endpoints (require analytics module) ----
+  // ---- Admin stats endpoints (require analytics module + admin role) ----
 
-  @UseGuards(JwtAuthGuard, ModuleGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
   @RequiresModule('analytics')
   @Get('visitors/overview')
   overview(@Query() query: any) {
     return this.service.overview(query);
   }
 
-  @UseGuards(JwtAuthGuard, ModuleGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
   @RequiresModule('analytics')
   @Get('visitors/timeseries')
   timeseries(@Query() query: any) {
     return this.service.timeseries(query);
   }
 
-  @UseGuards(JwtAuthGuard, ModuleGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
   @RequiresModule('analytics')
   @Get('visitors/top-pages')
   topPages(@Query() query: any) {
     return this.service.topPages(query);
   }
 
-  @UseGuards(JwtAuthGuard, ModuleGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
   @RequiresModule('analytics')
   @Get('visitors/countries')
   countries(@Query() query: any) {
     return this.service.countries(query);
   }
 
-  @UseGuards(JwtAuthGuard, ModuleGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
   @RequiresModule('analytics')
   @Get('visitors/devices')
   devices(@Query() query: any) {
     return this.service.devices(query);
   }
 
-  @UseGuards(JwtAuthGuard, ModuleGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
   @RequiresModule('analytics')
   @Get('visitors/referrers')
   referrers(@Query() query: any) {
     return this.service.referrers(query);
   }
 
-  @UseGuards(JwtAuthGuard, ModuleGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
   @RequiresModule('analytics')
   @Get('visitors/hourly')
   hourly(@Query() query: any) {

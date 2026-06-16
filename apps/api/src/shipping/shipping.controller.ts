@@ -16,6 +16,7 @@ import { CalculateRateDto } from './dto/calculate-rate.dto';
 import { CreateShipmentDto } from './dto/create-shipment.dto';
 import { UpdateShipmentDto } from './dto/update-shipment.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { Public } from '../auth/decorators/public.decorator';
 
 @Controller('shipping')
@@ -28,7 +29,7 @@ export class ShippingController {
     return this.shippingService.getZones();
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Post('zones')
   createZone(@Body() dto: CreateZoneDto) {
     return this.shippingService.createZone(dto);
@@ -40,13 +41,13 @@ export class ShippingController {
     return this.shippingService.getZone(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Put('zones/:id')
   updateZone(@Param('id') id: string, @Body() dto: UpdateZoneDto) {
     return this.shippingService.updateZone(id, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Delete('zones/:id')
   deleteZone(@Param('id') id: string) {
     return this.shippingService.deleteZone(id);
@@ -58,13 +59,13 @@ export class ShippingController {
     return this.shippingService.calculateRate(dto.zoneId, dto.orderAmount);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Post('shipments')
   createShipment(@Body() dto: CreateShipmentDto) {
     return this.shippingService.createShipment(dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch('shipments/:id')
   updateShipment(
     @Param('id') id: string,
