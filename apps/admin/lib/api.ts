@@ -200,6 +200,20 @@ class AdminApiClient {
     return this.post<{ message: string }>('/auth/reset-password', { token, newPassword });
   }
 
+  // ===== AI Assistant =====
+  aiAssistantStatus() {
+    return this.get<{ configured: boolean; message: string }>('/ai-assistant/status');
+  }
+  aiAssistantChat(messages: Array<{ role: 'user' | 'assistant'; content: string }>) {
+    return this.post<{
+      reply: string;
+      toolCalls: Array<{ tool: string; input: any; ok: boolean; error?: string }>;
+      iterations: number;
+      inputTokens: number;
+      outputTokens: number;
+    }>('/ai-assistant/chat', { messages });
+  }
+
   // ===== Dashboard / Analytics =====
   getDashboardStats() {
     return this.get<any>('/analytics/dashboard');

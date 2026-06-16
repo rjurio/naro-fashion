@@ -44,6 +44,7 @@ import { TenantsModule } from './tenants/tenants.module';
 import { AuditModule } from './audit/audit.module';
 import { ProductSizesModule } from './product-sizes/product-sizes.module';
 import { AiModule } from './ai/ai.module';
+import { AiAssistantModule } from './ai-assistant/ai-assistant.module';
 
 @Module({
   imports: [
@@ -95,6 +96,7 @@ import { AiModule } from './ai/ai.module';
     PaymentMethodsModule,
     TenantsModule,
     AiModule,
+    AiAssistantModule,
   ],
 })
 export class AppModule {}

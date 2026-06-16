@@ -163,6 +163,10 @@ const navItems: NavItem[] = [
     label: 'AI Agent',
     icon: Sparkles,
     children: [
+      // Assistant chat — natural-language wrapper around the /api/v1/ai/*
+      // read + draft tools. Server returns 503 with a helpful message when
+      // ANTHROPIC_API_KEY isn't set on the server.
+      { label: 'Assistant', href: '/dashboard/ai/assistant', icon: Sparkles },
       // Approvals page — gated server-side by `ai-agent:read`. We always
       // show the link; an admin without the permission sees the page 403
       // and gets a toast. Phase 4 may add a `TenantModule.code='ai-agent'`
