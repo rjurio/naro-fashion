@@ -4,10 +4,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { QueryAuditLogDto } from './dto/query-audit-log.dto';
 
 @Controller('audit')
-@UseGuards(JwtAuthGuard, AdminGuard)
+@UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
 export class AuditController {
   constructor(
     private readonly prisma: PrismaService,
@@ -18,6 +20,7 @@ export class AuditController {
    * GET /audit — Paginated list with filtering.
    */
   @Get()
+  @RequiresPermission('audit:view')
   async findAll(@Query() query: QueryAuditLogDto) {
     const tenantId = this.tenantContext.requireId;
     const page = query.page ? Math.max(1, parseInt(query.page, 10)) : 1;
@@ -80,6 +83,7 @@ export class AuditController {
    * GET /audit/filters — Returns distinct entities, actions, and admin users for filter dropdowns.
    */
   @Get('filters')
+  @RequiresPermission('audit:view')
   async getFilters() {
     const tenantId = this.tenantContext.requireId;
 
@@ -124,6 +128,7 @@ export class AuditController {
    * GET /audit/export — CSV download. Same filters as list but no pagination (max 10000).
    */
   @Get('export')
+  @RequiresPermission('audit:export')
   async exportCsv(@Query() query: QueryAuditLogDto, @Res() res: Response) {
     const tenantId = this.tenantContext.requireId;
 
