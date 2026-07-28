@@ -6,6 +6,8 @@ Full-stack review of the Naro Fashion monorepo (NestJS API + storefront + admin 
 - `c6b2b38` — gitignore + remove leaked root credential dumps
 - `5523717` — service-layer tenant scoping + POS/payment money bugs
 - `bd81d04` — rich-text sanitization + storefront XSS hardening
+- `61bf158` — **RBAC enforcement** (PermissionGuard) on admin-user/role/audit endpoints (follow-up round)
+- `623853c` — per-tenant rental cron recipients + inventory-adjust stock fix (follow-up round)
 
 **Structural takeaway:** `admin-guard-coverage.shape.spec.ts` proves every route has the right *guard*, but nothing proved each service actually *filters Prisma queries by tenantId*. Most HIGH findings lived in that blind spot. New guard added: `pos-tenant-scope.shape.spec.ts`. A general "tenantId present in find/update/delete where-clauses" invariant is the recommended next structural investment.
 
@@ -34,6 +36,15 @@ Full-stack review of the Naro Fashion monorepo (NestJS API + storefront + admin 
 
 Regression guards added: `pos-tenant-scope.shape.spec.ts`, `sanitize-html.util.spec.ts`, plus new admin-users cross-tenant tests. Full API suite: 591 passing (the 1 failure is the pre-existing, unrelated, documented stale sidebar-label spec).
 
+### FIXED — follow-up round (`61bf158`, `623853c`)
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 17 | HIGH | RBAC seeded but NOT enforced on non-AI admin routes → any STAFF/MANAGER admin could `POST /admin-users` with `role:'SUPER_ADMIN'` (escalation) | New `PermissionGuard` + `@RequiresPermission()` (SUPER_ADMIN/platform-admin bypass, effective-permission resolution cached) wired onto admin-users (admins:*), roles (roles:manage/view), audit (audit:view/export). 8-case guard spec. |
+| 18 | MEDIUM | Rental prep/overdue crons resolved a GLOBAL SUPER_ADMIN recipient → cross-tenant admin notifications | `getAdminContact(tenantId)` scopes to the rental's tenant; recipient resolved per-tenant (cached) in both crons |
+| 19 | MEDIUM | Prep-reminder cron had no lower date bound → overdue rentals spam daily with negative day counts | Added `pickupDate: { gte: now }` |
+| 20 | MEDIUM | `inventory.adjustStock` product-level path wrote a ledger row but never changed stock (ledger diverged) | Resolve unambiguous target: apply to sole variant for single-variant products, reject multi-variant with "specify variantId" |
+
 ---
 
 ## DEFERRED — recommended, needs a decision or larger change
@@ -51,14 +62,11 @@ These are real but were left out of this session's fixes because they need a pro
 **Rentals**
 - **Double-booking race**: availability `count` and `create` aren't atomic. Needs a Postgres exclusion constraint on (product, date-range) or an advisory lock.
 - **Orphan `CONFIRMED` status** (payment path sets a status not in the workflow array) breaks the forward-only guard and can bypass mandatory ID verification. Needs status-vocabulary unification (product decision).
-- **Prep-reminder cron** has no lower date bound → overdue-unready rentals spam daily with negative day counts. **Overdue/prep crons resolve a single GLOBAL SUPER_ADMIN recipient** (`getAdminContact` unscoped) → cross-tenant admin notifications. (Branding was fixed; the admin-recipient resolution still needs per-`rental.tenantId` scoping like the subscription cron does.)
 
 **Inventory / subscriptions**
-- `inventory.adjustStock` product-level path writes a ledger entry but never changes stock (missing `else` branch) → ledger diverges from reality. Needs a decision on multi-variant product-level adjustments.
 - Subscription downgrade doesn't disable modules dropped by the new plan → tenant keeps paid features free.
 
-**Admin RBAC**
-- Privileged admin nav (Admin Users, Roles, Audit) is shown to all tenant-admin roles, and `AdminGuard` only checks `isAdmin` — **verify** the admin-users/roles/permissions controllers enforce a specific RBAC permission, not just AdminGuard. If they don't, a STAFF admin could create admin accounts (would be HIGH).
+**Admin RBAC** — *(FIXED `61bf158`: PermissionGuard now enforces per-action permissions on admin-users/roles/audit; STAFF/MANAGER can no longer create/promote admins. The frontend still shows these nav items to all roles — a UX polish, not a security gap, since the API now 403s.)*
 
 **Frontend defense-in-depth**
 - Access + refresh tokens in `localStorage` (both apps) → XSS yields persistent takeover. Consider httpOnly cookies for the refresh token.
