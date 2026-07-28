@@ -26,6 +26,7 @@ export class OrdersService {
   }
 
   async create(userId: string, dto: CreateOrderDto) {
+    const tenantId = this.tenantContext.requireId;
     // Get user's cart items with product/variant details
     const cartItems = await this.prisma.cartItem.findMany({
       where: { userId },
@@ -66,9 +67,44 @@ export class OrdersService {
 
     // Create order with items in a transaction
     const order = await this.prisma.$transaction(async (tx) => {
+      // Reserve stock: atomically decrement each variant (guarded so it can't
+      // go negative). If any item is short, the whole transaction rolls back
+      // and no order is created. Stock is restored if the order is cancelled
+      // (see updateStatus). Online orders previously never touched stock, so a
+      // customer could order arbitrary quantities and inventory never moved.
+      for (const item of cartItems) {
+        const dec = await tx.productVariant.updateMany({
+          where: { id: item.variantId, tenantId, stock: { gte: item.quantity } },
+          data: { stock: { decrement: item.quantity } },
+        });
+        if (dec.count === 0) {
+          throw new BadRequestException(
+            `Insufficient stock for ${item.product.name}. Only limited quantity is available.`,
+          );
+        }
+        const after = await tx.productVariant.findFirst({
+          where: { id: item.variantId, tenantId },
+          select: { stock: true },
+        });
+        const quantityAfter = after?.stock ?? 0;
+        await tx.inventoryTransaction.create({
+          data: {
+            tenantId,
+            productId: item.productId,
+            variantId: item.variantId,
+            type: 'SALE',
+            quantityBefore: quantityAfter + item.quantity,
+            quantityChange: -item.quantity,
+            quantityAfter,
+            note: 'Online order',
+            performedBy: null,
+          },
+        });
+      }
+
       const newOrder = await tx.order.create({
         data: {
-          tenantId: this.tenantContext.requireId,
+          tenantId,
           orderNumber: this.generateOrderNumber(),
           userId,
           addressId: dto.addressId || null,
@@ -308,6 +344,47 @@ export class OrdersService {
     // If cancelled, also update payment status
     if (status === 'CANCELLED') {
       data.paymentStatus = 'CANCELLED';
+    }
+
+    // Cancelling releases the stock reserved at order creation. POS orders
+    // manage stock via their own sale/refund flow (and are created DELIVERED,
+    // so they never reach this transition), hence restock only non-POS orders.
+    if (status === 'CANCELLED' && order.channel !== 'POS') {
+      const tenantId = this.tenantContext.requireId;
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const items = await tx.orderItem.findMany({ where: { orderId: id } });
+        for (const item of items) {
+          await tx.productVariant.updateMany({
+            where: { id: item.variantId, tenantId },
+            data: { stock: { increment: item.quantity } },
+          });
+          const after = await tx.productVariant.findFirst({
+            where: { id: item.variantId, tenantId },
+            select: { stock: true },
+          });
+          const quantityAfter = after?.stock ?? 0;
+          await tx.inventoryTransaction.create({
+            data: {
+              tenantId,
+              productId: item.productId,
+              variantId: item.variantId,
+              type: 'ADJUSTMENT',
+              quantityBefore: quantityAfter - item.quantity,
+              quantityChange: item.quantity,
+              quantityAfter,
+              note: 'Order cancelled — reserved stock restored',
+              performedBy: null,
+            },
+          });
+        }
+        return tx.order.update({
+          where: { id },
+          data,
+          include: { items: true, payments: true },
+        });
+      });
+      await this.auditService.log('UPDATE_STATUS', 'Order', id, { from: order.status, to: status });
+      return updated;
     }
 
     const updated = await this.prisma.order.update({

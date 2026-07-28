@@ -413,6 +413,24 @@ export class TenantsService {
       }
     }
 
+    // Downgrade: disable any OPTIONAL module the tenant currently has that the
+    // NEW plan doesn't include. Without this, switching Enterprise → Starter
+    // left POS/analytics/reports/etc. enabled — the tenant kept paid features
+    // for free. Core modules are never disabled.
+    const newPlanModules = new Set(plan.enabledModules);
+    for (const existing of existingModules) {
+      if (
+        existing.isEnabled &&
+        !newPlanModules.has(existing.moduleCode) &&
+        !(CORE_MODULES as readonly string[]).includes(existing.moduleCode)
+      ) {
+        await this.prisma.tenantModule.update({
+          where: { tenantId_moduleCode: { tenantId, moduleCode: existing.moduleCode } },
+          data: { isEnabled: false },
+        });
+      }
+    }
+
     return subscription;
   }
 

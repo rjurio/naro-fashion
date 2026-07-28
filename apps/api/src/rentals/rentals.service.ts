@@ -143,34 +143,65 @@ export class RentalsService {
 
     const rentalNumber = `RNT-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
-    return this.prisma.rentalOrder.create({
-      data: {
-        tenantId,
-        rentalNumber,
-        userId,
-        productId: dto.productId,
-        variantId: dto.variantId,
-        startDate,
-        returnDate,
-        pickupDate,
-        totalRentalPrice,
-        downPaymentAmount,
-        damageDeposit: depositAmount,
-        status: initialStatus,
-        notes: dto.notes,
-        pickupTime: dto.pickupTime,
-        weddingDate: dto.weddingDate ? new Date(dto.weddingDate) : undefined,
-        weddingLocation: dto.weddingLocation,
-        weddingRegion: dto.weddingRegion,
-        deliveryModality: dto.deliveryModality,
-        shippingDate: dto.shippingDate ? new Date(dto.shippingDate) : undefined,
-        shippingAddress: dto.shippingAddress,
-        transportMode: dto.transportMode,
-      },
-      include: {
-        product: { select: { id: true, name: true, slug: true } },
-        variant: { select: { id: true, name: true, sku: true } },
-      },
+    // The pre-check above (checkAvailability) is a fast fail for UX, but it and
+    // the insert are two separate statements — two concurrent bookings for the
+    // same gown over overlapping dates would both see overlapping===0 and both
+    // get created, violating the single-item availability + 7-day buffer. Do
+    // the authoritative check inside a transaction serialized by a per-product
+    // advisory lock so only one booking for a given product runs at a time.
+    const bufferMs = bufferDays * 24 * 60 * 60 * 1000;
+    const bufferedStart = new Date(startDate.getTime() - bufferMs);
+    const bufferedEnd = new Date(returnDate.getTime() + bufferMs);
+
+    return this.prisma.$transaction(async (tx) => {
+      // Advisory lock keyed by product id (auto-released at tx end). hashtext
+      // maps the cuid to an int the lock function accepts.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dto.productId}))`;
+
+      const overlapping = await tx.rentalOrder.count({
+        where: {
+          tenantId,
+          productId: dto.productId,
+          status: { notIn: ['CLOSED', 'RETURNED', 'INSPECTION'] },
+          startDate: { lt: bufferedEnd },
+          returnDate: { gt: bufferedStart },
+        },
+      });
+      if (overlapping > 0) {
+        throw new ConflictException(
+          'Product is not available for the selected dates',
+        );
+      }
+
+      return tx.rentalOrder.create({
+        data: {
+          tenantId,
+          rentalNumber,
+          userId,
+          productId: dto.productId,
+          variantId: dto.variantId,
+          startDate,
+          returnDate,
+          pickupDate,
+          totalRentalPrice,
+          downPaymentAmount,
+          damageDeposit: depositAmount,
+          status: initialStatus,
+          notes: dto.notes,
+          pickupTime: dto.pickupTime,
+          weddingDate: dto.weddingDate ? new Date(dto.weddingDate) : undefined,
+          weddingLocation: dto.weddingLocation,
+          weddingRegion: dto.weddingRegion,
+          deliveryModality: dto.deliveryModality,
+          shippingDate: dto.shippingDate ? new Date(dto.shippingDate) : undefined,
+          shippingAddress: dto.shippingAddress,
+          transportMode: dto.transportMode,
+        },
+        include: {
+          product: { select: { id: true, name: true, slug: true } },
+          variant: { select: { id: true, name: true, sku: true } },
+        },
+      });
     });
   }
 

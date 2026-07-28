@@ -141,6 +141,39 @@ export class PaymentsService {
       );
     }
 
+    // Guard against duplicate in-flight payments on the same order/rental — a
+    // double-click or double-submit would otherwise trigger two gateway
+    // charges. If a RECENT PENDING/PROCESSING payment exists, return it so the
+    // frontend polls that one. Stale ones (older than the reconcile window)
+    // are left for the reconciliation cron to FAIL, which frees a retry.
+    const inflightCutoff = new Date(Date.now() - 3 * 60 * 1000);
+    const inflight = await this.prisma.payment.findFirst({
+      where: {
+        tenantId,
+        ...(dto.orderId ? { orderId: dto.orderId } : {}),
+        ...(dto.rentalOrderId ? { rentalOrderId: dto.rentalOrderId } : {}),
+        status: { in: ['PENDING', 'PROCESSING'] },
+        createdAt: { gte: inflightCutoff },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (inflight) {
+      this.logger.warn(
+        `Duplicate payment initiation blocked for ${orderNumber} — returning in-flight ref ${inflight.transactionRef}`,
+      );
+      return {
+        paymentId: inflight.id,
+        transactionRef: inflight.transactionRef,
+        status: inflight.status,
+        gatewaySuccess: inflight.status === 'PROCESSING',
+        gatewayUrl: undefined,
+        message: 'A payment for this order is already in progress. Please wait for it to complete or poll its status.',
+        method: dto.method,
+        providerCode: inflight.providerCode ?? undefined,
+        duplicate: true,
+      };
+    }
+
     // Resolve which provider handles this request.
     const providerCode = await this.resolveProviderCode(
       tenantId,
@@ -840,23 +873,23 @@ export class PaymentsService {
 
     const downPaymentDue = Number(rental.downPaymentAmount);
 
-    const pendingStatuses = [
-      'PENDING_ID_VERIFICATION',
-      'PENDING_PAYMENT',
-      'PENDING',
-    ];
-
-    if (
-      totalPaid >= downPaymentDue &&
-      pendingStatuses.includes(rental.status)
-    ) {
+    // Gate the down-payment advance on ID verification. Previously this wrote
+    // status 'CONFIRMED' (a value NOT in the rental workflow array, which broke
+    // the forward-only guard in RentalsService.updateStatus) and it advanced
+    // straight from PENDING_ID_VERIFICATION — bypassing the mandatory National
+    // ID check that the rental system is built around. Now it uses the real
+    // workflow state DOWN_PAYMENT_PAID and only advances a rental whose ID is
+    // already verified (status ID_VERIFIED). If the customer paid before ID
+    // verification, the payment is recorded and an admin advances the rental
+    // after approving the ID.
+    if (totalPaid >= downPaymentDue && rental.status === 'ID_VERIFIED') {
       await this.prisma.rentalOrder.update({
         where: { id: rentalOrderId },
-        data: { status: 'CONFIRMED' },
+        data: { status: 'DOWN_PAYMENT_PAID' },
       });
 
       this.logger.log(
-        `Rental ${rental.rentalNumber} confirmed — down payment of ${totalPaid} TZS received`,
+        `Rental ${rental.rentalNumber} down payment of ${totalPaid} TZS received — advanced to DOWN_PAYMENT_PAID`,
       );
     }
   }
