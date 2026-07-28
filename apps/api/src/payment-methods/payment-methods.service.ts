@@ -44,10 +44,22 @@ export class PaymentMethodsService {
     private readonly tenantContext: TenantContext,
   ) {}
 
+  // Public storefront read — MUST NOT expose gateway credentials.
+  // `integrationParams` (ClickPesa/Mixx clientId/apiKey/checksumSecret) and
+  // `integrationKey` are secrets; the storefront only needs display fields.
   findAll() {
     return this.prisma.paymentMethod.findMany({
       where: { isActive: true, deletedAt: null, tenantId: this.tenantContext.id },
       orderBy: { sortOrder: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        code: true,
+        description: true,
+        iconUrl: true,
+        isActive: true,
+        sortOrder: true,
+      },
     });
   }
 
@@ -127,7 +139,10 @@ export class PaymentMethodsService {
   }
 
   async restore(id: string) {
-    const method = await this.prisma.paymentMethod.findUnique({ where: { id } });
+    // Tenant-scoped: an admin must not restore another tenant's method by id.
+    const method = await this.prisma.paymentMethod.findFirst({
+      where: { id, tenantId: this.tenantContext.id },
+    });
     if (!method) throw new NotFoundException('Payment method not found');
     return this.prisma.paymentMethod.update({
       where: { id },
@@ -135,9 +150,13 @@ export class PaymentMethodsService {
     });
   }
 
+  // Tenant-scoped lookup used by update/toggleActive/softDelete. Without the
+  // tenantId filter an authenticated admin of tenant A could read (via a no-op
+  // update) or mutate tenant B's payment method — including its gateway
+  // credentials — by id.
   private async findOneOrFail(id: string) {
     const method = await this.prisma.paymentMethod.findFirst({
-      where: { id, deletedAt: null },
+      where: { id, deletedAt: null, tenantId: this.tenantContext.id },
     });
     if (!method) throw new NotFoundException('Payment method not found');
     return method;

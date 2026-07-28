@@ -370,25 +370,57 @@ export class PaymentsService {
 
     const mappedStatus = this.mapWebhookStatus(webhookStatus);
 
+    // Verify the gateway actually collected at least the expected amount
+    // before crediting a COMPLETED payment. Without this, a success callback
+    // that reports a smaller collected amount than payment.amount (gateway
+    // glitch or a spoofed/observed callback) would still credit the full
+    // stored amount and could flip the order to PAID. If the reported amount
+    // is short we hold the payment as PROCESSING and flag it for review rather
+    // than auto-completing. When no amount field is present we can't verify,
+    // so we proceed (never drop a legitimate completion over a missing field).
+    const reportedAmountRaw =
+      payload.collectedAmount ??
+      payload.amount ??
+      payload.totalAmount ??
+      payload?.data?.collectedAmount ??
+      payload?.data?.amount;
+    const reportedAmount =
+      reportedAmountRaw != null ? Number(reportedAmountRaw) : null;
+    const expectedAmount = Number(payment.amount);
+    const amountShort =
+      mappedStatus === 'COMPLETED' &&
+      reportedAmount != null &&
+      !Number.isNaN(reportedAmount) &&
+      reportedAmount + 0.001 < expectedAmount;
+
+    const effectiveStatus = amountShort ? 'PROCESSING' : mappedStatus;
+    if (amountShort) {
+      this.logger.warn(
+        `Webhook (${providerCode}): AMOUNT MISMATCH on payment ${payment.id} (ref ${txnRef}) — gateway collected ${reportedAmount} but ${expectedAmount} was expected. Holding as PROCESSING for review, NOT completing.`,
+      );
+    }
+
     this.logger.log(
-      `Webhook (${providerCode}): updating payment ${payment.id} (ref: ${txnRef}) → ${mappedStatus}`,
+      `Webhook (${providerCode}): updating payment ${payment.id} (ref: ${txnRef}) → ${effectiveStatus}`,
     );
 
     const updated = await this.prisma.payment.update({
       where: { id: payment.id },
       data: {
-        status: mappedStatus,
+        status: effectiveStatus,
         providerCode: payment.providerCode ?? providerCode,
         providerTransactionId:
           payment.providerTransactionId ??
           payload.id ??
           payload.transid ??
           null,
-        gatewayResponse: payload,
+        gatewayResponse: amountShort
+          ? { ...payload, _amountMismatch: { reportedAmount, expectedAmount } }
+          : payload,
       },
     });
 
-    if (mappedStatus === 'COMPLETED') {
+    if (effectiveStatus === 'COMPLETED') {
       if (updated.orderId) {
         await this.updateOrderPaymentStatus(updated.orderId, tenantId);
       }
@@ -435,7 +467,6 @@ export class PaymentsService {
       creds,
     );
 
-    // Persist the event first (idempotent).
     const eventType = String(payload?.event ?? 'UNKNOWN');
     const data = payload?.data ?? payload ?? {};
     const providerEventId = String(
@@ -443,6 +474,19 @@ export class PaymentsService {
     );
     const orderReference = data?.orderReference ?? null;
 
+    // Reject invalid checksums BEFORE writing the idempotency row. Otherwise an
+    // attacker who guesses/observes an orderReference could POST an unsigned
+    // junk webhook, which would persist the dedup row (processed:false); the
+    // genuine ClickPesa callback then collides on the unique key, is acked as a
+    // duplicate, and the real completion is never processed via the webhook.
+    if (!checksumValid) {
+      this.logger.warn(
+        `ClickPesa webhook: invalid checksum for event ${eventType}/${providerEventId} — rejected, no dedup row written`,
+      );
+      throw new ForbiddenException('Invalid webhook checksum');
+    }
+
+    // Persist the (verified) event for idempotency.
     try {
       await this.prisma.webhookEvent.create({
         data: {
@@ -465,13 +509,6 @@ export class PaymentsService {
         return { received: true, duplicate: true };
       }
       throw err;
-    }
-
-    if (!checksumValid) {
-      this.logger.warn(
-        `ClickPesa webhook: invalid checksum for event ${eventType}/${providerEventId}`,
-      );
-      throw new ForbiddenException('Invalid webhook checksum');
     }
 
     // Hand off to the shared handler with explicit tenantId.

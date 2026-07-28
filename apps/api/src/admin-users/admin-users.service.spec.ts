@@ -122,9 +122,11 @@ describe('AdminUsersService — self-modification guards', () => {
   describe('Symmetry — different ids still proceed past the self-check', () => {
     it('assignRole proceeds to role lookup when performer and target differ', async () => {
       // Prove the guard is bound to equality, not blanket-blocking everything.
-      // The role lookup returns null so the call rejects with NotFound — fine.
-      // The important assertion is that prisma.role.findFirst WAS called,
-      // meaning we got past the self-check.
+      // The target admin resolves in-tenant (added 2026-07-28 — assignRole now
+      // verifies the target belongs to the caller's tenant before the role
+      // lookup). The role lookup then returns null so the call rejects with
+      // NotFound — the important assertion is that we got past the self-check.
+      prisma.adminUser.findFirst.mockResolvedValue({ id: 'target-different', tenantId: TENANT_ID });
       prisma.role.findFirst.mockResolvedValue(null);
       await expect(
         service.assignRole('target-different', OTHER_ROLE_ID, ADMIN_ID),
@@ -133,11 +135,32 @@ describe('AdminUsersService — self-modification guards', () => {
     });
 
     it('removeRole proceeds to the delete when performer and target differ', async () => {
+      // Target admin resolves in-tenant (removeRole now verifies target tenant).
+      prisma.adminUser.findFirst.mockResolvedValue({ id: 'target-different', tenantId: TENANT_ID });
       prisma.adminUserRole.delete.mockResolvedValue({});
       await expect(
         service.removeRole('target-different', OTHER_ROLE_ID, ADMIN_ID),
       ).resolves.toEqual({ message: 'Role removed' });
       expect(prisma.adminUserRole.delete).toHaveBeenCalledTimes(1);
+    });
+
+    it('assignRole rejects when the target admin is not in the caller tenant', async () => {
+      // Cross-tenant guard: an unknown/foreign target id must 404 before any
+      // role lookup or write.
+      prisma.adminUser.findFirst.mockResolvedValue(null);
+      await expect(
+        service.assignRole('foreign-admin', OTHER_ROLE_ID, ADMIN_ID),
+      ).rejects.toThrow(/admin user not found/i);
+      expect(prisma.role.findFirst).not.toHaveBeenCalled();
+      expect(prisma.adminUserRole.create).not.toHaveBeenCalled();
+    });
+
+    it('removeRole rejects when the target admin is not in the caller tenant', async () => {
+      prisma.adminUser.findFirst.mockResolvedValue(null);
+      await expect(
+        service.removeRole('foreign-admin', OTHER_ROLE_ID, ADMIN_ID),
+      ).rejects.toThrow(/admin user not found/i);
+      expect(prisma.adminUserRole.delete).not.toHaveBeenCalled();
     });
   });
 });

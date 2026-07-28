@@ -166,6 +166,7 @@ export class SchedulerService implements OnModuleInit {
               customerPhone: rental.user.phone || undefined,
               rentalNumber: rental.rentalNumber,
               productName: rental.product.name,
+              tenantId: rental.tenantId ?? undefined,
             })
             .catch((err) =>
               this.logger.error(`Customer rental reminder failed: ${err?.message}`),
@@ -279,6 +280,7 @@ export class SchedulerService implements OnModuleInit {
               customerPhone: rental.user.phone || undefined,
               rentalNumber: rental.rentalNumber,
               productName: rental.product.name,
+              tenantId: rental.tenantId ?? undefined,
             })
             .catch((err) =>
               this.logger.error(`Pending return reminder failed: ${err?.message}`),

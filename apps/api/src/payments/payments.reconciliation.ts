@@ -104,71 +104,71 @@ export class PaymentsReconciliationService {
   ) {
     if (!payment.tenantId || !payment.transactionRef) return;
 
-    // Too old to keep waiting on → mark FAILED.
+    // Ask the gateway for a DEFINITIVE status FIRST — before any age-based
+    // decision. The old code force-FAILED any payment past the cutoff before
+    // ever calling the gateway, so a customer who took longer than the cutoff
+    // (5 min) to enter their Mobile-Money PIN — routine in TZ — had their
+    // payment failed even though it later completed, and the money was lost
+    // to reconciliation unless a webhook happened to arrive.
+    const providerCode = (payment.providerCode as ProviderCode) ?? PROVIDER_CODES.CLICKPESA_MIXX;
+    const creds = await this.loadCreds(payment.tenantId, providerCode);
+
+    let gatewayChecked = false;
+    if (creds) {
+      const provider = this.registry.resolve(providerCode);
+      const status = await provider.checkPaymentStatus(
+        payment.transactionRef,
+        creds,
+      );
+      await this.prisma.payment.update({
+        where: { id: payment.id },
+        data: { lastPolledAt: new Date() },
+      });
+
+      if (status.success) {
+        gatewayChecked = true;
+        // Terminal status from the gateway is authoritative — apply and stop.
+        if (status.status !== 'PROCESSING' && status.status !== 'PENDING') {
+          await this.prisma.payment.update({
+            where: { id: payment.id },
+            data: {
+              status: status.status,
+              gatewayResponse: status.rawResponse ?? undefined,
+            },
+          });
+          this.logger.log(
+            `Reconcile: payment ${payment.id} (${payment.transactionRef}) → ${status.status}`,
+          );
+          if (status.status === 'COMPLETED') {
+            if (payment.orderId) {
+              await this.updateOrderPaymentStatus(payment.orderId, payment.tenantId);
+            }
+            if (payment.rentalOrderId) {
+              await this.updateRentalPaymentStatus(payment.rentalOrderId, payment.tenantId);
+            }
+          }
+          return;
+        }
+        // Gateway still says PROCESSING/PENDING — fall through to the age check.
+      }
+    }
+
+    // Only NOW consider the age cutoff: fail a payment on timeout ONLY when the
+    // gateway did not confirm completion (still pending, or couldn't be polled
+    // — e.g. Selcom, which reconciles via webhook). Never on age alone before a
+    // status check.
     if (payment.createdAt < expiryCutoff) {
       await this.prisma.payment.update({
         where: { id: payment.id },
         data: {
           status: 'FAILED',
           lastPolledAt: new Date(),
-          gatewayResponse: { timeout: true, cutoff: expiryCutoff },
+          gatewayResponse: { timeout: true, cutoff: expiryCutoff, gatewayChecked },
         },
       });
       this.logger.log(
-        `Reconcile: payment ${payment.id} timed out after ${this.cutoffMinutes}m → FAILED`,
+        `Reconcile: payment ${payment.id} timed out after ${this.cutoffMinutes}m (gatewayChecked=${gatewayChecked}) → FAILED`,
       );
-      return;
-    }
-
-    const providerCode = (payment.providerCode as ProviderCode) ?? PROVIDER_CODES.CLICKPESA_MIXX;
-    const creds = await this.loadCreds(payment.tenantId, providerCode);
-    if (!creds) {
-      this.logger.warn(
-        `Reconcile: no credentials for tenant ${payment.tenantId} / ${providerCode}`,
-      );
-      return;
-    }
-
-    const provider = this.registry.resolve(providerCode);
-    const status = await provider.checkPaymentStatus(
-      payment.transactionRef,
-      creds,
-    );
-
-    await this.prisma.payment.update({
-      where: { id: payment.id },
-      data: { lastPolledAt: new Date() },
-    });
-
-    if (!status.success) return;
-
-    if (status.status === 'PROCESSING' || status.status === 'PENDING') return;
-
-    await this.prisma.payment.update({
-      where: { id: payment.id },
-      data: {
-        status: status.status,
-        gatewayResponse: status.rawResponse ?? undefined,
-      },
-    });
-
-    this.logger.log(
-      `Reconcile: payment ${payment.id} (${payment.transactionRef}) → ${status.status}`,
-    );
-
-    if (status.status === 'COMPLETED') {
-      if (payment.orderId) {
-        await this.updateOrderPaymentStatus(
-          payment.orderId,
-          payment.tenantId,
-        );
-      }
-      if (payment.rentalOrderId) {
-        await this.updateRentalPaymentStatus(
-          payment.rentalOrderId,
-          payment.tenantId,
-        );
-      }
     }
   }
 

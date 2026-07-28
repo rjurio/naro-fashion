@@ -213,8 +213,11 @@ export class RentalChecklistsService {
   }
 
   async checkItem(entryId: string, adminUserId: string, notes?: string) {
+    // RentalChecklistEntry has no tenantId of its own — scope via the parent
+    // RentalOrder so a tenant admin can't check/uncheck another tenant's
+    // checklist entries by id (and mis-attribute the check to themselves).
     const entry = await this.prisma.rentalChecklistEntry.findFirst({
-      where: { id: entryId },
+      where: { id: entryId, rentalOrder: { tenantId: this.tenantContext.requireId } },
     });
     if (!entry) {
       throw new NotFoundException('Checklist entry not found');
@@ -237,8 +240,9 @@ export class RentalChecklistsService {
   }
 
   async uncheckItem(entryId: string) {
+    // Scope via parent RentalOrder tenant (see checkItem).
     const entry = await this.prisma.rentalChecklistEntry.findFirst({
-      where: { id: entryId },
+      where: { id: entryId, rentalOrder: { tenantId: this.tenantContext.requireId } },
     });
     if (!entry) {
       throw new NotFoundException('Checklist entry not found');

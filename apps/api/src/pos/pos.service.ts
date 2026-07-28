@@ -201,8 +201,13 @@ export class PosService {
   }
 
   async lookupBarcode(barcode: string) {
+    // Barcodes are unique PER TENANT (@@unique([tenantId, barcode])), so the
+    // same real UPC can exist in two tenants. Without the tenantId filter a
+    // cashier scanning a shared barcode would get another tenant's product,
+    // price, live stock, and variantId (which then feeds cross-tenant stock
+    // tampering in createSale/createExchange).
     const variant = await this.prisma.productVariant.findFirst({
-      where: { barcode },
+      where: { barcode, tenantId: this.tenantContext.requireId },
       include: {
         product: {
           include: {
@@ -221,6 +226,14 @@ export class PosService {
   }
 
   async updateBarcode(variantId: string, barcode: string) {
+    // Confirm the variant is in the caller's tenant before writing — otherwise
+    // a tenant-A admin who knows a tenant-B variantId could overwrite its
+    // barcode and corrupt tenant B's scanning.
+    const tenantId = this.tenantContext.requireId;
+    const variant = await this.prisma.productVariant.findFirst({
+      where: { id: variantId, tenantId },
+    });
+    if (!variant) throw new NotFoundException('Product variant not found');
     return this.prisma.productVariant.update({
       where: { id: variantId },
       data: { barcode },
@@ -301,10 +314,14 @@ export class PosService {
       throw new BadRequestException('Sale must have at least one item.');
     }
 
-    // 2. Validate stock and gather variant data
+    // 2. Validate stock and gather variant data — scoped to THIS tenant.
+    // Without the tenantId filter a cashier could pass another tenant's
+    // variantId and decrement that tenant's stock (and blend their product
+    // into this sale). Out-of-tenant ids simply won't appear in variantMap
+    // and are rejected as "not found" below.
     const variantIds = dto.items.map((i) => i.variantId);
     const variants = await this.prisma.productVariant.findMany({
-      where: { id: { in: variantIds } },
+      where: { id: { in: variantIds }, tenantId },
       include: { product: { select: { id: true, name: true } } },
     });
 
@@ -406,25 +423,36 @@ export class PosService {
         });
       }
 
-      // Deduct stock and log inventory transactions
+      // Deduct stock and log inventory transactions.
+      // Atomic guarded decrement (stock >= quantity) instead of an absolute
+      // write from the stale pre-transaction read — otherwise two concurrent
+      // sales of the last unit both compute the same newStock and oversell.
+      // A count of 0 means another writer got there first (or stock changed).
       for (const item of dto.items) {
         const variant = variantMap.get(item.variantId)!;
-        const newStock = variant.stock - item.quantity;
 
-        await tx.productVariant.update({
-          where: { id: item.variantId },
-          data: { stock: newStock },
+        const dec = await tx.productVariant.updateMany({
+          where: { id: item.variantId, tenantId, stock: { gte: item.quantity } },
+          data: { stock: { decrement: item.quantity } },
         });
+        if (dec.count === 0) {
+          throw new BadRequestException(
+            `Insufficient stock for ${variant.product.name} (${variant.name}). It may have sold out during checkout.`,
+          );
+        }
+
+        const quantityBefore = variant.stock;
+        const quantityAfter = variant.stock - item.quantity;
 
         await tx.inventoryTransaction.create({
           data: {
             tenantId,
-            productId: item.productId,
+            productId: variant.productId,
             variantId: item.variantId,
             type: 'SALE',
-            quantityBefore: variant.stock,
+            quantityBefore,
             quantityChange: -item.quantity,
-            quantityAfter: newStock,
+            quantityAfter,
             unitCost: item.unitPrice,
             totalValue: item.unitPrice * item.quantity,
             reference: orderNumber,
@@ -611,72 +639,107 @@ export class PosService {
       throw new BadRequestException('This sale has already been refunded.');
     }
 
+    // How much has already been refunded across prior REFUNDED payments —
+    // used as a cumulative cash cap so total refunds can never exceed the
+    // order total, even if per-item accounting were somehow bypassed.
+    const alreadyRefundedAmount = order.payments
+      .filter((p) => p.status === 'REFUNDED')
+      .reduce((sum, p) => sum + Number(p.amount), 0);
+
     const isFullRefund = !dto.items || dto.items.length === 0;
 
     return this.prisma.$transaction(async (tx) => {
       let refundAmount = 0;
 
+      // Restock a variant atomically and log the movement.
+      const restock = async (
+        variantId: string,
+        productId: string,
+        qty: number,
+        note: string,
+      ) => {
+        await tx.productVariant.updateMany({
+          where: { id: variantId, tenantId },
+          data: { stock: { increment: qty } },
+        });
+        const after = await tx.productVariant.findFirst({
+          where: { id: variantId, tenantId },
+          select: { stock: true },
+        });
+        const quantityAfter = after?.stock ?? 0;
+        await tx.inventoryTransaction.create({
+          data: {
+            tenantId,
+            productId,
+            variantId,
+            type: 'ADJUSTMENT',
+            quantityBefore: quantityAfter - qty,
+            quantityChange: qty,
+            quantityAfter,
+            reference: order.orderNumber,
+            note,
+            performedBy: cashierId,
+          },
+        });
+      };
+
       if (isFullRefund) {
-        // Full refund: restore all stock
-        refundAmount = Number(order.total);
+        // Full refund: refund only the not-yet-refunded remainder of each line.
         for (const item of order.items) {
-          const variant = item.variant;
-          const newStock = variant.stock + item.quantity;
-          await tx.productVariant.update({
-            where: { id: item.variantId },
-            data: { stock: newStock },
-          });
-          await tx.inventoryTransaction.create({
-            data: {
-              tenantId,
-              productId: item.productId,
-              variantId: item.variantId,
-              type: 'ADJUSTMENT',
-              quantityBefore: variant.stock,
-              quantityChange: item.quantity,
-              quantityAfter: newStock,
-              reference: order.orderNumber,
-              note: `POS refund: ${dto.reason ?? 'Full refund'}`,
-              performedBy: cashierId,
-            },
+          const remainingQty = item.quantity - item.refundedQuantity;
+          if (remainingQty <= 0) continue;
+          refundAmount += Number(item.unitPrice) * remainingQty;
+          await restock(
+            item.variantId,
+            item.productId,
+            remainingQty,
+            `POS refund: ${dto.reason ?? 'Full refund'}`,
+          );
+          await tx.orderItem.update({
+            where: { id: item.id },
+            data: { refundedQuantity: item.quantity },
           });
         }
       } else {
-        // Partial refund
+        // Partial refund: guard each line against its REMAINING refundable
+        // quantity (purchased − already refunded), not the original quantity.
+        // Without this the same line can be refunded repeatedly.
         for (const refundItem of dto.items!) {
           const orderItem = order.items.find((i) => i.id === refundItem.orderItemId);
           if (!orderItem) {
             throw new BadRequestException(`Order item ${refundItem.orderItemId} not found.`);
           }
-          if (refundItem.quantity > orderItem.quantity) {
+          const remaining = orderItem.quantity - orderItem.refundedQuantity;
+          if (refundItem.quantity > remaining) {
             throw new BadRequestException(
-              `Cannot refund more than purchased quantity for item ${refundItem.orderItemId}.`,
+              `Cannot refund more than the remaining ${remaining} unit(s) for this item (already refunded ${orderItem.refundedQuantity} of ${orderItem.quantity}).`,
             );
           }
 
           refundAmount += Number(orderItem.unitPrice) * refundItem.quantity;
-
-          const variant = orderItem.variant;
-          const newStock = variant.stock + refundItem.quantity;
-          await tx.productVariant.update({
-            where: { id: orderItem.variantId },
-            data: { stock: newStock },
-          });
-          await tx.inventoryTransaction.create({
-            data: {
-              tenantId,
-              productId: orderItem.productId,
-              variantId: orderItem.variantId,
-              type: 'ADJUSTMENT',
-              quantityBefore: variant.stock,
-              quantityChange: refundItem.quantity,
-              quantityAfter: newStock,
-              reference: order.orderNumber,
-              note: `POS partial refund: ${dto.reason ?? 'Partial refund'}`,
-              performedBy: cashierId,
-            },
+          await restock(
+            orderItem.variantId,
+            orderItem.productId,
+            refundItem.quantity,
+            `POS partial refund: ${dto.reason ?? 'Partial refund'}`,
+          );
+          await tx.orderItem.update({
+            where: { id: orderItem.id },
+            data: { refundedQuantity: orderItem.refundedQuantity + refundItem.quantity },
           });
         }
+      }
+
+      if (refundAmount <= 0) {
+        throw new BadRequestException('Nothing left to refund on this sale.');
+      }
+
+      // Cumulative cash cap (defence-in-depth; the transaction rolls back the
+      // restocks above if this trips).
+      if (alreadyRefundedAmount + refundAmount > Number(order.total) + 0.001) {
+        throw new BadRequestException(
+          'Refund would exceed the amount paid for this sale.',
+        );
       }
 
       // Create refund payment record
@@ -690,16 +753,25 @@ export class PosService {
         },
       });
 
-      // Update order status
+      // The order is fully refunded once every line's cumulative refunded
+      // quantity reaches its purchased quantity.
+      const fullyRefunded =
+        isFullRefund ||
+        order.items.every((i) => {
+          const refundedNow =
+            dto.items!.find((r) => r.orderItemId === i.id)?.quantity ?? 0;
+          return i.refundedQuantity + refundedNow >= i.quantity;
+        });
+
       await tx.order.update({
         where: { id: orderId },
         data: {
-          status: isFullRefund ? 'REFUNDED' : order.status,
-          paymentStatus: isFullRefund ? 'REFUNDED' : 'PARTIAL',
+          status: fullyRefunded ? 'REFUNDED' : order.status,
+          paymentStatus: fullyRefunded ? 'REFUNDED' : 'PARTIAL',
         },
       });
 
-      return { refundAmount, isFullRefund };
+      return { refundAmount, isFullRefund: fullyRefunded };
     });
   }
 
@@ -871,10 +943,12 @@ export class PosService {
 
     const items = layaway.items as any[];
 
-    // Validate stock
+    // Validate stock — scoped to this tenant (a layaway's item JSON could
+    // reference a foreign variantId; the authoritative guard is the atomic
+    // decrement below, this is the friendly early check).
     for (const item of items) {
-      const variant = await this.prisma.productVariant.findUnique({
-        where: { id: item.variantId },
+      const variant = await this.prisma.productVariant.findFirst({
+        where: { id: item.variantId, tenantId },
       });
       if (!variant || variant.stock < item.quantity) {
         throw new BadRequestException(
@@ -914,25 +988,31 @@ export class PosService {
         },
       });
 
-      // Deduct stock
+      // Deduct stock — tenant-scoped atomic guarded decrement (see createSale).
       for (const item of items) {
-        const variant = await tx.productVariant.findUnique({
-          where: { id: item.variantId },
+        const dec = await tx.productVariant.updateMany({
+          where: { id: item.variantId, tenantId, stock: { gte: item.quantity } },
+          data: { stock: { decrement: item.quantity } },
         });
-        const newStock = variant!.stock - item.quantity;
-        await tx.productVariant.update({
-          where: { id: item.variantId },
-          data: { stock: newStock },
+        if (dec.count === 0) {
+          throw new BadRequestException(
+            `Insufficient stock for ${item.productName} (${item.variantName}). It may have sold out.`,
+          );
+        }
+        const after = await tx.productVariant.findFirst({
+          where: { id: item.variantId, tenantId },
+          select: { stock: true },
         });
+        const quantityAfter = after?.stock ?? 0;
         await tx.inventoryTransaction.create({
           data: {
             tenantId,
             productId: item.productId,
             variantId: item.variantId,
             type: 'SALE',
-            quantityBefore: variant!.stock,
+            quantityBefore: quantityAfter + item.quantity,
             quantityChange: -item.quantity,
-            quantityAfter: newStock,
+            quantityAfter,
             reference: orderNumber,
             note: `Layaway completion: ${layaway.layawayNumber}`,
             performedBy: cashierId,
@@ -1013,11 +1093,13 @@ export class PosService {
       });
     }
 
-    // Calculate new items total & validate stock
+    // Calculate new items total & validate stock — scoped to this tenant
+    // (dto.newItems is attacker-controlled; an out-of-tenant variantId must
+    // not be resolvable). Authoritative guard is the atomic decrement below.
     let newTotal = 0;
     for (const ni of dto.newItems) {
-      const variant = await this.prisma.productVariant.findUnique({
-        where: { id: ni.variantId },
+      const variant = await this.prisma.productVariant.findFirst({
+        where: { id: ni.variantId, tenantId },
         include: { product: { select: { name: true } } },
       });
       if (!variant) throw new BadRequestException(`Variant ${ni.variantId} not found.`);
@@ -1033,23 +1115,28 @@ export class PosService {
     const exchangeNumber = `EXC-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     return this.prisma.$transaction(async (tx) => {
-      // Restock returned items
+      // Restock returned items — tenant-scoped atomic increment (returned
+      // items come from this tenant's own order, but keep it atomic to avoid
+      // lost updates racing a concurrent sale of the same variant).
       for (const ri of returnItemDetails) {
-        const variant = await tx.productVariant.findUnique({ where: { id: ri.variantId } });
-        const newStock = variant!.stock + ri.quantity;
-        await tx.productVariant.update({
-          where: { id: ri.variantId },
-          data: { stock: newStock },
+        await tx.productVariant.updateMany({
+          where: { id: ri.variantId, tenantId },
+          data: { stock: { increment: ri.quantity } },
         });
+        const after = await tx.productVariant.findFirst({
+          where: { id: ri.variantId, tenantId },
+          select: { stock: true },
+        });
+        const quantityAfter = after?.stock ?? 0;
         await tx.inventoryTransaction.create({
           data: {
             tenantId,
             productId: ri.productId,
             variantId: ri.variantId,
             type: 'ADJUSTMENT',
-            quantityBefore: variant!.stock,
+            quantityBefore: quantityAfter - ri.quantity,
             quantityChange: ri.quantity,
-            quantityAfter: newStock,
+            quantityAfter,
             reference: exchangeNumber,
             note: `Exchange return`,
             performedBy: cashierId,
@@ -1091,21 +1178,29 @@ export class PosService {
         newOrderId = newOrder.id;
 
         for (const ni of dto.newItems) {
-          const variant = await tx.productVariant.findUnique({ where: { id: ni.variantId } });
-          const newStock = variant!.stock - ni.quantity;
-          await tx.productVariant.update({
-            where: { id: ni.variantId },
-            data: { stock: newStock },
+          const dec = await tx.productVariant.updateMany({
+            where: { id: ni.variantId, tenantId, stock: { gte: ni.quantity } },
+            data: { stock: { decrement: ni.quantity } },
           });
+          if (dec.count === 0) {
+            throw new BadRequestException(
+              `Insufficient stock for the exchange item. It may have sold out.`,
+            );
+          }
+          const after = await tx.productVariant.findFirst({
+            where: { id: ni.variantId, tenantId },
+            select: { stock: true },
+          });
+          const quantityAfter = after?.stock ?? 0;
           await tx.inventoryTransaction.create({
             data: {
               tenantId,
               productId: ni.productId,
               variantId: ni.variantId,
               type: 'SALE',
-              quantityBefore: variant!.stock,
+              quantityBefore: quantityAfter + ni.quantity,
               quantityChange: -ni.quantity,
-              quantityAfter: newStock,
+              quantityAfter,
               reference: exchangeNumber,
               note: `Exchange new item`,
               performedBy: cashierId,

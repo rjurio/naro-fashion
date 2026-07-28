@@ -113,10 +113,20 @@ export class RolesService implements OnModuleInit {
   }
 
   async restore(id: string) {
+    const tenantId = this.tenantContext.requireId;
+    // Only the owning tenant may restore its own (custom) role. System roles
+    // have tenantId=null and are never soft-deleted, so `{ id, tenantId }`
+    // naturally excludes them; the isSystem block is defence-in-depth.
+    const role = await this.prisma.role.findFirst({ where: { id, tenantId } });
+    if (!role) throw new NotFoundException('Role not found');
+    if (role.isSystem) throw new ForbiddenException('Cannot restore system roles');
     return this.prisma.role.update({ where: { id }, data: { deletedAt: null, isActive: true } });
   }
 
   async getRolePermissions(id: string) {
+    // Visibility check: the role must be this tenant's own or a shared system
+    // role. Without it any admin could enumerate another tenant's role config.
+    await this.resolveVisibleRole(id);
     return this.prisma.rolePermission.findMany({
       where: { roleId: id },
       include: { permission: true },
@@ -124,12 +134,29 @@ export class RolesService implements OnModuleInit {
   }
 
   async addPermissions(id: string, permissionIds: string[]) {
+    // Mirror removePermission's guard. Without this, a tenant admin could
+    // grant arbitrary permissions to a SHARED system role (tenantId=null,
+    // SUPER_ADMIN/MANAGER/STAFF) and escalate privileges platform-wide, or
+    // mutate another tenant's custom role by id.
+    const role = await this.resolveVisibleRole(id);
+    if (role.isSystem) throw new ForbiddenException('Cannot modify permissions on system roles');
     await this.prisma.rolePermission.createMany({
       data: permissionIds.map(pid => ({ roleId: id, permissionId: pid })),
       skipDuplicates: true,
     });
     await this.auditService.log('ADD_PERMISSIONS', 'Role', id);
     return this.getRolePermissions(id);
+  }
+
+  // Resolves a role the current tenant is allowed to see: its own, or a shared
+  // system role. Throws 404 otherwise (avoids leaking cross-tenant existence).
+  private async resolveVisibleRole(id: string) {
+    const tenantId = this.tenantContext.requireId;
+    const role = await this.prisma.role.findFirst({
+      where: { id, OR: [{ tenantId }, { tenantId: null, isSystem: true }] },
+    });
+    if (!role) throw new NotFoundException('Role not found');
+    return role;
   }
 
   async removePermission(roleId: string, permissionId: string) {

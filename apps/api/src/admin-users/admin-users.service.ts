@@ -133,6 +133,10 @@ export class AdminUsersService {
   async assignRole(adminUserId: string, roleId: string, performedById: string) {
     const tenantId = this.tenantContext.requireId;
     if (adminUserId === performedById) throw new ForbiddenException('Cannot change your own roles');
+    // The TARGET admin must belong to the caller's tenant. Without this a
+    // tenant-A SUPER_ADMIN could grant/revoke roles on tenant-B's admins by id.
+    const targetAdmin = await this.prisma.adminUser.findFirst({ where: { id: adminUserId, tenantId } });
+    if (!targetAdmin) throw new NotFoundException('Admin user not found');
     // System roles (e.g. AI_AGENT_OPERATOR, AI_AGENT_APPROVER, SUPER_ADMIN,
     // MANAGER, STAFF) are seeded with `tenantId: null, isSystem: true` and
     // shared across every tenant. Custom roles are tenant-scoped. The
@@ -160,7 +164,11 @@ export class AdminUsersService {
   }
 
   async removeRole(adminUserId: string, roleId: string, performedById: string) {
+    const tenantId = this.tenantContext.requireId;
     if (adminUserId === performedById) throw new ForbiddenException('Cannot change your own roles');
+    // Target admin must be in the caller's tenant (see assignRole).
+    const targetAdmin = await this.prisma.adminUser.findFirst({ where: { id: adminUserId, tenantId } });
+    if (!targetAdmin) throw new NotFoundException('Admin user not found');
     await this.prisma.adminUserRole.delete({ where: { adminUserId_roleId: { adminUserId, roleId } } });
     return { message: 'Role removed' };
   }

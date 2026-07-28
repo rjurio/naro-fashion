@@ -13,18 +13,29 @@ export class NotificationsService {
     private readonly smsService: SmsService,
   ) {}
 
-  private async getBusinessName(): Promise<string> {
+  // Scope branding lookups to a tenant when the caller knows it. This service
+  // is a singleton (no request-scoped TenantContext), so cron paths that
+  // iterate rentals/orders across tenants MUST pass the row's tenantId — else
+  // an unscoped findFirst returns whichever tenant's row Postgres yields first
+  // and tenant B's customer gets tenant A's business name / domain in their
+  // SMS + email. Request-path callers on the current single-tenant deployment
+  // omit it and get the (correct) sole tenant via fallback.
+  private async getBusinessName(tenantId?: string): Promise<string> {
     try {
-      const setting = await this.prisma.siteSetting.findFirst({ where: { key: 'site_name' } });
+      const setting = await this.prisma.siteSetting.findFirst({
+        where: { key: 'site_name', ...(tenantId ? { tenantId } : {}) },
+      });
       return setting?.value || 'Naro Fashion';
     } catch {
       return 'Naro Fashion';
     }
   }
 
-  private async getDomain(): Promise<string> {
+  private async getDomain(tenantId?: string): Promise<string> {
     try {
-      const setting = await this.prisma.siteSetting.findFirst({ where: { key: 'business_domain' } });
+      const setting = await this.prisma.siteSetting.findFirst({
+        where: { key: 'business_domain', ...(tenantId ? { tenantId } : {}) },
+      });
       return setting?.value || 'narofashion.co.tz';
     } catch {
       return 'narofashion.co.tz';
@@ -39,6 +50,7 @@ export class NotificationsService {
     customerName?: string;
     orderNumber?: string;
     customerPhone?: string;
+    tenantId?: string;
   }) {
     this.logger.log(
       `[ORDER CONFIRMATION] Order ${orderId} — sending to ${customerEmail}`,
@@ -70,8 +82,8 @@ export class NotificationsService {
 
     // Send SMS for order confirmations (critical notification)
     if (extra?.customerPhone) {
-      const bizName = await this.getBusinessName();
-      const domain = await this.getDomain();
+      const bizName = await this.getBusinessName(extra?.tenantId);
+      const domain = await this.getDomain(extra?.tenantId);
       this.smsService
         .send(
           extra.customerPhone,
@@ -98,6 +110,7 @@ export class NotificationsService {
       rentalNumber?: string;
       pickupTime?: string;
       productName?: string;
+      tenantId?: string;
     },
   ) {
     this.logger.log(
@@ -132,7 +145,7 @@ export class NotificationsService {
 
     // SMS reminder
     if (extra?.customerPhone) {
-      const bizName2 = await this.getBusinessName();
+      const bizName2 = await this.getBusinessName(extra?.tenantId);
       this.smsService
         .send(
           extra.customerPhone,
