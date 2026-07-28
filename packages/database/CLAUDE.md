@@ -77,6 +77,9 @@ Many fields changed from `@unique` to `@@unique([tenantId, field])`: Category.sl
 - `purchasePrice`, `minimumStock`, `supplierName`, `supplierContact`, `lastRestockedAt` - Inventory management fields
 - `inventoryTransactions InventoryTransaction[]` - Transaction log relation
 
+## OrderItem.refundedQuantity (2026-07-28)
+Additive `Int @default(0)` column tracking the cumulative quantity already refunded for an order line. Introduced to fix a POS partial-refund replay bug: `PosService.refundSale` guards each line against its REMAINING refundable quantity (`quantity - refundedQuantity`) and caps total refunds at the order total, so the same line can't be refunded repeatedly. Non-destructive on rollout (existing rows default 0). Set inside the refund `$transaction` alongside the atomic restock.
+
 ## Product.archivedAt (Phase 3.1B.α, 2026-05-11)
 Nullable `DateTime?` column distinguishing **archived** rows (was once active, then hidden via the AI approval workflow's `archive_product` tool) from **drafts** (never published). Without this column, `restore_product` (Phase 3.1B.β, not yet shipped) couldn't safely tell the two apart and might re-publish unreviewed drafts.
 
