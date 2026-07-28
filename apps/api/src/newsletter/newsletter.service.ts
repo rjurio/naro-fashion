@@ -3,6 +3,7 @@ import { IsEmail, IsOptional, IsString } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../notifications/email.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { sanitizeRichText } from '../common/sanitize-html.util';
 
 export class SubscribeDto {
   @IsEmail()
@@ -148,7 +149,10 @@ export class NewsletterService {
       data: {
         tenantId,
         subject: dto.subject,
-        bodyHtml: dto.bodyHtml || '',
+        // Sanitize admin-authored HTML — the newsletter body is rendered via
+        // dangerouslySetInnerHTML in the admin preview and emailed to
+        // subscribers.
+        bodyHtml: sanitizeRichText(dto.bodyHtml || ''),
         templateType: dto.templateType || 'CUSTOM',
         createdById: adminId || null,
       },
@@ -210,7 +214,9 @@ export class NewsletterService {
     if (newsletter.status !== 'DRAFT') {
       throw new BadRequestException('Only draft newsletters can be edited');
     }
-    return this.prisma.newsletter.update({ where: { id }, data: dto });
+    const data: any = { ...dto };
+    if (dto.bodyHtml !== undefined) data.bodyHtml = sanitizeRichText(dto.bodyHtml);
+    return this.prisma.newsletter.update({ where: { id }, data });
   }
 
   async deleteNewsletter(id: string) {

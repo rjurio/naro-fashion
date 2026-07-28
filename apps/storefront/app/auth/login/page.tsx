@@ -16,7 +16,14 @@ export default function LoginPage() {
   const { login, isAuthenticated, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirect = searchParams.get("redirect") || "/account";
+  // Only accept same-origin relative paths. An absolute (https://evil.com) or
+  // protocol-relative (//evil.com) value would let ?redirect= bounce the user
+  // off-site after login — a phishing vector on a legitimate domain.
+  const rawRedirect = searchParams.get("redirect") || "/account";
+  const redirect =
+    rawRedirect.startsWith("/") && !rawRedirect.startsWith("//")
+      ? rawRedirect
+      : "/account";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

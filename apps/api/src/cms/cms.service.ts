@@ -6,6 +6,7 @@ import { EmailService } from '../notifications/email.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 import { parseDurationMs as parseDuration } from '../auth/auth.service';
+import { sanitizeRichText } from '../common/sanitize-html.util';
 
 /**
  * SiteSetting keys whose VALUES are secrets and must never leave the server
@@ -296,7 +297,16 @@ export class CmsService {
   }
 
   async createPage(dto: CreatePageDto) {
-    const page = await this.prisma.page.create({ data: { ...dto, tenantId: this.tenantContext.requireId } });
+    // Sanitize admin-authored HTML at write time — storefront renders page
+    // content via dangerouslySetInnerHTML, so this is the authoritative XSS
+    // guard for all consumers.
+    const page = await this.prisma.page.create({
+      data: {
+        ...dto,
+        content: sanitizeRichText(dto.content),
+        tenantId: this.tenantContext.requireId,
+      },
+    });
     await this.auditService.log('CREATE', 'Page', page.id, { title: dto.title });
     return page;
   }
@@ -304,7 +314,9 @@ export class CmsService {
   async updatePage(id: string, dto: UpdatePageDto) {
     const page = await this.prisma.page.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!page || page.deletedAt) throw new NotFoundException('Page not found');
-    const updated = await this.prisma.page.update({ where: { id }, data: dto });
+    const data: any = { ...dto };
+    if (dto.content !== undefined) data.content = sanitizeRichText(dto.content);
+    const updated = await this.prisma.page.update({ where: { id }, data });
     await this.auditService.log('UPDATE', 'Page', id);
     return updated;
   }

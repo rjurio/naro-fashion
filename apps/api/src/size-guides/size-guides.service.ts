@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ConflictException } from '@nestjs/common
 import { IsString, IsOptional, IsBoolean } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { sanitizeRichText } from '../common/sanitize-html.util';
 
 export class CreateSizeGuideDto {
   @IsString()
@@ -188,8 +189,8 @@ export class SizeGuidesService {
         name: dto.name,
         nameSwahili: dto.nameSwahili,
         slug,
-        content: dto.content,
-        contentSwahili: dto.contentSwahili,
+        content: sanitizeRichText(dto.content),
+        contentSwahili: sanitizeRichText(dto.contentSwahili),
         pdfUrl: dto.pdfUrl,
         pdfUrlSwahili: dto.pdfUrlSwahili,
         isDefault: dto.isDefault ?? false,
@@ -220,8 +221,8 @@ export class SizeGuidesService {
         name: dto.name,
         nameSwahili: dto.nameSwahili,
         slug,
-        content: dto.content,
-        contentSwahili: dto.contentSwahili,
+        content: sanitizeRichText(dto.content),
+        contentSwahili: sanitizeRichText(dto.contentSwahili),
         pdfUrl: dto.pdfUrl,
         pdfUrlSwahili: dto.pdfUrlSwahili,
         // Drafts are NEVER active and NEVER default. Operator must set both
@@ -238,6 +239,8 @@ export class SizeGuidesService {
     if (!guide || guide.deletedAt) throw new NotFoundException('Size guide not found');
 
     const data: any = { ...dto };
+    if (dto.content !== undefined) data.content = sanitizeRichText(dto.content);
+    if (dto.contentSwahili !== undefined) data.contentSwahili = sanitizeRichText(dto.contentSwahili);
 
     // Regenerate slug if name changed
     if (dto.name && dto.name !== guide.name) {

@@ -280,11 +280,19 @@ export default function ProductDetailPage() {
 
   return (
     <div className="bg-background min-h-screen">
-      {/* JSON-LD Structured Data */}
+      {/* JSON-LD Structured Data.
+          Escape <, >, & to their \uXXXX forms so a product name/description
+          containing "</script>" can't break out of this script element and
+          execute (JSON.parse reads the escapes back transparently). */}
       {jsonLd && (
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(jsonLd)
+              .replace(/</g, '\\u003c')
+              .replace(/>/g, '\\u003e')
+              .replace(/&/g, '\\u0026'),
+          }}
         />
       )}
       {/* Breadcrumb */}
