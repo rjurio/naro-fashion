@@ -36,3 +36,12 @@ pnpm-debug.log*
 
 # Test coverage
 coverage/
+
+# Root-level scratch / API-response dumps (may contain live JWTs + admin PII).
+# Ignore ALL root-level .json except the three real config files, so ad-hoc
+# dumps like qa_login.json / admins.json can never be committed by accident.
+# A new legitimate root config must be explicitly un-ignored below.
+/*.json
+!/package.json
+!/tsconfig.base.json
+!/turbo.json
