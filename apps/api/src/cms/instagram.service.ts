@@ -37,7 +37,11 @@ export class InstagramService {
       }
     }
 
-    const token = this.configService.get<string>('INSTAGRAM_ACCESS_TOKEN', '');
+    // SiteSetting first, env fallback — the refresh cron stores rotated
+    // tokens in SiteSetting, so reading the env var directly would pin us
+    // to the original (eventually expired) deploy-time token. This exact
+    // mismatch froze the prod feed from 2026-05-15 to 2026-07-28.
+    const token = await this.getActiveToken();
     const accountId = this.configService.get<string>('INSTAGRAM_BUSINESS_ACCOUNT_ID', '');
 
     if (!token || !accountId) {
@@ -125,11 +129,29 @@ export class InstagramService {
 
       this.logger.log(`Instagram sync completed: ${synced} synced, ${errors} errors`);
     } catch (err) {
-      this.logger.error(`Instagram API call failed: ${err instanceof Error ? err.message : err}`);
+      this.logger.error(`Instagram API call failed: ${this.describeGraphError(err)}`);
       errors++;
     }
 
     return { synced, errors };
+  }
+
+  /**
+   * Surface the Graph API error body, not just the axios status line.
+   * "Request failed with status code 400" hid a token expiry for 10 weeks;
+   * the body says exactly what's wrong ("Session has expired on ...",
+   * OAuthException code 190) and what to do about it.
+   */
+  private describeGraphError(err: unknown): string {
+    const fbError = (err as any)?.response?.data?.error;
+    if (fbError?.message) {
+      const hint =
+        fbError.code === 190
+          ? ' — token expired/invalid: generate a new long-lived token and store it in SiteSetting instagram_access_token'
+          : '';
+      return `${fbError.type ?? 'GraphError'} code ${fbError.code}: ${fbError.message}${hint}`;
+    }
+    return err instanceof Error ? err.message : String(err);
   }
 
   /**
@@ -178,7 +200,11 @@ export class InstagramService {
    * The new token is logged — admin must update env var or site setting.
    */
   async refreshAccessToken(): Promise<boolean> {
-    const token = this.configService.get<string>('INSTAGRAM_ACCESS_TOKEN', '');
+    // Refresh the NEWEST token we hold (SiteSetting first, env fallback).
+    // Refreshing from the env var re-exchanges the original deploy-time
+    // token forever — once that one expires the whole chain dies even
+    // though a fresher token may be sitting in SiteSetting.
+    const token = await this.getActiveToken();
     if (!token) {
       this.logger.warn('No Instagram access token to refresh');
       return false;
@@ -218,7 +244,7 @@ export class InstagramService {
       this.logger.warn('Token refresh response missing access_token');
       return false;
     } catch (err) {
-      this.logger.error(`Instagram token refresh failed: ${err instanceof Error ? err.message : err}`);
+      this.logger.error(`Instagram token refresh failed: ${this.describeGraphError(err)}`);
       return false;
     }
   }
