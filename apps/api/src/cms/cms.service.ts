@@ -7,6 +7,22 @@ import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 import { parseDurationMs as parseDuration } from '../auth/auth.service';
 
+/**
+ * SiteSetting keys whose VALUES are secrets and must never leave the server
+ * via the @Public() `GET /cms/settings` list. Matches keys ending in
+ * `_secret` / `_token` (but NOT `_token_expires`, which is a harmless
+ * duration), or containing password / client_secret / api_key.
+ *
+ * The Instagram access token and facebook_app_secret live in SiteSetting so
+ * the token-refresh cron can rotate them; nothing in the storefront or admin
+ * UI needs to READ those values, so stripping them from the public list is
+ * safe. Server-side consumers (InstagramService.getActiveToken) query the
+ * row directly and are unaffected.
+ */
+export function isSensitiveSettingKey(key: string): boolean {
+  return /(_secret$|_token$|password|client_secret|api_?key)/i.test(key);
+}
+
 // IMPORTANT: NestJS global ValidationPipe uses whitelist:true which strips
 // ALL properties not declared via class-validator decorators. Plain TypeScript
 // types are erased at runtime. Every field that should be accepted MUST have
@@ -323,9 +339,13 @@ export class CmsService {
   // --- Settings ---
 
   async findAllSettings() {
-    return this.prisma.siteSetting.findMany({
+    const settings = await this.prisma.siteSetting.findMany({
       where: { tenantId: this.tenantContext.requireId },
     });
+    // This endpoint is @Public() — the storefront reads homepage/parallax/
+    // feature settings from it. Strip secret-valued keys (Instagram token,
+    // facebook_app_secret, etc.) so they never reach an anonymous caller.
+    return settings.filter((s) => !isSensitiveSettingKey(s.key));
   }
 
   async updateSetting(key: string, dto: UpdateSettingDto) {
