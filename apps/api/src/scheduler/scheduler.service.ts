@@ -65,8 +65,14 @@ export class SchedulerService implements OnModuleInit {
     this.logger.log(`Instagram auto-sync registered: ${interval} (${cronExpr})`);
   }
 
-  /** Helper to get the admin notification email from env or first super-admin. */
-  private async getAdminContact(): Promise<{ email: string; phone: string }> {
+  /**
+   * Admin notification contact — env override, else the tenant's SUPER_ADMIN.
+   * MUST be scoped to the rental's tenant: without `tenantId` the DB fallback
+   * returned whatever SUPER_ADMIN sorts first GLOBALLY, so on a multi-tenant
+   * platform tenant A's rental/customer details were emailed to tenant B's (or
+   * the platform's) admin.
+   */
+  private async getAdminContact(tenantId?: string | null): Promise<{ email: string; phone: string }> {
     const envEmail = this.configService.get<string>('ADMIN_NOTIFICATION_EMAIL', '');
     const envPhone = this.configService.get<string>('ADMIN_NOTIFICATION_PHONE', '');
 
@@ -74,9 +80,9 @@ export class SchedulerService implements OnModuleInit {
       return { email: envEmail, phone: envPhone };
     }
 
-    // Fallback: find first SUPER_ADMIN
+    // Fallback: the SUPER_ADMIN of THIS tenant.
     const superAdmin = await this.prisma.adminUser.findFirst({
-      where: { role: 'SUPER_ADMIN' },
+      where: { role: 'SUPER_ADMIN', ...(tenantId ? { tenantId } : {}) },
       select: { email: true, phone: true },
     });
 
@@ -103,10 +109,13 @@ export class SchedulerService implements OnModuleInit {
       const cutoffDate = new Date();
       cutoffDate.setDate(now.getDate() + reminderDays);
 
-      // Find all rentals needing preparation that admin hasn't marked as ready
+      // Find all rentals needing preparation that admin hasn't marked as ready.
+      // Lower bound `gte: now` is REQUIRED — without it, an overdue-but-unready
+      // rental matches every day forever, daysUntilPickup goes negative, and a
+      // fresh reminder row + email is generated daily with no dedup.
       const upcomingRentals = await this.prisma.rentalOrder.findMany({
         where: {
-          pickupDate: { lte: cutoffDate },
+          pickupDate: { gte: now, lte: cutoffDate },
           isReadyForPickup: false,
           status: { in: ['DOWN_PAYMENT_PAID', 'FULLY_PAID', 'READY_FOR_PICKUP'] },
         },
@@ -117,9 +126,17 @@ export class SchedulerService implements OnModuleInit {
         },
       });
 
-      const adminContact = await this.getAdminContact();
+      // Resolve the admin recipient per tenant (cached) so cross-tenant rentals
+      // don't all notify one global admin.
+      const contactCache = new Map<string, { email: string; phone: string }>();
+      const contactFor = async (tid: string | null) => {
+        const key = tid ?? '__none__';
+        if (!contactCache.has(key)) contactCache.set(key, await this.getAdminContact(tid));
+        return contactCache.get(key)!;
+      };
 
       for (const rental of upcomingRentals) {
+        const adminContact = await contactFor(rental.tenantId);
         const daysUntilPickup = Math.ceil(
           (rental.pickupDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
         );
@@ -204,9 +221,16 @@ export class SchedulerService implements OnModuleInit {
 
       this.logger.log(`Found ${overdueRentals.length} overdue rentals`);
 
-      const adminContact = await this.getAdminContact();
+      // Per-tenant admin recipient (cached) — see handlePreparationReminders.
+      const contactCache = new Map<string, { email: string; phone: string }>();
+      const contactFor = async (tid: string | null) => {
+        const key = tid ?? '__none__';
+        if (!contactCache.has(key)) contactCache.set(key, await this.getAdminContact(tid));
+        return contactCache.get(key)!;
+      };
 
       for (const rental of overdueRentals) {
+        const adminContact = await contactFor(rental.tenantId);
         const customerName = `${rental.user.firstName} ${rental.user.lastName}`;
 
         this.logger.warn(

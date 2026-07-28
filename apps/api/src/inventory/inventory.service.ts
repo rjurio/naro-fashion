@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
@@ -106,33 +106,44 @@ export class InventoryService {
     const sign = OUTBOUND.includes(dto.type) ? -1 : 1;
     const quantityChange = sign * dto.quantity;
 
-    // Get current stock
-    let quantityBefore = 0;
-    if (dto.variantId) {
-      const variant = await this.prisma.productVariant.findFirst({ where: { id: dto.variantId, tenantId } });
-      if (!variant) throw new NotFoundException('Variant not found');
-      quantityBefore = variant.stock;
-    } else {
-      const agg = await this.prisma.productVariant.aggregate({
-        where: { productId: dto.productId, tenantId },
-        _sum: { stock: true },
-      });
-      quantityBefore = agg._sum.stock ?? 0;
-    }
-
-    const quantityAfter = quantityBefore + quantityChange;
     const product = await this.prisma.product.findFirst({ where: { id: dto.productId, tenantId } });
     if (!product) throw new NotFoundException('Product not found');
     const unitCost = Number(product.purchasePrice ?? 0);
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      // Update variant stock if specified, else update first variant
-      if (dto.variantId) {
-        await tx.productVariant.update({
-          where: { id: dto.variantId },
-          data: { stock: { increment: quantityChange } },
-        });
+    // Resolve an UNAMBIGUOUS target variant. A product-level adjustment
+    // (no variantId) is only meaningful when the product has exactly one
+    // variant. Previously the no-variantId path wrote a ledger row but never
+    // updated any variant's stock (the `if (variantId)` had no else), so the
+    // audit/valuation ledger silently diverged from reality.
+    let targetVariantId = dto.variantId;
+    if (!targetVariantId) {
+      const variants = await this.prisma.productVariant.findMany({
+        where: { productId: dto.productId, tenantId },
+        select: { id: true },
+      });
+      if (variants.length === 0) {
+        throw new BadRequestException('Product has no variants to adjust. Add a variant first.');
       }
+      if (variants.length > 1) {
+        throw new BadRequestException(
+          'This product has multiple variants — specify which variantId to adjust.',
+        );
+      }
+      targetVariantId = variants[0].id;
+    }
+
+    const variant = await this.prisma.productVariant.findFirst({
+      where: { id: targetVariantId, tenantId },
+    });
+    if (!variant) throw new NotFoundException('Variant not found');
+    const quantityBefore = variant.stock;
+    const quantityAfter = quantityBefore + quantityChange;
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      await tx.productVariant.update({
+        where: { id: targetVariantId },
+        data: { stock: { increment: quantityChange } },
+      });
 
       // Update lastRestockedAt if RESTOCK
       if (dto.type === 'RESTOCK') {
@@ -144,7 +155,7 @@ export class InventoryService {
         data: {
           tenantId,
           productId: dto.productId,
-          variantId: dto.variantId,
+          variantId: targetVariantId,
           type: dto.type,
           quantityBefore,
           quantityChange,
