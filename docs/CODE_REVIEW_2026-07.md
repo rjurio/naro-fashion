@@ -8,6 +8,7 @@ Full-stack review of the Naro Fashion monorepo (NestJS API + storefront + admin 
 - `bd81d04` — rich-text sanitization + storefront XSS hardening
 - `61bf158` — **RBAC enforcement** (PermissionGuard) on admin-user/role/audit endpoints (follow-up round)
 - `623853c` — per-tenant rental cron recipients + inventory-adjust stock fix (follow-up round)
+- `8f362df` — online-order stock decrement, rental double-booking race + ID-verify gate, subscription downgrade, duplicate-payment guard (follow-up round)
 
 **Structural takeaway:** `admin-guard-coverage.shape.spec.ts` proves every route has the right *guard*, but nothing proved each service actually *filters Prisma queries by tenantId*. Most HIGH findings lived in that blind spot. New guard added: `pos-tenant-scope.shape.spec.ts`. A general "tenantId present in find/update/delete where-clauses" invariant is the recommended next structural investment.
 
@@ -44,6 +45,11 @@ Regression guards added: `pos-tenant-scope.shape.spec.ts`, `sanitize-html.util.s
 | 18 | MEDIUM | Rental prep/overdue crons resolved a GLOBAL SUPER_ADMIN recipient → cross-tenant admin notifications | `getAdminContact(tenantId)` scopes to the rental's tenant; recipient resolved per-tenant (cached) in both crons |
 | 19 | MEDIUM | Prep-reminder cron had no lower date bound → overdue rentals spam daily with negative day counts | Added `pickupDate: { gte: now }` |
 | 20 | MEDIUM | `inventory.adjustStock` product-level path wrote a ledger row but never changed stock (ledger diverged) | Resolve unambiguous target: apply to sole variant for single-variant products, reject multi-variant with "specify variantId" |
+| 21 | MEDIUM | Online orders never decremented stock (unlimited oversell) — **user confirmed: should decrement** | `orders.create` reserves stock via atomic guarded decrement (rolls back if short) + SALE ledger row; `updateStatus` restocks non-POS orders on cancel |
+| 22 | MEDIUM | Rental double-booking race (availability count + insert not atomic) | Authoritative re-check + insert inside a transaction serialized by a per-product `pg_advisory_xact_lock` |
+| 23 | MEDIUM | Rental payment set orphan `CONFIRMED` status → broke forward-only guard + bypassed mandatory ID verification | Use real workflow state `DOWN_PAYMENT_PAID`; only advance a rental whose ID is already verified (`ID_VERIFIED`) |
+| 24 | MEDIUM | Subscription downgrade didn't disable modules dropped by the new plan (tenant kept paid features free) | `subscribeTenant` disables optional (non-core) modules absent from the new plan |
+| 25 | LOW-MED | No guard against duplicate in-flight payments on an order (double-submit → double charge) | `initiateGatewayPayment` returns a recent (<3min) PENDING/PROCESSING payment instead of creating a second charge |
 
 ---
 
@@ -55,16 +61,12 @@ These are real but were left out of this session's fixes because they need a pro
 - **Selcom webhook HMAC** is computed over Nest's re-serialized body (not raw bytes) and returns `true` when creds are unset (fail-open). Fix needs raw-body capture in `main.ts` + fail-closed — test carefully so the live Selcom flow doesn't break.
 - **Promo codes are cosmetic**: `orders.create` hardcodes `discount = 0` and `recordUsage()` has zero callers, so `maxUses`/`maxUsesPerUser` never trigger. Needs `promoCodeId` threaded through the order DTO + `recordUsage` wired in the order transaction. (Feature work.)
 - **Flash-sale prices are display-only** — never applied to the charged total. Needs effective-price resolution when building order line items.
-- **Online orders never check or decrement stock** (unlimited web oversell). May be intentional (manual fulfillment) — needs a product decision; if not, add a stock check at checkout + atomic decrement on payment.
 - **Customer can cancel a PAID order** with no refund path (paymentStatus flips but Payment rows stay COMPLETED). Needs a refund workflow decision.
-- **Payment amount validated per-call, not cumulatively**; no guard against a duplicate PENDING payment on the same order.
+- **Payment amount validated per-call, not cumulatively** (partial in-flight duplicate now guarded — see #25; the cumulative-across-completed cap is still open).
 
-**Rentals**
-- **Double-booking race**: availability `count` and `create` aren't atomic. Needs a Postgres exclusion constraint on (product, date-range) or an advisory lock.
-- **Orphan `CONFIRMED` status** (payment path sets a status not in the workflow array) breaks the forward-only guard and can bypass mandatory ID verification. Needs status-vocabulary unification (product decision).
+**Rentals** *(double-booking race #22 and CONFIRMED-status bypass #23 FIXED in `8f362df`)*
 
-**Inventory / subscriptions**
-- Subscription downgrade doesn't disable modules dropped by the new plan → tenant keeps paid features free.
+**Inventory / subscriptions** *(subscription-downgrade module disable #24 FIXED in `8f362df`)*
 
 **Admin RBAC** — *(FIXED `61bf158`: PermissionGuard now enforces per-action permissions on admin-users/roles/audit; STAFF/MANAGER can no longer create/promote admins. The frontend still shows these nav items to all roles — a UX polish, not a security gap, since the API now 403s.)*
 
