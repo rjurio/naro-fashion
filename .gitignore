@@ -26,6 +26,18 @@ Thumbs.db
 # Turbo
 .turbo/
 
+# TypeScript incremental build state (machine-local, churns every build)
+*.tsbuildinfo
+
+# Local source material for bulk imports — NOT ship artifacts.
+# (docs/screenshots/ is intentionally tracked: referenced by docs/USER_GUIDE.md)
+docs/photo-staging/
+docs/instagram/
+
+# Private uploads (national ID documents etc.) — PII, never commit.
+# Backed up off-site encrypted by scripts/ops/offsite-backup.sh.
+apps/api/private-uploads/
+
 # Prisma
 packages/database/prisma/migrations/
 

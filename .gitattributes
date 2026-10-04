@@ -1,0 +1,2 @@
+# Shell scripts run on the Linux VPS — a CRLF checkout breaks bash (`$'\r': command not found`).
+*.sh text eol=lf

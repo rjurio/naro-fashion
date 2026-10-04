@@ -1,25 +1,83 @@
-name: Deploy to Production
+name: Verify & Deploy to Production
 
 on:
   push:
     branches: [prod]
+  pull_request:
+
+# Never run two prod deploys at once; a newer push supersedes a queued one.
+concurrency:
+  group: ${{ github.event_name == 'push' && 'deploy-prod' || format('verify-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  verify:
+    name: Typecheck, test, audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Version comes from root package.json "packageManager" (pnpm@10.12.1).
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @naro/database exec prisma generate
+
+      - name: Typecheck API
+        run: npx tsc --noEmit -p apps/api/tsconfig.json
+
+      - name: Typecheck storefront
+        run: npx tsc --noEmit -p apps/storefront/tsconfig.json
+
+      - name: Typecheck admin
+        run: npx tsc --noEmit -p apps/admin/tsconfig.json
+
+      # `exec jest` rather than `test -- ...` so pnpm can't forward a literal
+      # `--` that jest would read as a path pattern.
+      - name: API tests
+        run: pnpm --filter api exec jest --ci
+
+      - name: Dependency audit (critical, prod deps)
+        run: pnpm audit --prod --audit-level=critical
+
   deploy:
     name: Deploy to VPS
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/prod'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: 22
           script_stop: true
+          command_timeout: 30m
+          envs: EXPECTED_SHA
           script: |
+            set -e
             cd /var/www/naro-fashion
-            chmod +x deploy.sh
-            bash deploy.sh
+            # Refresh deploy.sh itself first so this run uses the committed
+            # version (deploy.sh does the authoritative reset + SHA check).
+            git fetch origin prod
+            git checkout -f prod
+            git reset --hard origin/prod
+            EXPECTED_SHA="$EXPECTED_SHA" bash deploy.sh

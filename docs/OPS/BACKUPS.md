@@ -93,41 +93,107 @@ It does NOT protect against:
 - **VPS being wiped** (e.g. Vultr account suspension, accidental destroy)
 - **Ransomware** that encrypts the backup dir alongside the live DB
 
-**Mitigation: off-site sync to Vultr Object Storage** is the documented next step. See "Off-site sync (TODO)" below.
+It also did NOT cover **uploaded files** (`apps/api/uploads/` product/CMS images, `apps/api/private-uploads/` ID documents) — those were on the VPS disk only.
 
-## Off-site sync (TODO)
+**Mitigation: off-site sync to Vultr Object Storage** via [`scripts/ops/offsite-backup.sh`](../../scripts/ops/offsite-backup.sh). The script is in the repo; **the operator must complete the setup below before it does anything** (status: NOT YET LIVE until the steps are ticked off).
 
-The plan is to upload each new dump to a Vultr Object Storage bucket (S3-compatible) immediately after the local backup completes. ~$1/mo for the bucket.
+## Pre-deploy dumps (automatic)
 
-**Steps for whoever picks this up**:
+`deploy.sh` now runs `pg-backup.sh` with `BACKUP_TAG=predeploy-<sha7>` right before `prisma db push`, and **aborts the deploy** if the dump fails or is empty. These land in the same dir as `naro_fashion-predeploy-<sha7>-<timestamp>.dump`, are pruned by the same 30-day rule, and are picked up by the off-site sync. The deploy log prints the dump path and the exact `pg_restore` command. Pre-deploy runs do **not** ping the nightly Healthchecks URL (so a deploy can't hide a missed nightly backup).
 
-1. In Vultr console → Storage → Object Storage → "Add Object Storage", pick the closest region (Frankfurt to match the VPS), name it `naro-fashion-backups`.
-2. Copy the bucket's S3 credentials (Access Key, Secret Key, Endpoint URL).
-3. On the VPS:
+Requirement: the deploy user (root) must have a working `/root/.pgpass` — already true if `setup-backups.sh` was run.
+
+## Off-site sync — operator setup (MANUAL)
+
+Cost: Vultr Object Storage ~US$6/mo tier minimum (check current pricing); a cheaper alternative is Backblaze B2 / Cloudflare R2, which work identically with rclone (`PROVIDER=Other`, change the endpoint).
+
+1. **[MANUAL — Vultr console]** Storage → Object Storage → Add, region **Frankfurt (fra1)** (same as VPS). Create bucket `naro-fashion-backups`, **private**. Copy the Access Key, Secret Key and hostname (e.g. `fra1.vultrobjects.com`).
+2. **[MANUAL — Vultr console / s3 API]** Add a lifecycle rule: expire `postgres/` and `private-uploads/` objects after 90 days (keeps ~3 months off-site vs 30 days local). Leave `uploads/` without expiry (it's a mirror of live images).
+3. **[MANUAL — your laptop]** Create an encryption keypair. The **private key never goes on the VPS**:
    ```bash
-   apt install -y awscli
-   aws configure --profile naro-backups
-   # AWS Access Key ID:     <paste>
-   # AWS Secret Access Key: <paste>
-   # Default region name:   <leave blank>
-   # Default output format: json
-   # Then set the endpoint URL in ~/.aws/config:
-   echo -e "[profile naro-backups]\ns3 =\n  endpoint_url = https://ewr1.vultrobjects.com" >> /root/.aws/config
+   age-keygen -o naro-backup-age.key     # prints "Public key: age1..."
+   # store naro-backup-age.key in your password manager + an offline copy
    ```
-4. Append the upload step to `pg-backup.sh` after the local dump succeeds:
+   (Rationale: with `age` public-key encryption the server can encrypt but cannot decrypt, so a VPS compromise doesn't expose old backups. `gpg --symmetric` with `BACKUP_GPG_PASSPHRASE_FILE` is supported as a fallback but leaves the passphrase on the server.)
+4. **[MANUAL — VPS]** Install tools:
    ```bash
-   aws --profile naro-backups s3 cp "$OUT_FILE" "s3://naro-fashion-backups/postgres/$(basename "$OUT_FILE")"
+   apt install -y rclone age
    ```
-5. Add a separate prune step that deletes objects older than `RETENTION_DAYS` from S3 (use a lifecycle policy on the bucket — set in the Vultr console, no script needed).
-6. Verify once via the AWS CLI: `aws --profile naro-backups s3 ls s3://naro-fashion-backups/postgres/`
+5. **[MANUAL — VPS]** Create `/etc/naro-backup.env` (read by both `pg-backup.sh` and `offsite-backup.sh`):
+   ```bash
+   cat > /etc/naro-backup.env <<'EOF'
+   BACKUP_S3_ENDPOINT=https://fra1.vultrobjects.com
+   BACKUP_S3_BUCKET=naro-fashion-backups
+   BACKUP_S3_ACCESS_KEY_ID=<access key>
+   BACKUP_S3_SECRET_ACCESS_KEY=<secret key>
+   BACKUP_AGE_RECIPIENT=age1<public key from step 3>
+   HEALTHCHECK_PGBACKUP_URL=https://hc-ping.com/<uuid-1>
+   HEALTHCHECK_BACKUP_URL=https://hc-ping.com/<uuid-2>
+   EOF
+   chmod 600 /etc/naro-backup.env
+   ```
+   (Healthchecks URLs: see [MONITORING.md](MONITORING.md). Create two checks: `naro-pg-backup` daily, grace 2h; `naro-offsite-backup` daily, grace 2h.)
+6. **[MANUAL — VPS]** Re-install the updated nightly script (it now pings Healthchecks) and add the off-site cron:
+   ```bash
+   install -m 0755 /var/www/naro-fashion/scripts/ops/pg-backup.sh /usr/local/bin/naro-pg-backup.sh
+   install -m 0755 /var/www/naro-fashion/scripts/ops/offsite-backup.sh /usr/local/bin/naro-offsite-backup.sh
+   cat > /etc/cron.d/naro-offsite-backup <<'EOF'
+   SHELL=/bin/bash
+   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+   MAILTO=root
+   # 04:00 UTC — 45 min after the 03:15 pg dump
+   0 4 * * * root APP_DIR=/var/www/naro-fashion /usr/local/bin/naro-offsite-backup.sh
+   EOF
+   chmod 0644 /etc/cron.d/naro-offsite-backup
+   ```
+7. **[MANUAL — VPS]** First run + verify:
+   ```bash
+   /usr/local/bin/naro-offsite-backup.sh && tail -20 /var/log/naro-offsite-backup.log
+   set -a; . /etc/naro-backup.env; set +a
+   export RCLONE_CONFIG_NAROBACKUP_TYPE=s3 RCLONE_CONFIG_NAROBACKUP_PROVIDER=Other \
+     RCLONE_CONFIG_NAROBACKUP_ENDPOINT=$BACKUP_S3_ENDPOINT \
+     RCLONE_CONFIG_NAROBACKUP_ACCESS_KEY_ID=$BACKUP_S3_ACCESS_KEY_ID \
+     RCLONE_CONFIG_NAROBACKUP_SECRET_ACCESS_KEY=$BACKUP_S3_SECRET_ACCESS_KEY
+   rclone lsl narobackup:$BACKUP_S3_BUCKET/postgres | tail -5
+   rclone size narobackup:$BACKUP_S3_BUCKET/uploads
+   ```
 
-Until that ships, the system has a single-point-of-failure at the VPS disk level. Acceptable as a starting point; not acceptable as a long-term posture.
+### What lands where
+
+| Source | Bucket path | Encrypted |
+|---|---|---|
+| `/var/backups/naro/postgres/*.dump` | `postgres/<name>.dump.age` | yes (age) — plaintext + WARN if no key |
+| `apps/api/uploads/` | `uploads/` (mirror, copy-only) | no — already public via the site |
+| `apps/api/private-uploads/` (ID documents) | `private-uploads/private-uploads-<ts>.tar.gz.age` | **always** — script refuses to upload without a key |
+
+`rclone copy` is used (never `sync`), so a local deletion or ransomware wipe does not propagate to the bucket.
+
+## Restore test (MANUAL — quarterly, and record it)
+
+A backup that has never been restored is a hope, not a backup. Once a quarter:
+
+1. On your laptop (or a throwaway VPS / Docker `postgres:16`), download the newest off-site dump:
+   ```bash
+   rclone copy narobackup:naro-fashion-backups/postgres/<newest>.dump.age .
+   age -d -i naro-backup-age.key -o restore.dump <newest>.dump.age
+   ```
+2. Restore into a scratch DB:
+   ```bash
+   createdb naro_restore_test
+   pg_restore --no-owner --no-acl -d naro_restore_test restore.dump
+   psql -d naro_restore_test -c 'SELECT count(*) FROM "Product"; SELECT count(*) FROM "Order"; SELECT max("createdAt") FROM "Order";'
+   ```
+   The newest `Order.createdAt` should be within ~24h of the dump timestamp.
+3. Decrypt + list one private-uploads archive: `age -d -i naro-backup-age.key private-uploads-<ts>.tar.gz.age | tar -tz | head`.
+4. **Record it** in the table below (date, dump used, row counts, who). Drop the scratch DB and delete the decrypted files.
+
+| Date | Dump restored | Product / Order rows | Newest order | Done by |
+|---|---|---|---|---|
+| _not yet performed_ | | | | |
 
 ## Monitoring
 
-There's no alerting on backup failure yet. Two options when you want it:
-
-- **Cron MAILTO + Postfix relay through Brevo** — cheap; failures land in your Brevo inbox.
-- **Healthcheck.io free tier** — `curl` a ping URL at the end of `pg-backup.sh`; if the ping doesn't arrive on schedule, Healthcheck.io emails/SMSes you. Free for up to 20 checks.
-
-Both are ~10 minutes to set up once you decide which.
+- `pg-backup.sh` pings `HEALTHCHECK_PGBACKUP_URL` (`/start`, success, `/fail`) when set in the env or `/etc/naro-backup.env`.
+- `offsite-backup.sh` pings `HEALTHCHECK_BACKUP_URL` the same way.
+- If a ping doesn't arrive within the grace period, Healthchecks.io emails you. Setup steps: [MONITORING.md](MONITORING.md).
+- Cron `MAILTO=root` remains as a secondary channel (only useful if an MTA relay is configured).
