@@ -161,8 +161,14 @@ restore_source_to() {
 
 reload_pm2() {
   # reload_pm2 <git-sha-to-advertise>
-  log "♻️  Reloading PM2 processes (GIT_SHA=${1:0:7})..."
-  GIT_SHA="$1" pm2 reload ecosystem.config.js --update-env
+  # The Next apps get a HARD restart: their workers run from inside
+  # apps/<app>/.next/standalone, and after .next is swapped/rebuilt a graceful
+  # cluster `reload` can leave the old worker serving from the moved dir
+  # (2026-10-04: admin kept 404ing every asset until `pm2 restart`). The API
+  # (dist/main.js, no dir swap) keeps the graceful reload.
+  log "♻️  Restarting PM2 processes (GIT_SHA=${1:0:7})..."
+  GIT_SHA="$1" pm2 reload ecosystem.config.js --only naro-api --update-env
+  GIT_SHA="$1" pm2 restart ecosystem.config.js --only naro-storefront,naro-admin --update-env
   pm2 save || warn "pm2 save failed (non-fatal)"
 }
 

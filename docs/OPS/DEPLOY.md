@@ -14,7 +14,8 @@ Push to `prod` → `.github/workflows/deploy-prod.yml` runs the `verify` job
 | 4 | pre-deploy `pg_dump` via `scripts/ops/pg-backup.sh` (path printed) | abort, schema untouched |
 | 5 | migrations: one-time 0_init baseline (only if no drift), `prisma migrate deploy`, post-migrate drift guard — see [MIGRATIONS.md](MIGRATIONS.md) | abort, old build still live |
 | 6 | sequential IN-PLACE builds: api → storefront → admin, each after copying the live build aside (`dist-prev.pending`, `.next-prev.pending`, cache excluded); each Next build must contain `BUILD_ID` + `routes-manifest.json` | abort, pre-build copies restored, processes not reloaded |
-| 7 | promote the pre-build copies to `.next-prev` / `dist-prev`; write `.deploy/previous_sha` + `.deploy/current_sha`; `pm2 reload ecosystem.config.js --update-env` with `GIT_SHA` | automatic rollback |
+| 6b | after each Next build: copy `.next/static` + `public` into the standalone server folder (`.next/standalone/apps/<app>/`) — PM2 runs that `server.js`, which serves only what's copied there | abort (missing `server.js`) |
+| 7 | promote the pre-build copies to `.next-prev` / `dist-prev`; write `.deploy/previous_sha` + `.deploy/current_sha`; `pm2 reload --only naro-api` + **hard** `pm2 restart --only naro-storefront,naro-admin` (`--update-env`, `GIT_SHA`) | automatic rollback |
 | 8 | health checks: API `/api/v1/health` 200, storefront `/` (with a real tenant `Host`, from `STOREFRONT_DEFAULT_HOSTS`), admin `/`, **plus one `/_next/static` asset referenced by each app's page must return 200** | **automatic rollback** |
 
 **Why not build to a side directory and rename it?** Tried on 2026-10-04 and it
@@ -46,7 +47,7 @@ green within 60 s), `deploy.sh`:
    `dist` (the bad builds are kept as `.next-failed` / `dist-failed`);
 2. `git reset --hard <previous_sha>`, `pnpm install --frozen-lockfile` if the
    lockfile differs, `prisma generate` — so source matches the running build;
-3. `pm2 reload ecosystem.config.js --update-env` with the old `GIT_SHA`;
+3. reload the API / hard-restart the Next apps (`reload_pm2`) with the old `GIT_SHA`;
 4. re-runs the health checks and reports;
 5. prints the pre-deploy dump path + `pg_restore` command and **exits
    non-zero** (CI goes red).

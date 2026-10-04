@@ -347,10 +347,16 @@ for app in "${NEXT_APPS[@]}"; do
     die "${app} build failed (pre-build copy restored)"
   fi
   verify_next_build "$app"
+  # PM2 runs the STANDALONE server (.next/standalone/apps/<app>/server.js),
+  # which only serves /_next/static + public copied into its own folder.
+  # Without this copy every CSS/JS asset 404s (2026-10-04 outage).
+  sa="${d}/.next/standalone/apps/${app}"
+  [ -f "${sa}/server.js" ] || die "${app}: standalone server.js missing at ${sa} (is output: 'standalone' still set?)"
+  rm -rf "${sa}/.next/static" "${sa}/public"
+  cp -a "${d}/.next/static" "${sa}/.next/static"
+  if [ -d "${d}/public" ]; then cp -a "${d}/public" "${sa}/public"; fi
+  log "✔ ${app} static + public copied into the standalone server"
 done
-# NOTE: the old "sync static+public into .next/standalone" step was dropped.
-# PM2 runs `next start` (serves apps/<app>/.next), never the standalone
-# server.js. If ecosystem.config.js is ever switched to standalone, revisit.
 
 # ---------------------------------------------------------------------------
 # 7. Swap + reload. Everything built and verified; from here on any failure
