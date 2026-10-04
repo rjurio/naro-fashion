@@ -191,12 +191,14 @@ pm2 save || log "⚠ pm2 save failed (non-fatal)"
 # 8. Health checks — fail the deploy loudly if the new code isn't serving.
 # ---------------------------------------------------------------------------
 wait_for() {
-  # wait_for <name> <url> <accepted-status-regex> <timeout-seconds>
-  local name="$1" url="$2" ok_re="$3" timeout="$4"
+  # wait_for <name> <url> <accepted-status-regex> <timeout-seconds> [host-header]
+  local name="$1" url="$2" ok_re="$3" timeout="$4" host="${5:-}"
   local deadline=$(( $(date +%s) + timeout ))
   local code="000"
+  local host_args=()
+  [ -n "$host" ] && host_args=(-H "Host: ${host}")
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" || true)"
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${host_args[@]}" "$url" || true)"
     if [[ "$code" =~ $ok_re ]]; then
       log "✔ ${name} healthy (${url} -> ${code})"
       return 0
@@ -210,7 +212,12 @@ wait_for() {
 log "🩺 Running post-deploy health checks..."
 HEALTH_OK=1
 wait_for "api"        "http://127.0.0.1:4000/api/v1/health" '^200$'        60 || HEALTH_OK=0
-wait_for "storefront" "http://127.0.0.1:3000/"              '^(2|3)[0-9][0-9]$' 60 || HEALTH_OK=0
+# The storefront middleware 404s unknown Hosts in production (127.0.0.1
+# included), so probe with a real tenant host: first entry of
+# STOREFRONT_DEFAULT_HOSTS in the storefront env, else the apex domain.
+STOREFRONT_HEALTH_HOST="$(grep -E '^STOREFRONT_DEFAULT_HOSTS=' apps/storefront/.env.local 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | cut -d, -f1)"
+STOREFRONT_HEALTH_HOST="${STOREFRONT_HEALTH_HOST:-narofashion.co.tz}"
+wait_for "storefront" "http://127.0.0.1:3000/"              '^(2|3)[0-9][0-9]$' 60 "$STOREFRONT_HEALTH_HOST" || HEALTH_OK=0
 wait_for "admin"      "http://127.0.0.1:3001/"              '^(2|3)[0-9][0-9]$' 60 || HEALTH_OK=0
 
 # Soft check: does /health report the commit we just deployed?

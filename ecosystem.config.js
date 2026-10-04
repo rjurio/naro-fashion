@@ -8,6 +8,8 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: 4000,
+        // Exported by deploy.sh; surfaced by GET /api/v1/health as `commit`.
+        GIT_SHA: process.env.GIT_SHA || '',
       },
     },
     {
