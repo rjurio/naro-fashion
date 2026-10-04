@@ -64,10 +64,10 @@ const securityHeaders = [
 ];
 
 const nextConfig = {
-  // deploy.sh builds into a side directory (NEXT_DIST_DIR=.next-build) and
-  // swaps it into place only after the build is verified, so the live
-  // process never serves a half-written .next. Runtime always uses .next.
-  distDir: process.env.NEXT_DIST_DIR || '.next',
+  // NOTE: never build into a different distDir and rename it to .next —
+  // `next build` bakes the distDir name into its output, so every
+  // /_next/static asset 404s (prod outage 2026-10-04). deploy.sh builds in
+  // place and keeps a pre-build copy for rollback instead.
   typescript: { ignoreBuildErrors: false },
   eslint: { ignoreDuringBuilds: true },
   output: 'standalone',

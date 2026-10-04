@@ -14,13 +14,15 @@
 #   5. migrations: one-time baseline of 0_init (only if the DB is verified
 #      drift-free), then `prisma migrate deploy` (committed migrations only;
 #      `db push --accept-data-loss` is gone), then a drift check
-#   6. sequential SIDE builds (api -> storefront -> admin) to dodge the 2GB
-#      OOM. Next apps build into apps/<app>/.next-build (NEXT_DIST_DIR) and
-#      are verified; the live .next is untouched until ALL builds succeed
-#   7. swap: .next -> .next-prev, .next-build -> .next (per app), API
-#      dist-prev promoted, then IMMEDIATELY pm2 reload with GIT_SHA
-#   8. post-deploy health checks. On failure -> AUTOMATIC ROLLBACK of the
-#      app builds + source tree (NOT the database) and exit non-zero.
+#   6. sequential IN-PLACE builds (api -> storefront -> admin) to dodge the
+#      2GB OOM, each preceded by a copy of the live build (*.prev.pending) that
+#      is restored if a build fails. (Building to a side dir and renaming is
+#      NOT possible: `next build` bakes its distDir into the output — that
+#      broke every static asset on 2026-10-04.)
+#   7. promote the pre-build copies to .next-prev / dist-prev, then pm2 reload
+#   8. post-deploy health checks, INCLUDING a fetched /_next/static asset per
+#      app. On failure -> AUTOMATIC ROLLBACK of the app builds + source tree
+#      (NOT the database) and exit non-zero.
 #
 # Zero downtime is NOT achievable here: every PM2 app is fork mode with a
 # single instance on a 2GB box, so `pm2 reload` is a restart (a few seconds
@@ -49,13 +51,21 @@ log() { echo "[$(ts)] $*"; }
 die() { echo "[$(ts)] ❌ DEPLOY FAILED: $*" >&2; exit 1; }
 
 restore_api_dist() {
-  # Undo an in-place API build that never went live: put back the copy of
-  # the live dist so disk matches the running process (PM2 may restart it).
+  # Undo in-place builds that never went live: put back the pre-build copies
+  # so disk matches the running processes (PM2 may restart them).
   if [ -d apps/api/dist-prev.pending ]; then
     log "↩ restoring apps/api/dist from the pre-build copy"
     rm -rf apps/api/dist
     mv apps/api/dist-prev.pending apps/api/dist
   fi
+  local app
+  for app in storefront admin; do
+    if [ -d "apps/${app}/.next-prev.pending" ]; then
+      log "↩ restoring apps/${app}/.next from the pre-build copy"
+      rm -rf "apps/${app}/.next"
+      mv "apps/${app}/.next-prev.pending" "apps/${app}/.next"
+    fi
+  done
 }
 
 auto_rollback() {
@@ -95,7 +105,7 @@ on_exit() {
   case "$PHASE" in
     building)
       restore_api_dist
-      echo "[$(ts)] Old build still live and untouched (side builds in apps/*/.next-build discarded on next run)." >&2
+      echo "[$(ts)] Build failed before going live — pre-build copies restored; processes were not reloaded." >&2
       ;;
     swapped)
       auto_rollback
@@ -310,29 +320,37 @@ fi
 
 verify_next_build() {
   local app="$1"
-  local dir="apps/${app}/.next-build"
+  local dir="apps/${app}/.next"
   for f in BUILD_ID routes-manifest.json; do
-    [ -s "${dir}/${f}" ] || die "${app} build is incomplete: ${dir}/${f} missing (OOM-killed?). Live build untouched; NOT restarting."
+    [ -s "${dir}/${f}" ] || die "${app} build is incomplete: ${dir}/${f} missing (OOM-killed?). Pre-build copy restored; NOT restarting."
   done
   log "✔ ${app} build verified (BUILD_ID $(cat "${dir}/BUILD_ID"))"
 }
 
+# Next apps build IN PLACE into .next. `next build` bakes its distDir name
+# into the output (server chunks, required-server-files.json), so a build
+# made in a side dir CANNOT be renamed into .next — that is what broke every
+# /_next/static asset on 2026-10-04. Instead: copy the live .next to
+# .next-prev.pending first (rollback + restore-on-failure source), then build
+# in place. Pages may misbehave for the few minutes the build runs; the
+# pre-build copy is restored if the build fails.
 for app in "${NEXT_APPS[@]}"; do
-  log "🔨 Building ${app} into apps/${app}/.next-build..."
-  rm -rf "apps/${app}/.next-build"
-  # Seed the webpack cache from the live build so the side build isn't cold.
-  if [ -d "apps/${app}/.next/cache" ]; then
-    mkdir -p "apps/${app}/.next-build"
-    cp -a "apps/${app}/.next/cache" "apps/${app}/.next-build/cache" || true
+  d="apps/${app}"
+  rm -rf "${d}/.next-prev.pending" "${d}/.next-build"
+  if [ -d "${d}/.next" ]; then
+    log "📦 Copying live ${app} build to ${d}/.next-prev.pending (rollback source)..."
+    cp -a "${d}/.next" "${d}/.next-prev.pending"
+    rm -rf "${d}/.next-prev.pending/cache"
   fi
-  NEXT_DIST_DIR=.next-build pnpm --filter "$app" build
+  log "🔨 Building ${app}..."
+  if ! pnpm --filter "$app" build; then
+    die "${app} build failed (pre-build copy restored)"
+  fi
   verify_next_build "$app"
 done
 # NOTE: the old "sync static+public into .next/standalone" step was dropped.
 # PM2 runs `next start` (serves apps/<app>/.next), never the standalone
-# server.js, and a standalone bundle built with NEXT_DIST_DIR=.next-build
-# would hard-code that dir name anyway. If ecosystem.config.js is ever
-# switched to standalone, revisit this.
+# server.js. If ecosystem.config.js is ever switched to standalone, revisit.
 
 # ---------------------------------------------------------------------------
 # 7. Swap + reload. Everything built and verified; from here on any failure
@@ -345,8 +363,7 @@ CAN_ROLLBACK=1
 for app in "${NEXT_APPS[@]}"; do
   d="apps/${app}"
   rm -rf "${d}/.next-prev"
-  if [ -d "${d}/.next" ]; then mv "${d}/.next" "${d}/.next-prev"; else CAN_ROLLBACK=0; fi
-  mv "${d}/.next-build" "${d}/.next"
+  if [ -d "${d}/.next-prev.pending" ]; then mv "${d}/.next-prev.pending" "${d}/.next-prev"; else CAN_ROLLBACK=0; fi
 done
 rm -rf apps/api/dist-prev
 if [ -d apps/api/dist-prev.pending ]; then

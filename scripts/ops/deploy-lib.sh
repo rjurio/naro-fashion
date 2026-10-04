@@ -4,8 +4,9 @@
 #
 # Artifact layout on the VPS (all gitignored):
 #   apps/<app>/.next          build PM2 serves (`next start` from apps/<app>)
-#   apps/<app>/.next-build    side build of the commit being deployed
-#   apps/<app>/.next-prev     build that was live before the last swap
+#   apps/<app>/.next-prev.pending  copy of the live .next taken before the
+#                             in-place build; restored if the build fails
+#   apps/<app>/.next-prev     build that was live before the last deploy
 #   apps/<app>/.next-failed   build that was swapped OUT by a rollback (debug)
 #   apps/api/dist             build PM2 serves (dist/main.js)
 #   apps/api/dist-prev        API build that was live before the last swap
@@ -55,13 +56,41 @@ storefront_health_host() {
   echo "${h:-narofashion.co.tz}"
 }
 
+check_static_asset() {
+  # check_static_asset <name> <page-url> [host-header]
+  # A page can return 200 while every /_next/static asset 404s (unstyled,
+  # non-interactive site) — exactly what happened on 2026-10-04 when builds
+  # were renamed after `next build` baked in a different distDir. Fetch the
+  # page, pick the first CSS (else JS) asset it references, require 200.
+  local name="$1" url="$2" host="${3:-}"
+  local host_args=()
+  [ -n "$host" ] && host_args=(-H "Host: ${host}")
+  local base="${url%/*}" asset code
+  asset="$(curl -s --max-time 10 "${host_args[@]}" "$url" \
+    | grep -oE '/_next/static/[^"\\ ]+\.(css|js)' | sort -r | head -1 || true)"
+  if [ -z "$asset" ]; then
+    echo "[$(ts)] ✖ ${name}: page references no /_next/static asset" >&2
+    return 1
+  fi
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${host_args[@]}" "${base}${asset}" || true)"
+  if [ "$code" = "200" ]; then
+    log "✔ ${name} static assets served (${asset} -> 200)"
+    return 0
+  fi
+  echo "[$(ts)] ✖ ${name} static asset ${asset} -> ${code} (site would render unstyled)" >&2
+  return 1
+}
+
 run_health_checks() {
-  # Returns 0 when api, storefront and admin all answer; 1 otherwise.
+  # Returns 0 when api, storefront and admin all answer AND serve their
+  # /_next/static assets; 1 otherwise.
   local rc=0 host
   host="$(storefront_health_host)"
   wait_for "api"        "http://127.0.0.1:4000/api/v1/health" '^200$'             60 || rc=1
   wait_for "storefront" "http://127.0.0.1:3000/"              '^(2|3)[0-9][0-9]$' 60 "$host" || rc=1
   wait_for "admin"      "http://127.0.0.1:3001/"              '^(2|3)[0-9][0-9]$' 60 || rc=1
+  check_static_asset "storefront" "http://127.0.0.1:3000/" "$host" || rc=1
+  check_static_asset "admin"      "http://127.0.0.1:3001/login"    || rc=1
   return "$rc"
 }
 

@@ -13,14 +13,18 @@ Push to `prod` → `.github/workflows/deploy-prod.yml` runs the `verify` job
 | 3 | `prisma generate` | abort |
 | 4 | pre-deploy `pg_dump` via `scripts/ops/pg-backup.sh` (path printed) | abort, schema untouched |
 | 5 | migrations: one-time 0_init baseline (only if no drift), `prisma migrate deploy`, post-migrate drift guard — see [MIGRATIONS.md](MIGRATIONS.md) | abort, old build still live |
-| 6 | sequential builds: api (in place, after copying live `dist` aside) → storefront → admin into `apps/<app>/.next-build`; each Next build must contain `BUILD_ID` + `routes-manifest.json` | abort, live `.next` untouched, API `dist` restored |
-| 7 | swap: `.next` → `.next-prev`, `.next-build` → `.next` (per app); API copy → `dist-prev`; write `.deploy/previous_sha` + `.deploy/current_sha`; **immediately** `pm2 reload ecosystem.config.js --update-env` with `GIT_SHA` | automatic rollback |
-| 8 | health checks: API `/api/v1/health` 200, storefront `/` (with a real tenant `Host`, from `STOREFRONT_DEFAULT_HOSTS`), admin `/` | **automatic rollback** |
+| 6 | sequential IN-PLACE builds: api → storefront → admin, each after copying the live build aside (`dist-prev.pending`, `.next-prev.pending`, cache excluded); each Next build must contain `BUILD_ID` + `routes-manifest.json` | abort, pre-build copies restored, processes not reloaded |
+| 7 | promote the pre-build copies to `.next-prev` / `dist-prev`; write `.deploy/previous_sha` + `.deploy/current_sha`; `pm2 reload ecosystem.config.js --update-env` with `GIT_SHA` | automatic rollback |
+| 8 | health checks: API `/api/v1/health` 200, storefront `/` (with a real tenant `Host`, from `STOREFRONT_DEFAULT_HOSTS`), admin `/`, **plus one `/_next/static` asset referenced by each app's page must return 200** | **automatic rollback** |
 
-Both Next apps honour `distDir: process.env.NEXT_DIST_DIR || '.next'`, so
-the build writes to `.next-build` while PM2 keeps serving `.next`. The
-live process is never pointed at a half-written build (the old failure mode
-when `next build` wiped `.next` and then got OOM-killed).
+**Why not build to a side directory and rename it?** Tried on 2026-10-04 and it
+broke production: `next build` bakes its `distDir` name into the output
+(`required-server-files.json`, server chunks), so a build made in
+`.next-build` and renamed to `.next` served HTML whose every `/_next/static`
+CSS/JS asset returned 404 — an unstyled, non-interactive site for ~6.5 hours.
+The HTML-only health check passed, which is why the asset probe now exists.
+Trade-off of building in place: pages can misbehave for the few minutes a
+build runs (same as before October 2026); a failed build restores the copy.
 
 ### Downtime: not zero, and why
 
@@ -69,7 +73,7 @@ from different commits. After a rollback, **revert the bad commit on
 | Path | Meaning |
 |------|---------|
 | `apps/<app>/.next` | served build |
-| `apps/<app>/.next-build` | side build in progress / from a failed run (wiped on next run) |
+| `apps/<app>/.next-prev.pending` | copy of the live build taken before an in-place build (restored on build failure, else promoted to `.next-prev`) |
 | `apps/<app>/.next-prev` | previous build (rollback target) |
 | `apps/<app>/.next-failed`, `apps/api/dist-failed` | build swapped out by a rollback |
 | `apps/api/dist-prev`, `apps/api/dist-prev.pending` | previous API build / pre-build copy |
