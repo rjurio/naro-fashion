@@ -643,7 +643,7 @@ export class ProductsService {
     variants: UpdateVariantDto[],
   ) {
     const existing = await tx.productVariant.findMany({
-      where: { productId: product.id },
+      where: { productId: product.id, tenantId },
       select: { id: true, sku: true },
     });
     const existingById = new Map(existing.map((v) => [v.id, v]));
@@ -696,7 +696,7 @@ export class ProductsService {
     if (removed.length > 0) {
       const [orderRefs, rentalRefs] = await Promise.all([
         tx.orderItem.findMany({ where: { variantId: { in: removed } }, select: { variantId: true }, distinct: ['variantId'] }),
-        tx.rentalOrder.findMany({ where: { variantId: { in: removed } }, select: { variantId: true }, distinct: ['variantId'] }),
+        tx.rentalOrder.findMany({ where: { variantId: { in: removed }, tenantId }, select: { variantId: true }, distinct: ['variantId'] }),
       ]);
       const referenced = new Set<string>([
         ...orderRefs.map((r) => r.variantId),

@@ -31,3 +31,12 @@ export function currentRequestTenantId(): string | null {
   const id = req.tenantId || req.user?.tenantId || null;
   return typeof id === 'string' && id.length > 0 ? id : null;
 }
+
+/**
+ * True when the in-flight HTTP request is authenticated as a platform admin
+ * (no tenant scope by design). False outside a request.
+ * Used by the tenant-scope Prisma guard (`src/tenant-scope/`).
+ */
+export function currentRequestIsPlatformAdmin(): boolean {
+  return !!requestContextStorage.getStore()?.req?.user?.isPlatformAdmin;
+}
