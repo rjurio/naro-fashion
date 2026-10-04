@@ -16,8 +16,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
+    # Throwaway Postgres used only as Prisma's shadow DB for the
+    # migrations-vs-schema drift check below.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: shadow
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
+
+      # deploy.sh and scripts/ops/*.sh run as root on the VPS — catch syntax
+      # errors and serious ShellCheck findings before they get there.
+      - name: Shell script checks
+        run: |
+          for f in deploy.sh scripts/ops/*.sh; do bash -n "$f"; done
+          shellcheck --severity=error deploy.sh scripts/ops/*.sh
 
       # Version comes from root package.json "packageManager" (pnpm@10.12.1).
       - name: Setup pnpm
@@ -34,6 +54,19 @@ jobs:
 
       - name: Generate Prisma client
         run: pnpm --filter @naro/database exec prisma generate
+
+      # Fails when schema.prisma was changed without a committed migration
+      # (deploy runs `prisma migrate deploy`, which would not apply it).
+      - name: Migrations match schema
+        working-directory: packages/database
+        env:
+          DATABASE_URL: postgresql://postgres:ci@localhost:5432/shadow
+        run: >-
+          pnpm exec prisma migrate diff
+          --from-migrations prisma/migrations
+          --to-schema-datamodel prisma/schema.prisma
+          --shadow-database-url postgresql://postgres:ci@localhost:5432/shadow
+          --exit-code
 
       - name: Typecheck API
         run: npx tsc --noEmit -p apps/api/tsconfig.json

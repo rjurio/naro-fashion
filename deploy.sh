@@ -4,39 +4,108 @@
 # Invoked by .github/workflows/deploy-prod.yml (after the `verify` job is
 # green) as:   EXPECTED_SHA=<github.sha> bash deploy.sh
 # Can also be run by hand on the VPS:   bash deploy.sh
+# Manual rollback to the previous build: bash scripts/ops/rollback.sh
 #
 # Stages (each one aborts the deploy on failure — `set -euo pipefail`):
 #   1. git fetch + hard reset to origin/prod, assert HEAD == $EXPECTED_SHA
 #   2. pnpm install --frozen-lockfile
 #   3. prisma generate
 #   4. PRE-DEPLOY DATABASE BACKUP (abort if the dump fails / is empty)
-#   5. print the schema diff, then prisma db push
-#   6. sequential builds (api -> storefront -> admin) to dodge the 2GB OOM,
-#      verifying each Next build produced a complete .next dir
-#   7. pm2 reload with GIT_SHA in the env
-#   8. post-deploy health checks (API /health, storefront, admin)
+#   5. migrations: one-time baseline of 0_init (only if the DB is verified
+#      drift-free), then `prisma migrate deploy` (committed migrations only;
+#      `db push --accept-data-loss` is gone), then a drift check
+#   6. sequential SIDE builds (api -> storefront -> admin) to dodge the 2GB
+#      OOM. Next apps build into apps/<app>/.next-build (NEXT_DIST_DIR) and
+#      are verified; the live .next is untouched until ALL builds succeed
+#   7. swap: .next -> .next-prev, .next-build -> .next (per app), API
+#      dist-prev promoted, then IMMEDIATELY pm2 reload with GIT_SHA
+#   8. post-deploy health checks. On failure -> AUTOMATIC ROLLBACK of the
+#      app builds + source tree (NOT the database) and exit non-zero.
 #
-# NOTE on partial-build risk: `next build` wipes apps/<app>/.next at the
-# start, so a build that fails half-way leaves the still-running
-# `next start` process pointing at an incomplete dir. The verify step below
-# stops us from *restarting* onto a broken build and makes the deploy exit
-# non-zero (CI goes red), but the operator must then fix + redeploy (or
-# rebuild the previous commit). Building into a temp distDir and swapping
-# atomically is the long-term fix; out of scope for now.
+# Zero downtime is NOT achievable here: every PM2 app is fork mode with a
+# single instance on a 2GB box, so `pm2 reload` is a restart (a few seconds
+# of 502s per app). What this script guarantees instead: the live process is
+# never pointed at a half-written build, and a bad release is reverted
+# automatically. See docs/OPS/DEPLOY.md.
 
 set -euo pipefail
 
 APP_DIR="/var/www/naro-fashion"
-BACKUP_DIR="/var/backups/naro/postgres"
+cd "$APP_DIR"
 
+# Captured BEFORE we touch git: the CI step already reset to origin/prod, so
+# ORIG_HEAD is the commit that was checked out before this release.
+ORIG_HEAD_AT_START="$(git rev-parse -q --verify ORIG_HEAD 2>/dev/null || true)"
+
+PHASE="init"          # init -> building -> swapped -> done | rolled-back
+PREDEPLOY_DUMP=""
+PREV_SHA=""
+GIT_SHA=""
+
+# Minimal helpers until deploy-lib.sh is sourced (after the git reset, so we
+# always use the committed version of it).
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 log() { echo "[$(ts)] $*"; }
 die() { echo "[$(ts)] ❌ DEPLOY FAILED: $*" >&2; exit 1; }
 
+restore_api_dist() {
+  # Undo an in-place API build that never went live: put back the copy of
+  # the live dist so disk matches the running process (PM2 may restart it).
+  if [ -d apps/api/dist-prev.pending ]; then
+    log "↩ restoring apps/api/dist from the pre-build copy"
+    rm -rf apps/api/dist
+    mv apps/api/dist-prev.pending apps/api/dist
+  fi
+}
+
+auto_rollback() {
+  # Called when the new build is live (PHASE=swapped) but unhealthy, or when
+  # anything failed after the swap. Never returns.
+  set +e
+  PHASE="rolled-back"
+  echo "" >&2
+  echo "[$(ts)] 🚨🚨🚨 AUTOMATIC ROLLBACK: ${GIT_SHA:0:7} -> ${PREV_SHA:0:7} 🚨🚨🚨" >&2
+  local missing
+  if ! missing="$(missing_prev_artifacts)"; then
+    echo "[$(ts)] ❌ cannot roll back automatically — missing: ${missing//$'\n'/ }" >&2
+    pm2 status
+    pm2 logs --nostream --lines 40
+    print_db_rollback_help "$PREDEPLOY_DUMP"
+    exit 1
+  fi
+  swap_back_artifacts
+  restore_source_to "$PREV_SHA" "$GIT_SHA"
+  reload_pm2 "$PREV_SHA"
+  record_rollback_state "$PREV_SHA" "$GIT_SHA"
+  if run_health_checks; then
+    echo "[$(ts)] ↩ Rollback is healthy: ${PREV_SHA:0:7} is serving again." >&2
+  else
+    echo "[$(ts)] ❌❌ Rollback is ALSO unhealthy — manual intervention required NOW." >&2
+    pm2 status
+    pm2 logs --nostream --lines 40
+  fi
+  print_db_rollback_help "$PREDEPLOY_DUMP"
+  echo "[$(ts)] ❌ DEPLOY FAILED: ${GIT_SHA:0:7} was rolled back (see health-check output above)." >&2
+  exit 1
+}
+
+on_exit() {
+  local rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  case "$PHASE" in
+    building)
+      restore_api_dist
+      echo "[$(ts)] Old build still live and untouched (side builds in apps/*/.next-build discarded on next run)." >&2
+      ;;
+    swapped)
+      auto_rollback
+      ;;
+  esac
+}
+trap on_exit EXIT
 trap 'echo "[$(ts)] ❌ DEPLOY FAILED at line $LINENO (exit $?) — see output above" >&2' ERR
 
 log "🚀 Deploying Naro Fashion..."
-cd "$APP_DIR"
 
 # ---------------------------------------------------------------------------
 # 1. Code
@@ -54,6 +123,9 @@ GIT_SHA="$(git rev-parse HEAD)"
 export GIT_SHA
 log "Now on: ${GIT_SHA:0:7} ($(git log -1 --pretty=%s))"
 
+# shellcheck source=scripts/ops/deploy-lib.sh
+. "$APP_DIR/scripts/ops/deploy-lib.sh"
+
 # Assert we are deploying exactly the commit CI verified. Guards against
 # a race where a newer push lands between CI verify and this fetch, and
 # against the "pulled the wrong branch" class of silent deploys.
@@ -64,6 +136,25 @@ if [ -n "${EXPECTED_SHA:-}" ]; then
   log "✔ HEAD matches EXPECTED_SHA"
 else
   log "⚠ EXPECTED_SHA not set (manual run?) — skipping commit assertion"
+fi
+
+# Which commit is live right now (= what an automatic rollback returns to)?
+#   1. .deploy/current_sha (written by every successful deploy/rollback)
+#   2. the running API's /health `commit` (GIT_SHA env)
+#   3. ORIG_HEAD from before the CI step's reset
+for candidate in \
+    "$(cat "${DEPLOY_STATE_DIR}/current_sha" 2>/dev/null || true)" \
+    "$(running_api_commit)" \
+    "$ORIG_HEAD_AT_START"; do
+  if is_commit "$candidate"; then
+    PREV_SHA="$(git rev-parse "${candidate}^{commit}")"
+    break
+  fi
+done
+if [ -n "$PREV_SHA" ]; then
+  log "Live commit before this deploy: ${PREV_SHA:0:7}"
+else
+  log "⚠ could not determine the live commit — an automatic rollback will swap builds but NOT reset git"
 fi
 
 # ---------------------------------------------------------------------------
@@ -108,117 +199,176 @@ To ROLL BACK the database to the state before this deploy:
 ------------------------------------------------------------------------
 EOF
 
-# 5. Show exactly what `db push` is about to do. Uses the datasource URL
-#    from schema.prisma (Prisma resolves DATABASE_URL from its own .env, so
-#    we don't have to parse .env files in bash). Informational only — a
-#    diff failure must not block the deploy.
-log "🔍 Schema changes about to be applied (prisma migrate diff):"
-echo "------------------------------------------------------------------------"
+# 5. Migrations. Prisma resolves DATABASE_URL from packages/database/.env
+#    (the datasource in schema.prisma), so we never parse .env in bash.
+#    `db push --accept-data-loss` is GONE: the schema only changes through
+#    committed migrations in prisma/migrations/ (docs/OPS/MIGRATIONS.md).
+
+# 5a. One-time baseline. A DB that was managed by `db push` has no
+#     _prisma_migrations table; `migrate deploy` would try to run 0_init
+#     against existing tables and fail. If (and only if) the live schema is
+#     exactly what 0_init describes, mark 0_init as already applied.
+PGPASSFILE="${PGPASSFILE:-/root/.pgpass}"
+export PGPASSFILE
+HAS_MIGRATIONS_TABLE="$(psql -h "${DB_HOST:-localhost}" -U "${DB_USER:-naro_admin}" -d "${DB_NAME:-naro_fashion}" \
+  -tAc "SELECT to_regclass('public._prisma_migrations') IS NOT NULL" 2>&1)" \
+  || die "could not query the database for _prisma_migrations: ${HAS_MIGRATIONS_TABLE}"
+HAS_MIGRATIONS_TABLE="$(echo "$HAS_MIGRATIONS_TABLE" | tr -d '[:space:]')"
+
+if [ "$HAS_MIGRATIONS_TABLE" = "f" ]; then
+  log "🧱 No _prisma_migrations table — checking the live schema before baselining 0_init..."
+  # 0_init was generated from schema.prisma as of the commit that added it.
+  # Compare the live DB against THAT schema (not HEAD's), so a release that
+  # also ships its own new migrations can still be baselined.
+  INIT_FILE="prisma/migrations/0_init/migration.sql"
+  [ -f "$INIT_FILE" ] || die "${INIT_FILE} not found — cannot baseline"
+  INIT_COMMIT="$(git log --diff-filter=A --format=%H -1 -- "$INIT_FILE")"
+  BASELINE_SCHEMA="$(mktemp -d)/schema.prisma"
+  if [ -n "$INIT_COMMIT" ]; then
+    git show "${INIT_COMMIT}:packages/database/prisma/schema.prisma" > "$BASELINE_SCHEMA"
+    log "Baseline schema = schema.prisma @ ${INIT_COMMIT:0:7} (commit that added 0_init)"
+  else
+    cp prisma/schema.prisma "$BASELINE_SCHEMA"
+    log "⚠ 0_init is not committed yet — using the working-tree schema.prisma as the baseline"
+  fi
+  echo "------------------------------------------------------------------------"
+  set +e
+  pnpm exec prisma migrate diff \
+    --from-schema-datasource prisma/schema.prisma \
+    --to-schema-datamodel "$BASELINE_SCHEMA" \
+    --script --exit-code
+  DRIFT_RC=$?
+  set -e
+  echo "------------------------------------------------------------------------"
+  case "$DRIFT_RC" in
+    0)
+      log "✔ Live schema matches 0_init exactly — marking 0_init as applied (no SQL is executed)"
+      pnpm exec prisma migrate resolve --applied 0_init
+      ;;
+    2)
+      die "DRIFT: the live database differs from the 0_init baseline (SQL above = what it would take to make the DB match). NOT baselining and NOT auto-pushing. Reconcile by hand — see docs/OPS/MIGRATIONS.md 'First deploy / drift' — then re-run deploy.sh."
+      ;;
+    *)
+      die "prisma migrate diff errored (exit ${DRIFT_RC}) while checking for drift — refusing to baseline."
+      ;;
+  esac
+elif [ "$HAS_MIGRATIONS_TABLE" != "t" ]; then
+  die "unexpected answer when checking for _prisma_migrations: '${HAS_MIGRATIONS_TABLE}'"
+fi
+
+# 5b. Apply pending committed migrations (forward-only).
+log "🔍 Migration status before deploy:"
+pnpm exec prisma migrate status || true   # non-zero just means "pending"
+log "🗄  prisma migrate deploy..."
+pnpm exec prisma migrate deploy
+
+# 5c. Drift guard: after migrating, the DB must match schema.prisma. A
+#     non-empty diff means someone changed schema.prisma without running
+#     `prisma migrate dev` — the new code would then hit missing columns.
+#     Abort BEFORE building/swapping so the old (compatible) code stays live.
+set +e
 pnpm exec prisma migrate diff \
   --from-schema-datasource prisma/schema.prisma \
   --to-schema-datamodel prisma/schema.prisma \
-  --script || log "⚠ prisma migrate diff failed (non-fatal) — inspect manually"
-echo "------------------------------------------------------------------------"
-
-# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-# WARNING: --accept-data-loss is still ON.
-# It is kept deliberately for now: a pending deploy adds composite
-# @@unique constraints, which Prisma classifies as "possible data loss"
-# warnings — without the flag, `db push` refuses and blocks that deploy.
-# The safety net is the pre-deploy dump above + the diff printed above.
-# TODO: switch to `prisma migrate deploy` with committed migrations and
-#       drop this flag. Until then, READ THE DIFF ABOVE in the deploy log
-#       for any DROP COLUMN / DROP TABLE before declaring the deploy good.
-# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-pnpm exec prisma db push --accept-data-loss
+  --script --exit-code
+POST_DRIFT_RC=$?
+set -e
+case "$POST_DRIFT_RC" in
+  0) log "✔ Database matches schema.prisma after migrate deploy" ;;
+  2) die "schema.prisma has changes with NO migration (SQL above). Run 'pnpm prisma migrate dev --name <x>' locally, commit the migration, redeploy. Old build is still live." ;;
+  *) die "prisma migrate diff errored (exit ${POST_DRIFT_RC}) during the post-migrate drift check." ;;
+esac
 cd "$APP_DIR"
 
 # ---------------------------------------------------------------------------
-# 6. Build — SEQUENTIALLY. Root `pnpm build` fans out via Turbo in
-#    parallel and gets OOM-killed on the 2GB VPS, silently leaving an
-#    incomplete .next dir (CLAUDE.md "2GB VPS + parallel Turbo builds").
-#    Package names: api / storefront / admin (see each apps/*/package.json).
-#    packages/shared + packages/ui have no build step (main: src/index.ts).
+# 6. Build — SEQUENTIALLY and to the SIDE. Root `pnpm build` fans out via
+#    Turbo in parallel and gets OOM-killed on the 2GB VPS (CLAUDE.md "2GB
+#    VPS + parallel Turbo builds"). Next apps build into .next-build
+#    (next.config.js honours NEXT_DIST_DIR), so the live .next is untouched
+#    if a build dies half-way. packages/shared + packages/ui have no build.
 # ---------------------------------------------------------------------------
+PHASE="building"
+
+# API: `nest build` (deleteOutDir) rebuilds dist in place. Keep a copy of the
+# live dist first; it is restored if anything fails before the swap and
+# becomes dist-prev at swap time. The running API keeps its code in memory.
 log "🔨 Building api..."
-pnpm --filter api build
-[ -f apps/api/dist/main.js ] || die "api build did not produce apps/api/dist/main.js"
+rm -rf apps/api/dist-prev.pending
+if [ -d apps/api/dist ]; then
+  cp -a apps/api/dist apps/api/dist-prev.pending
+fi
+if ! pnpm --filter api build || [ ! -f apps/api/dist/main.js ]; then
+  die "api build failed or did not produce apps/api/dist/main.js (live dist restored)"
+fi
 
 verify_next_build() {
   local app="$1"
-  local dir="apps/${app}/.next"
+  local dir="apps/${app}/.next-build"
   for f in BUILD_ID routes-manifest.json; do
-    [ -s "${dir}/${f}" ] || die "${app} build is incomplete: ${dir}/${f} missing (OOM-killed?). Old processes still running; NOT restarting."
+    [ -s "${dir}/${f}" ] || die "${app} build is incomplete: ${dir}/${f} missing (OOM-killed?). Live build untouched; NOT restarting."
   done
   log "✔ ${app} build verified (BUILD_ID $(cat "${dir}/BUILD_ID"))"
 }
 
-for app in storefront admin; do
-  log "🔨 Building ${app}..."
-  pnpm --filter "$app" build
+for app in "${NEXT_APPS[@]}"; do
+  log "🔨 Building ${app} into apps/${app}/.next-build..."
+  rm -rf "apps/${app}/.next-build"
+  # Seed the webpack cache from the live build so the side build isn't cold.
+  if [ -d "apps/${app}/.next/cache" ]; then
+    mkdir -p "apps/${app}/.next-build"
+    cp -a "apps/${app}/.next/cache" "apps/${app}/.next-build/cache" || true
+  fi
+  NEXT_DIST_DIR=.next-build pnpm --filter "$app" build
   verify_next_build "$app"
 done
+# NOTE: the old "sync static+public into .next/standalone" step was dropped.
+# PM2 runs `next start` (serves apps/<app>/.next), never the standalone
+# server.js, and a standalone bundle built with NEXT_DIST_DIR=.next-build
+# would hard-code that dir name anyway. If ecosystem.config.js is ever
+# switched to standalone, revisit this.
 
-# Static/public sync into the standalone output.
-# PM2 (ecosystem.config.js) runs `next start` from apps/<app>, i.e. it
-# serves apps/<app>/.next directly — it does NOT run the standalone
-# server.js, so this copy is not on the serving path today. It is kept
-# (harmless, cheap) so that switching ecosystem.config.js to
-# `.next/standalone/apps/<app>/server.js` later works without a ChunkLoadError.
-for app in storefront admin; do
-  standalone_dir="apps/${app}/.next/standalone/apps/${app}"
-  if [ -d "${standalone_dir}" ]; then
-    log "📦 Syncing static + public into standalone dir for ${app} (not served by PM2 today)"
-    rm -rf "${standalone_dir}/.next/static" "${standalone_dir}/public"
-    cp -r "apps/${app}/.next/static" "${standalone_dir}/.next/static"
-    if [ -d "apps/${app}/public" ]; then
-      cp -r "apps/${app}/public" "${standalone_dir}/public"
-    fi
-  fi
+# ---------------------------------------------------------------------------
+# 7. Swap + reload. Everything built and verified; from here on any failure
+#    triggers an automatic rollback (PHASE=swapped -> on_exit).
+# ---------------------------------------------------------------------------
+log "🔁 Swapping new builds into place..."
+PHASE="swapped"
+mkdir -p "$DEPLOY_STATE_DIR"
+CAN_ROLLBACK=1
+for app in "${NEXT_APPS[@]}"; do
+  d="apps/${app}"
+  rm -rf "${d}/.next-prev"
+  if [ -d "${d}/.next" ]; then mv "${d}/.next" "${d}/.next-prev"; else CAN_ROLLBACK=0; fi
+  mv "${d}/.next-build" "${d}/.next"
 done
+rm -rf apps/api/dist-prev
+if [ -d apps/api/dist-prev.pending ]; then
+  mv apps/api/dist-prev.pending apps/api/dist-prev
+else
+  CAN_ROLLBACK=0
+fi
+if [ "$CAN_ROLLBACK" -eq 1 ] && [ -n "$PREV_SHA" ]; then
+  printf '%s\n' "$PREV_SHA" > "${DEPLOY_STATE_DIR}/previous_sha"
+else
+  rm -f "${DEPLOY_STATE_DIR}/previous_sha"
+  log "⚠ no complete previous build to keep — rollback will not be possible for this release"
+fi
+printf '%s\n' "$GIT_SHA" > "${DEPLOY_STATE_DIR}/current_sha"
+
+# All apps are fork mode (instances: 1), so `pm2 reload` is effectively a
+# restart (brief downtime per app). --update-env pushes GIT_SHA into each
+# process env so GET /api/v1/health can report the running commit.
+reload_pm2 "$GIT_SHA"
 
 # ---------------------------------------------------------------------------
-# 7. Restart. All apps are fork mode (instances: 1), so `pm2 reload` is
-#    effectively a restart (brief downtime per app) — it does NOT give a
-#    zero-downtime swap. --update-env pushes GIT_SHA into each process env
-#    so GET /api/v1/health can report the running commit.
+# 8. Health checks — roll back automatically if the new code isn't serving.
 # ---------------------------------------------------------------------------
-log "♻️  Reloading PM2 processes (GIT_SHA=${GIT_SHA:0:7})..."
-GIT_SHA="$GIT_SHA" pm2 reload ecosystem.config.js --update-env
-pm2 save || log "⚠ pm2 save failed (non-fatal)"
-
-# ---------------------------------------------------------------------------
-# 8. Health checks — fail the deploy loudly if the new code isn't serving.
-# ---------------------------------------------------------------------------
-wait_for() {
-  # wait_for <name> <url> <accepted-status-regex> <timeout-seconds> [host-header]
-  local name="$1" url="$2" ok_re="$3" timeout="$4" host="${5:-}"
-  local deadline=$(( $(date +%s) + timeout ))
-  local code="000"
-  local host_args=()
-  [ -n "$host" ] && host_args=(-H "Host: ${host}")
-  while [ "$(date +%s)" -lt "$deadline" ]; do
-    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${host_args[@]}" "$url" || true)"
-    if [[ "$code" =~ $ok_re ]]; then
-      log "✔ ${name} healthy (${url} -> ${code})"
-      return 0
-    fi
-    sleep 3
-  done
-  echo "[$(ts)] ✖ ${name} NOT healthy after ${timeout}s (${url} -> last status ${code})" >&2
-  return 1
-}
-
 log "🩺 Running post-deploy health checks..."
-HEALTH_OK=1
-wait_for "api"        "http://127.0.0.1:4000/api/v1/health" '^200$'        60 || HEALTH_OK=0
-# The storefront middleware 404s unknown Hosts in production (127.0.0.1
-# included), so probe with a real tenant host: first entry of
-# STOREFRONT_DEFAULT_HOSTS in the storefront env, else the apex domain.
-STOREFRONT_HEALTH_HOST="$(grep -E '^STOREFRONT_DEFAULT_HOSTS=' apps/storefront/.env.local 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | cut -d, -f1)"
-STOREFRONT_HEALTH_HOST="${STOREFRONT_HEALTH_HOST:-narofashion.co.tz}"
-wait_for "storefront" "http://127.0.0.1:3000/"              '^(2|3)[0-9][0-9]$' 60 "$STOREFRONT_HEALTH_HOST" || HEALTH_OK=0
-wait_for "admin"      "http://127.0.0.1:3001/"              '^(2|3)[0-9][0-9]$' 60 || HEALTH_OK=0
+if ! run_health_checks; then
+  pm2 status || true
+  pm2 logs --nostream --lines 40 || true
+  auto_rollback   # never returns; exits 1
+fi
 
 # Soft check: does /health report the commit we just deployed?
 HEALTH_BODY="$(curl -s --max-time 5 http://127.0.0.1:4000/api/v1/health || true)"
@@ -230,10 +380,6 @@ if [ -n "$HEALTH_BODY" ]; then
   fi
 fi
 
-if [ "$HEALTH_OK" -ne 1 ]; then
-  pm2 status || true
-  pm2 logs --nostream --lines 40 || true
-  die "post-deploy health checks failed (code ${GIT_SHA:0:7} is installed but not serving correctly). Pre-deploy DB dump: ${PREDEPLOY_DUMP}"
-fi
-
-log "✅ Deployment complete: ${GIT_SHA:0:7}"
+PHASE="done"
+rm -f "${DEPLOY_STATE_DIR}/rolled_back_from"
+log "✅ Deployment complete: ${GIT_SHA:0:7} (previous build kept for 'bash scripts/ops/rollback.sh': ${PREV_SHA:0:7})"

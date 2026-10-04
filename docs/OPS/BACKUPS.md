@@ -99,7 +99,7 @@ It also did NOT cover **uploaded files** (`apps/api/uploads/` product/CMS images
 
 ## Pre-deploy dumps (automatic)
 
-`deploy.sh` now runs `pg-backup.sh` with `BACKUP_TAG=predeploy-<sha7>` right before `prisma db push`, and **aborts the deploy** if the dump fails or is empty. These land in the same dir as `naro_fashion-predeploy-<sha7>-<timestamp>.dump`, are pruned by the same 30-day rule, and are picked up by the off-site sync. The deploy log prints the dump path and the exact `pg_restore` command. Pre-deploy runs do **not** ping the nightly Healthchecks URL (so a deploy can't hide a missed nightly backup).
+`deploy.sh` now runs `pg-backup.sh` with `BACKUP_TAG=predeploy-<sha7>` right before `prisma migrate deploy` (see [MIGRATIONS.md](MIGRATIONS.md)), and **aborts the deploy** if the dump fails or is empty. These land in the same dir as `naro_fashion-predeploy-<sha7>-<timestamp>.dump`, are pruned by the same 30-day rule, and are picked up by the off-site sync. The deploy log prints the dump path and the exact `pg_restore` command. Pre-deploy runs do **not** ping the nightly Healthchecks URL (so a deploy can't hide a missed nightly backup).
 
 Requirement: the deploy user (root) must have a working `/root/.pgpass` — already true if `setup-backups.sh` was run.
 

@@ -2,7 +2,7 @@
 # PostgreSQL backup for Naro Fashion production DB.
 #
 # Runs from cron at 03:15 UTC nightly (see /etc/cron.d/naro-pg-backup),
-# and from deploy.sh right before `prisma db push` (with BACKUP_TAG set).
+# and from deploy.sh right before `prisma migrate deploy` (with BACKUP_TAG set).
 # Writes a compressed pg_dump in Postgres "custom" format to
 # /var/backups/naro/postgres/, then prunes anything older than 30 days.
 # Off-site sync to Vultr Object Storage is a separate step:

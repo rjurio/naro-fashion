@@ -7,6 +7,14 @@ dist/
 .next/
 out/
 build/
+# deploy.sh side-build / rollback dirs + deployed-SHA markers
+.next-build/
+.next-prev/
+.next-failed/
+dist-prev/
+dist-prev.pending/
+dist-failed/
+.deploy/
 
 # Environment
 .env
@@ -38,8 +46,8 @@ docs/instagram/
 # Backed up off-site encrypted by scripts/ops/offsite-backup.sh.
 apps/api/private-uploads/
 
-# Prisma
-packages/database/prisma/migrations/
+# Prisma — migrations ARE committed (deploy.sh runs `prisma migrate deploy`).
+# See docs/OPS/MIGRATIONS.md. Do not re-ignore packages/database/prisma/migrations/.
 
 # Logs
 *.log

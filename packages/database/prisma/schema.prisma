@@ -43,6 +43,10 @@ model PlatformAdmin {
   isActive     Boolean  @default(true)
   // Bumped on logout/password change — JWTs carrying an older value are rejected
   tokenVersion Int      @default(0)
+  // TOTP 2FA (secret is AES-GCM encrypted at rest; recovery codes are sha256 hashes)
+  is2FAEnabled       Boolean  @default(false)
+  twoFASecret        String?
+  twoFARecoveryCodes String[] @default([])
   // Account lockout (mirrors AdminUser)
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
@@ -231,6 +235,8 @@ model AdminUser {
   role         String   @default("STAFF") // SUPER_ADMIN, MANAGER, STAFF (cached for JWT)
   is2FAEnabled Boolean  @default(false)
   twoFASecret  String?
+  // sha256 hashes of one-time 2FA recovery codes (consumed on use)
+  twoFARecoveryCodes String[] @default([])
   isActive     Boolean  @default(true)
   // Bumped on logout/password change — JWTs carrying an older value are rejected
   tokenVersion Int      @default(0)
