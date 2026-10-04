@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
+import { headers } from 'next/headers';
 import Providers from './providers';
 import './globals.css';
 
@@ -18,19 +19,22 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  // Per-request CSP nonce from middleware.ts. Next stamps its own framework
+  // scripts automatically (reads the request's Content-Security-Policy header).
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
         {/* Auto-detect device theme on first visit. Runs before React hydration to prevent flash. */}
-        <script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';localStorage.setItem('theme',t);}document.documentElement.classList.remove('light','dark','luxury');document.documentElement.classList.add(t);}catch(e){}})();` }} />
+        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';localStorage.setItem('theme',t);}document.documentElement.classList.remove('light','dark','luxury');document.documentElement.classList.add(t);}catch(e){}})();` }} />
       </head>
       <body className={`${inter.variable} font-sans antialiased`}>
-        <Providers>{children}</Providers>
+        <Providers nonce={nonce}>{children}</Providers>
       </body>
     </html>
   );

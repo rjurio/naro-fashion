@@ -38,10 +38,14 @@ export default function ReceiptModal({ orderId, onClose }: Props) {
           </style>
         </head>
         <body>${receiptRef.current.innerHTML}</body>
-        <script>window.print(); window.close();</script>
       </html>
     `);
     printWindow.document.close();
+    // Print from the opener: the about:blank popup inherits the admin's nonce
+    // CSP, so an inline <script> written into it would be blocked.
+    printWindow.focus();
+    printWindow.print();
+    printWindow.close();
   };
 
   if (!receipt) {

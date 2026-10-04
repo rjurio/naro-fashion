@@ -25,6 +25,73 @@ const DEFAULT_HOSTS = new Set(
     .filter(Boolean),
 );
 
+/**
+ * Nonce-based Content-Security-Policy (single source of truth — next.config.js
+ * no longer sets a CSP header).
+ *
+ * Every page response gets a fresh per-request nonce. The nonce is placed on:
+ *   - the response `Content-Security-Policy` header (what the browser enforces)
+ *   - the forwarded *request* `Content-Security-Policy` header — Next 15's
+ *     app-render reads the nonce from it and stamps it on its own framework
+ *     <script> tags (bootstrap, RSC flight data, chunk tags)
+ *   - the forwarded request `x-nonce` header — read by app/layout.tsx via
+ *     `headers()` for our own inline scripts (theme bootstrap, next-themes,
+ *     JSON-LD).
+ *
+ * `'strict-dynamic'` lets nonce'd scripts load further scripts (webpack
+ * chunks, the bundled <model-viewer> import) without a host allowlist; in
+ * CSP3 browsers it makes `'self'`/host sources ignored, which are kept only as
+ * a CSP2 fallback. `'wasm-unsafe-eval'` + gstatic stay for model-viewer's
+ * Draco/KTX2 decoders (fetched via connect-src, run as blob workers + wasm).
+ * `'unsafe-eval'` only in development (React Refresh).
+ *
+ * style-src keeps `'unsafe-inline'`: Tailwind/next-themes/React `style={}`
+ * attributes and next/font emit inline styles. Adding a nonce to style-src
+ * would disable 'unsafe-inline' and break those, and inline styles are a far
+ * lower risk than inline scripts.
+ *
+ * Non-script directives are unchanged from the previous static CSP.
+ */
+const API_ORIGIN = (() => {
+  try {
+    return new URL(API_URL.replace(/\/api\/v1\/?$/, '')).origin;
+  } catch {
+    return 'http://localhost:4000';
+  }
+})();
+
+function buildCsp(nonce: string): string {
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'wasm-unsafe-eval' https://www.gstatic.com${IS_PROD ? '' : " 'unsafe-eval'"}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:" + (IS_PROD ? '' : ' http://localhost:*'),
+    "font-src 'self' data:",
+    `connect-src 'self' ${API_ORIGIN} https://www.gstatic.com${IS_PROD ? '' : ' ws: http://localhost:*'}`,
+    "media-src 'self' blob: https:" + (IS_PROD ? '' : ' http://localhost:*'),
+    "worker-src 'self' blob:",
+    'frame-src https://www.google.com https://maps.google.com',
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    ...(IS_PROD ? ['upgrade-insecure-requests'] : []),
+  ].join('; ');
+}
+
+function generateNonce(): string {
+  return btoa(crypto.randomUUID());
+}
+
+/** Stamps nonce + CSP onto the forwarded request headers; returns the CSP string. */
+function applyNonce(requestHeaders: Headers): string {
+  const nonce = generateNonce();
+  const csp = buildCsp(nonce);
+  requestHeaders.set('x-nonce', nonce);
+  requestHeaders.set('Content-Security-Policy', csp);
+  return csp;
+}
+
 function mayUseSlugFallback(hostname: string): boolean {
   if (DEFAULT_HOSTS.has(hostname)) return true;
   if (IS_PROD) return false;
@@ -125,13 +192,17 @@ export async function middleware(request: NextRequest) {
     pathname.match(/\.(ico|png|jpg|jpeg|svg|css|js|webp|woff|woff2)$/)
   ) {
     // Never let a client-supplied x-tenant-id reach server code unverified.
-    if (request.headers.has('x-tenant-id')) {
-      const stripped = new Headers(request.headers);
-      stripped.delete('x-tenant-id');
-      stripped.delete('x-tenant-slug');
-      return NextResponse.next({ request: { headers: stripped } });
-    }
-    return NextResponse.next();
+    // Same for x-nonce: always overwritten with a fresh server-generated one.
+    const stripped = new Headers(request.headers);
+    stripped.delete('x-tenant-id');
+    stripped.delete('x-tenant-slug');
+    // Static assets/API don't render the layout, but stamp a CSP anyway so a
+    // page path that happens to match the extension regex is never served
+    // without one.
+    const csp = applyNonce(stripped);
+    const res = NextResponse.next({ request: { headers: stripped } });
+    res.headers.set('Content-Security-Policy', csp);
+    return res;
   }
 
   const tenant = await resolveTenant(hostname);
@@ -153,8 +224,10 @@ export async function middleware(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-tenant-id', tenant.id);
   requestHeaders.set('x-tenant-slug', String(tenant.slug ?? ''));
+  const csp = applyNonce(requestHeaders);
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set('Content-Security-Policy', csp);
   response.headers.set('X-Tenant-Id', tenant.id);
   response.headers.set('X-Tenant-Slug', String(tenant.slug ?? ''));
 

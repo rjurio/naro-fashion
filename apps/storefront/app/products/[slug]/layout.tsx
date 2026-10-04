@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { cache } from 'react';
+import { headers } from 'next/headers';
 import { getBusinessProfile } from '@/lib/settings-server';
 import { getRequestOrigin, serverApiGet } from '@/lib/tenant-server';
 import { buildEntityMetadata, resolveApiImage, serializeJsonLd, toPlainText } from '@/lib/seo-server';
@@ -32,6 +33,7 @@ export default async function ProductLayout({
 }) {
   const { slug } = await params;
   const product = await getProduct(slug);
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
 
   let jsonLd: Record<string, unknown> | null = null;
   if (product?.name) {
@@ -73,6 +75,10 @@ export default async function ProductLayout({
       {jsonLd && (
         <script
           type="application/ld+json"
+          // JSON-LD is data, not executed, but nonce it so CSP-strict
+          // browsers/validators never flag it.
+          nonce={nonce}
+          suppressHydrationWarning
           // serializeJsonLd escapes < > & so "</script>" in tenant data can't break out.
           dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }}
         />

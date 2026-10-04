@@ -35,8 +35,9 @@ if (
 }
 
 /**
- * Content-Security-Policy. Every external resource the storefront loads was
- * audited (grep for https:// in app/ + components/):
+ * Content-Security-Policy is NOT set here any more — it is generated per
+ * request with a nonce in middleware.ts (buildCsp), so there is exactly one
+ * CSP header and no script 'unsafe-inline'. External resources audited for it:
  *   - API (fetch + /uploads images)            → connect-src / img-src
  *   - Google Maps embed on /pages/contact      → frame-src www.google.com
  *   - <model-viewer> (bundled from npm) loads its Draco/KTX2 decoders from
@@ -45,28 +46,8 @@ if (
  *   - product/IG/event images may come from any https host (tenant data) → img-src https:
  *   - event videos                              → media-src https: blob:
  *   - wa.me / payment gateway pages open via window.open (navigation, not CSP-governed)
- * 'unsafe-inline' scripts are required by Next.js App Router hydration data
- * and the pre-hydration theme script in app/layout.tsx (no nonce plumbing yet).
  */
-const csp = [
-  "default-src 'self'",
-  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://www.gstatic.com${isProd ? '' : " 'unsafe-eval'"}`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:" + (isProd ? '' : ' http://localhost:*'),
-  "font-src 'self' data:",
-  `connect-src 'self' ${apiUrl.origin} https://www.gstatic.com${isProd ? '' : ' ws: http://localhost:*'}`,
-  "media-src 'self' blob: https:" + (isProd ? '' : ' http://localhost:*'),
-  "worker-src 'self' blob:",
-  "frame-src https://www.google.com https://maps.google.com",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-  ...(isProd ? ['upgrade-insecure-requests'] : []),
-].join('; ');
-
 const securityHeaders = [
-  { key: 'Content-Security-Policy', value: csp },
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   // Contact page does NOT use geolocation (only the admin's business-profile
@@ -83,6 +64,10 @@ const securityHeaders = [
 ];
 
 const nextConfig = {
+  // deploy.sh builds into a side directory (NEXT_DIST_DIR=.next-build) and
+  // swaps it into place only after the build is verified, so the live
+  // process never serves a half-written .next. Runtime always uses .next.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   typescript: { ignoreBuildErrors: false },
   eslint: { ignoreDuringBuilds: true },
   output: 'standalone',
