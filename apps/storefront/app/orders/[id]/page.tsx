@@ -217,7 +217,7 @@ export default function OrderDetailPage() {
               )}
               <div className="border-t border-border pt-2 mt-2 flex justify-between font-bold text-foreground">
                 <span>{t("cart.total")}</span>
-                <span className="text-gold-500">{formatPrice(total)}</span>
+                <span className="text-gold-text">{formatPrice(total)}</span>
               </div>
             </div>
             <Button className="w-full mt-5" onClick={() => router.push("/products")}>

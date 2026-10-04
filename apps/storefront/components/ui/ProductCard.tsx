@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Heart, ShoppingCart, Star, Loader2 } from "lucide-react";
 import { cn, formatPrice } from "@/lib/utils";
-import { cartApi, wishlistApi } from "@/lib/api";
+import { cartApi, wishlistApi, tokenStore } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import Badge from "./Badge";
 import Button from "./Button";
@@ -61,7 +61,7 @@ export default function ProductCard({
   const handleWishlistToggle = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    const token = typeof window !== "undefined" ? tokenStore.getAccess() : null;
     if (!token) {
       router.push("/auth/login");
       return;
@@ -81,7 +81,7 @@ export default function ProductCard({
   const handleAddToCart = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    const token = typeof window !== "undefined" ? tokenStore.getAccess() : null;
     if (!token) {
       router.push("/auth/login");
       return;
@@ -216,7 +216,7 @@ export default function ProductCard({
 
         {/* Rent price */}
         {isRentable && rentPrice && (
-          <p className="mt-1 text-xs text-gold-600">
+          <p className="mt-1 text-xs text-gold-text">
             {t('product.rentFrom')} {formatPrice(rentPrice)}{t('product.perDay')}
           </p>
         )}

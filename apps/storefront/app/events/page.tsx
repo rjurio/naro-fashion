@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { Calendar, MapPin, Camera, ArrowRight, Heart, Loader2 } from 'lucide-react';
-import { eventsApi } from '@/lib/api';
+import { eventsApi, tokenStore } from '@/lib/api';
 import { useTranslation } from '@/lib/i18n';
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
@@ -49,7 +49,7 @@ function SkeletonCard() {
 }
 
 export default function EventsPage() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [events, setEvents] = useState<EventItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -59,7 +59,7 @@ export default function EventsPage() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      setIsLoggedIn(!!localStorage.getItem('token'));
+      setIsLoggedIn(!!tokenStore.getAccess());
     }
     fetchEvents(1);
   }, []);
@@ -95,13 +95,13 @@ export default function EventsPage() {
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 sm:py-28 text-center">
           <div className="inline-flex items-center gap-2 rounded-full bg-gold-500/15 px-4 py-1.5 text-sm text-gold-500 border border-gold-500/20 mb-6">
             <Heart className="h-4 w-4" />
-            Customer Gallery
+            {t('events.customerGallery')}
           </div>
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-heading font-bold text-white mb-4">
-            Real <span className="text-gold-500">Weddings</span>
+            {t('events.realWeddingsPrefix')} <span className="text-gold-500">{t('events.realWeddingsHighlight')}</span>
           </h1>
           <p className="text-lg text-white/60 max-w-xl mx-auto">
-            Celebrating love stories featuring our gowns. See how our brides shined on their special day.
+            {t('events.heroSubtitle')}
           </p>
         </div>
       </section>
@@ -119,9 +119,9 @@ export default function EventsPage() {
             <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
               <Camera className="h-10 w-10 text-muted-foreground/50" />
             </div>
-            <h2 className="text-xl font-heading font-semibold text-foreground mb-2">No galleries yet</h2>
+            <h2 className="text-xl font-heading font-semibold text-foreground mb-2">{t('events.noGalleries')}</h2>
             <p className="text-muted-foreground max-w-md mx-auto">
-              We&apos;re collecting beautiful wedding stories. Check back soon or submit your own!
+              {t('events.noGalleriesDesc')}
             </p>
           </div>
         ) : (
@@ -163,7 +163,7 @@ export default function EventsPage() {
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-white/60 text-xs sm:text-sm">
                           <span className="flex items-center gap-1">
                             <Calendar className="h-3 w-3 flex-shrink-0" />
-                            {new Date(event.eventDate).toLocaleDateString('en-US', {
+                            {new Date(event.eventDate).toLocaleDateString(locale === 'sw' ? 'sw-TZ' : 'en-TZ', {
                               month: 'short',
                               day: 'numeric',
                               year: 'numeric',
@@ -197,9 +197,9 @@ export default function EventsPage() {
                   className="inline-flex items-center gap-2 px-8 py-3 rounded-xl border border-border bg-card text-foreground font-medium hover:border-gold-500/50 hover:text-gold-500 transition-colors disabled:opacity-50"
                 >
                   {loadingMore ? (
-                    <><Loader2 className="h-4 w-4 animate-spin" /> Loading...</>
+                    <><Loader2 className="h-4 w-4 animate-spin" /> {t('common.loading')}</>
                   ) : (
-                    'Load More Stories'
+                    t('events.loadMoreStories')
                   )}
                 </button>
               </div>
@@ -217,17 +217,17 @@ export default function EventsPage() {
               <div className="relative">
                 <Heart className="h-8 w-8 text-gold-500 mx-auto mb-4" />
                 <h2 className="text-2xl sm:text-3xl font-heading font-bold text-white mb-3">
-                  Share Your <span className="text-gold-500">Story</span>
+                  {t('events.shareYour')} <span className="text-gold-500">{t('events.story')}</span>
                 </h2>
                 <p className="text-white/50 mb-8 max-w-lg mx-auto">
-                  Wore one of our gowns on your special day? We&apos;d love to feature your celebration in our gallery.
+                  {t('events.shareStoryDesc')}
                 </p>
                 <Link
                   href="/events/submit"
                   className="inline-flex items-center gap-2 px-8 py-3 rounded-xl bg-gold-500 text-[#1A1A1A] font-semibold hover:bg-gold-600 transition-colors"
                 >
                   <Camera className="h-5 w-5" />
-                  Submit Your Gallery
+                  {t('events.submitYourGallery')}
                 </Link>
               </div>
             </div>

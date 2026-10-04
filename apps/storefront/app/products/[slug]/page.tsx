@@ -27,8 +27,11 @@ import ProductCard from "@/components/ui/ProductCard";
 import { formatPrice } from "@/lib/utils";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { useTranslation } from "@/lib/i18n";
-import { productsApi, reviewsApi, cartApi, wishlistApi } from "@/lib/api";
+import { productsApi, reviewsApi, cartApi, wishlistApi, tokenStore } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
+import { sanitizeHtml } from "@/lib/sanitize";
+import { isOptimizableImage } from "@/lib/image-hosts";
+import Image from "next/image";
 
 const ModelViewer = dynamic(() => import("@/components/product/ModelViewer"), {
   ssr: false,
@@ -80,7 +83,7 @@ export default function ProductDetailPage() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      setIsLoggedIn(!!localStorage.getItem('token'));
+      setIsLoggedIn(!!tokenStore.getAccess());
     }
   }, []);
 
@@ -95,16 +98,25 @@ export default function ProductDetailPage() {
         // Auto-select first variant if only one exists
         const activeVariants = (data.variants || []).filter((v: any) => v.isActive !== false);
         if (activeVariants.length === 1) setSelectedSize(activeVariants[0].id);
-        // Fetch reviews
-        if (data?.id) {
+        // Reviews: the public product payload already embeds the latest
+        // approved reviews, so render those immediately instead of waiting on
+        // a second sequential round-trip. Only fetch the dedicated endpoint
+        // when the embed is missing or truncated.
+        const embedded = Array.isArray(data?.reviews) ? data.reviews : null;
+        if (embedded) setReviews(embedded);
+        if (data?.id && (!embedded || (data.reviewCount ?? 0) > embedded.length)) {
           reviewsApi.getByProduct(data.id)
-            .then((r) => setReviews(Array.isArray(r) ? r : r?.data || []))
-            .catch(() => setReviews([]));
+            .then((r) => setReviews(Array.isArray(r) ? r : r?.data || embedded || []))
+            .catch(() => setReviews(embedded || []));
         }
-        // Fetch related products by category
-        if (data?.categoryId || data?.category) {
-          const catParam = data.categorySlug || data.category?.slug || data.categoryId || "";
-          productsApi.getAll({ category: catParam, limit: 4 })
+        // Fetch related products by category (runs in parallel with the above).
+        // The products DTO accepts `categorySlug` / `categoryId` — NOT
+        // `category` (rejected by the strict whitelist).
+        if (data?.category?.slug || data?.categoryId) {
+          const catQuery: Record<string, string | number> = data.category?.slug
+            ? { categorySlug: data.category.slug, limit: 5 }
+            : { categoryId: data.categoryId, limit: 5 };
+          productsApi.getAll(catQuery)
             .then((r) => {
               const items = Array.isArray(r?.data) ? r.data : Array.isArray(r) ? r : [];
               setRelatedProducts(items.filter((p: any) => p.id !== data.id).slice(0, 4));
@@ -112,7 +124,7 @@ export default function ProductDetailPage() {
             .catch(() => setRelatedProducts([]));
         }
         // Check wishlist status if logged in
-        if (data?.id && typeof window !== 'undefined' && localStorage.getItem('token')) {
+        if (data?.id && typeof window !== 'undefined' && tokenStore.getAccess()) {
           wishlistApi.check(data.id)
             .then((r) => setIsWishlisted(r?.inWishlist ?? false))
             .catch(() => {});
@@ -129,30 +141,8 @@ export default function ProductDetailPage() {
     }
   }, [product]);
 
-  // JSON-LD structured data for SEO
-  const jsonLd = product ? {
-    "@context": "https://schema.org",
-    "@type": "Product",
-    name: product.name,
-    description: product.description || "",
-    image: product.images?.[0]?.url ? resolveImageUrl(product.images[0].url) : "",
-    sku: product.sku || product.id,
-    brand: { "@type": "Brand", name: settings.businessName },
-    offers: {
-      "@type": "Offer",
-      url: typeof window !== "undefined" ? window.location.href : "",
-      priceCurrency: "TZS",
-      price: Number(product.basePrice) || 0,
-      availability: "https://schema.org/InStock",
-    },
-    ...(product.avgRating ? {
-      aggregateRating: {
-        "@type": "AggregateRating",
-        ratingValue: product.avgRating,
-        reviewCount: product.reviewCount || 0,
-      },
-    } : {}),
-  } : null;
+  // JSON-LD structured data is rendered server-side in ./layout.tsx so
+  // crawlers see it without executing JS.
 
   const handleAddToCart = async () => {
     if (!product || !selectedSize) return;
@@ -168,7 +158,7 @@ export default function ProductDetailPage() {
 
   const handleToggleWishlist = async () => {
     if (!product) return;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    const token = typeof window !== 'undefined' ? tokenStore.getAccess() : null;
     if (!token) {
       router.push('/auth/login');
       return;
@@ -280,21 +270,6 @@ export default function ProductDetailPage() {
 
   return (
     <div className="bg-background min-h-screen">
-      {/* JSON-LD Structured Data.
-          Escape <, >, & to their \uXXXX forms so a product name/description
-          containing "</script>" can't break out of this script element and
-          execute (JSON.parse reads the escapes back transparently). */}
-      {jsonLd && (
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{
-            __html: JSON.stringify(jsonLd)
-              .replace(/</g, '\\u003c')
-              .replace(/>/g, '\\u003e')
-              .replace(/&/g, '\\u0026'),
-          }}
-        />
-      )}
       {/* Breadcrumb */}
       <div className="border-b border-border">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
@@ -347,10 +322,16 @@ export default function ProductDetailPage() {
               {viewMode === "photos" && (
                 <>
                   {images[selectedImage] ? (
-                    <img
+                    // LCP image: next/image (allowed hosts in next.config.js)
+                    // with a fixed 3:4 box → no layout shift, responsive srcset.
+                    <Image
                       src={images[selectedImage]}
                       alt={product.name}
-                      className="w-full h-full object-cover"
+                      fill
+                      priority={selectedImage === 0}
+                      unoptimized={!isOptimizableImage(images[selectedImage])}
+                      sizes="(max-width: 1024px) 100vw, 50vw"
+                      className="object-cover"
                     />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-muted-foreground">
@@ -414,10 +395,13 @@ export default function ProductDetailPage() {
                         : "border-border hover:border-gold-300"
                     }`}
                   >
-                    <img
+                    <Image
                       src={image}
                       alt={`${product.name} ${idx + 1}`}
-                      className="h-full w-full object-cover"
+                      fill
+                      sizes="80px"
+                      unoptimized={!isOptimizableImage(image)}
+                      className="object-cover"
                     />
                   </button>
                 ))}
@@ -484,7 +468,7 @@ export default function ProductDetailPage() {
                 </span>
               )}
               {discount > 0 && (
-                <span className="text-sm font-semibold text-gold-500">
+                <span className="text-sm font-semibold text-gold-text">
                   {t("product.save")} {discount}%
                 </span>
               )}
@@ -494,7 +478,7 @@ export default function ProductDetailPage() {
             {isRentable && rentPrice && (
               <div className="mt-3 flex items-center gap-2 p-3 rounded-lg bg-gold-500/10 border border-gold-500/30">
                 <Crown className="h-5 w-5 text-gold-600" />
-                <span className="text-sm font-medium text-gold-700">
+                <span className="text-sm font-medium text-gold-text">
                   {t("product.rentalPrice")} {formatPrice(rentPrice)}{t("product.perDay")}
                 </span>
               </div>
@@ -529,7 +513,7 @@ export default function ProductDetailPage() {
               <div className="mt-6">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold text-foreground">{t("product.size")}</h3>
-                  <Link href="/pages/size-guide" className="text-sm text-gold-500 hover:text-gold-600 font-medium">
+                  <Link href="/pages/size-guide" className="text-sm text-gold-text hover:underline font-medium">
                     {t("product.sizeGuide")}
                   </Link>
                 </div>
@@ -724,10 +708,13 @@ export default function ProductDetailPage() {
                     prose-table:w-full prose-table:border-collapse
                     prose-th:border prose-th:border-border prose-th:px-3 prose-th:py-2 prose-th:text-left prose-th:text-xs prose-th:font-semibold prose-th:bg-muted
                     prose-td:border prose-td:border-border prose-td:px-3 prose-td:py-2 prose-td:text-sm"
+                  // Defense in depth: API sanitizes on write; sanitize again on render.
                   dangerouslySetInnerHTML={{
-                    __html: (locale === 'sw' && sizeGuide.contentSwahili)
-                      ? sizeGuide.contentSwahili
-                      : sizeGuide.content,
+                    __html: sanitizeHtml(
+                      (locale === 'sw' && sizeGuide.contentSwahili)
+                        ? sizeGuide.contentSwahili
+                        : sizeGuide.content,
+                    ),
                   }}
                 />
                 {((locale === 'sw' && sizeGuide.pdfUrlSwahili) || sizeGuide.pdfUrl) && (
@@ -812,7 +799,7 @@ export default function ProductDetailPage() {
                 ) : (
                   <div className="p-4 rounded-xl border border-dashed border-border text-center">
                     <p className="text-sm text-muted-foreground">
-                      <Link href="/auth/login" className="text-gold-500 hover:underline font-medium">{t("product.signIn")}</Link>
+                      <Link href="/auth/login" className="text-gold-text hover:underline font-medium">{t("product.signIn")}</Link>
                       {' '}{t("product.toWriteReview")}
                     </p>
                   </div>

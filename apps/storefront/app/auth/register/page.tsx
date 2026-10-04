@@ -9,6 +9,7 @@ import Button from "@/components/ui/Button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { useTranslation } from "@/lib/i18n";
+import { isValidPassword, PASSWORD_MAX } from "@/lib/password";
 
 function getPasswordStrength(password: string, labels: { weak: string; medium: string; strong: string }): { score: number; label: string } {
   if (!password) return { score: 0, label: "" };
@@ -77,7 +78,7 @@ export default function RegisterPage() {
   const validate = (): boolean => {
     const errors: Record<string, string> = {};
 
-    if (formData.password.length < 8) {
+    if (!isValidPassword(formData.password)) {
       errors.password = t("passwordTooShort");
     }
     if (formData.password !== formData.confirmPassword) {
@@ -170,7 +171,7 @@ export default function RegisterPage() {
             </h1>
             <p className="mt-2 text-muted-foreground">
               {t("haveAccount")}{" "}
-              <Link href="/auth/login" className="text-gold-500 hover:text-gold-600 font-medium">
+              <Link href="/auth/login" className="text-gold-text hover:underline font-medium">
                 {t("signIn")}
               </Link>
             </p>
@@ -277,6 +278,7 @@ export default function RegisterPage() {
                   placeholder={t("createPasswordPlaceholder")}
                   required
                   minLength={8}
+                maxLength={PASSWORD_MAX}
                   disabled={isLoading}
                   className={`w-full rounded-lg border bg-background pl-10 pr-10 py-2.5 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500 transition-colors disabled:opacity-50 ${
                     fieldErrors.password ? "border-red-500" : "border-border"
@@ -377,11 +379,11 @@ export default function RegisterPage() {
                 />
                 <label htmlFor="terms" className="text-sm text-muted-foreground">
                   {t("agreeTerms")}{" "}
-                  <Link href="/pages/terms" className="text-gold-500 hover:text-gold-600">
+                  <Link href="/pages/terms" className="text-gold-text hover:underline">
                     {t("termsOfService")}
                   </Link>{" "}
                   {t("and")}{" "}
-                  <Link href="/pages/privacy" className="text-gold-500 hover:text-gold-600">
+                  <Link href="/pages/privacy-policy" className="text-gold-text hover:underline">
                     {t("privacyPolicy")}
                   </Link>
                 </label>

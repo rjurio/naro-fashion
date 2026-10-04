@@ -24,7 +24,7 @@ import {
 import Button from "@/components/ui/Button";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { formatPrice } from "@/lib/utils";
-import { cartApi, ordersApi, paymentsApi } from "@/lib/api";
+import { cartApi, ordersApi, paymentsApi, promoCodesApi, ApiError } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useTranslation } from "@/lib/i18n";
 
@@ -81,6 +81,22 @@ export default function CheckoutPage() {
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const maxPolls = 40; // 40 polls x 3 seconds = 2 minutes
 
+  // Promo code (pre-filled from the cart via sessionStorage; re-validated by
+  // the server on order create).
+  const [promoCode, setPromoCode] = useState("");
+  const [promoApplied, setPromoApplied] = useState(false);
+  const [promoDiscount, setPromoDiscount] = useState(0);
+  const [promoError, setPromoError] = useState("");
+  const [applyingPromo, setApplyingPromo] = useState(false);
+
+  // Authoritative totals from the POST /orders response.
+  const [serverTotals, setServerTotals] = useState<{
+    subtotal: number;
+    discount: number;
+    shippingFee: number;
+    total: number;
+  } | null>(null);
+
   useEffect(() => {
     cartApi.get()
       .then((cart) => {
@@ -108,8 +124,14 @@ export default function CheckoutPage() {
     const qty = item.quantity || 1;
     return sum + price * qty;
   }, 0);
-  const shippingCost = selectedDelivery.price;
-  const total = subtotal + shippingCost;
+  // Client-side ESTIMATE only. The server computes the authoritative
+  // subtotal / discount / shippingFee / total on order create; once the order
+  // exists we display and charge the server's numbers (`serverTotals`).
+  const estimatedShipping = selectedDelivery.price;
+  const discount = promoApplied ? promoDiscount : 0;
+  const estimatedTotal = Math.max(0, subtotal - discount) + estimatedShipping;
+  const shippingCost = serverTotals?.shippingFee ?? estimatedShipping;
+  const total = serverTotals?.total ?? estimatedTotal;
 
   const selectedPayment = paymentMethods.find((p) => p.id === paymentMethod)!;
   const isGatewayPayment = !!selectedPayment.gatewayMethod;
@@ -185,6 +207,54 @@ export default function CheckoutPage() {
     }, 3000);
   }, [t]);
 
+  const validatePromo = useCallback(async (raw: string, sub: number) => {
+    const code = raw.trim();
+    if (!code) return;
+    setApplyingPromo(true);
+    setPromoError("");
+    try {
+      // Always HTTP 200 — check `valid`.
+      const result = await promoCodesApi.validate(code, sub);
+      if (result?.valid) {
+        setPromoDiscount(Number(result.discount ?? result.discountAmount ?? 0));
+        setPromoApplied(true);
+        try { sessionStorage.setItem("checkoutPromoCode", code); } catch { /* ignore */ }
+      } else {
+        setPromoApplied(false);
+        setPromoDiscount(0);
+        setPromoError(result?.message || t("checkout.invalidPromoCode"));
+        try { sessionStorage.removeItem("checkoutPromoCode"); } catch { /* ignore */ }
+      }
+    } catch (err: any) {
+      setPromoApplied(false);
+      setPromoDiscount(0);
+      setPromoError(err?.message || t("checkout.invalidPromoCode"));
+    } finally {
+      setApplyingPromo(false);
+    }
+  }, [t]);
+
+  const removePromo = () => {
+    setPromoApplied(false);
+    setPromoDiscount(0);
+    setPromoCode("");
+    setPromoError("");
+    try { sessionStorage.removeItem("checkoutPromoCode"); } catch { /* ignore */ }
+  };
+
+  // Pick up a code applied on the cart page once the cart subtotal is known.
+  const promoPrefilled = useRef(false);
+  useEffect(() => {
+    if (promoPrefilled.current || loading || subtotal <= 0) return;
+    promoPrefilled.current = true;
+    let saved = "";
+    try { saved = sessionStorage.getItem("checkoutPromoCode") || ""; } catch { /* ignore */ }
+    if (saved) {
+      setPromoCode(saved);
+      validatePromo(saved, subtotal);
+    }
+  }, [loading, subtotal, validatePromo]);
+
   const handlePlaceOrder = async () => {
     setPlacing(true);
     try {
@@ -199,15 +269,37 @@ export default function CheckoutPage() {
               ? "BANK_TRANSFER"
               : "CASH_ON_DELIVERY";
 
-      // Step 1: Create the order
+      // Step 1: Create the order. The server prices delivery from
+      // `deliveryMethod`, re-validates the promo code and returns the
+      // authoritative totals; the address travels as structured data (not
+      // stuffed into `notes`).
       const order = await ordersApi.create({
         paymentMethod: paymentMethodEnum,
-        shippingFee: shippingCost,
-        notes: `Delivery: ${deliveryMethod}. Address: ${shipping.name}, ${shipping.street}, ${shipping.city}, ${shipping.region}. Phone: ${shipping.phone}`,
+        deliveryMethod: deliveryMethod as "standard" | "express" | "pickup",
+        shippingAddress: {
+          name: shipping.name.trim(),
+          phone: shipping.phone.trim(),
+          street: shipping.street.trim(),
+          city: shipping.city.trim(),
+          region: shipping.region,
+        },
+        ...(promoApplied && promoCode.trim() ? { promoCode: promoCode.trim() } : {}),
       });
 
       const createdOrderId = order?.id || "";
       setOrderId(createdOrderId);
+      try { sessionStorage.removeItem("checkoutPromoCode"); } catch { /* ignore */ }
+
+      const serverShipping = Number(order?.shippingCost ?? order?.shippingFee ?? estimatedShipping);
+      const confirmed = {
+        subtotal: Number(order?.subtotal ?? subtotal),
+        discount: Number(order?.discount ?? 0),
+        shippingFee: serverShipping,
+        total: Number(order?.total ?? estimatedTotal),
+      };
+      setServerTotals(confirmed);
+      // Charge exactly what the server says the order costs.
+      const amountToCharge = confirmed.total;
 
       // Step 2: For gateway-enabled payment methods, initiate the payment
       if (isGatewayPayment && createdOrderId) {
@@ -217,7 +309,7 @@ export default function CheckoutPage() {
         try {
           const paymentResult = await paymentsApi.initiate({
             orderId: createdOrderId,
-            amount: total,
+            amount: amountToCharge,
             method: selectedPayment.gatewayMethod!,
             phoneNumber: paymentMethod === "mobile" ? mobilePhone : undefined,
             buyerEmail: undefined,
@@ -262,8 +354,13 @@ export default function CheckoutPage() {
         // COD or Bank Transfer — no gateway needed, go straight to confirmation
         router.push(`/orders/${createdOrderId}?success=true`);
       }
-    } catch {
-      toast.error(t("checkout.failedToPlaceOrder"));
+    } catch (err: any) {
+      // Order-create 400s carry a readable message (empty cart, unavailable
+      // item, insufficient stock, invalid promo, COD cap) — show it.
+      const msg = err instanceof ApiError
+        ? (Array.isArray((err.data as any)?.message) ? (err.data as any).message.join(", ") : err.message)
+        : "";
+      toast.error(msg && !/^Request failed with status/.test(msg) ? msg : t("checkout.failedToPlaceOrder"));
       setPaymentFlowStatus("idle");
     } finally {
       setPlacing(false);
@@ -370,7 +467,7 @@ export default function CheckoutPage() {
                     <p className="text-muted-foreground mb-4">{paymentMessage}</p>
                     <div className="bg-muted rounded-lg p-4 mb-6">
                       <p className="text-sm text-foreground font-medium mb-1">{t("checkout.paymentDetails")}</p>
-                      <p className="text-sm text-muted-foreground">{t("checkout.amount")}: <span className="font-bold text-gold-500">{formatPrice(total)}</span></p>
+                      <p className="text-sm text-muted-foreground">{t("checkout.amount")}: <span className="font-bold text-gold-text">{formatPrice(total)}</span></p>
                       <p className="text-sm text-muted-foreground">{t("checkout.phone")}: <span className="font-medium">{mobilePhone}</span></p>
                     </div>
                   </>
@@ -386,7 +483,7 @@ export default function CheckoutPage() {
                         href={gatewayUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 text-gold-500 hover:text-gold-600 text-sm font-medium underline mb-4"
+                        className="inline-flex items-center gap-2 text-gold-text hover:opacity-80 text-sm font-medium underline mb-4"
                       >
                         {t("checkout.openPaymentPage")}
                         <ChevronRight className="h-3 w-3" />
@@ -790,21 +887,72 @@ export default function CheckoutPage() {
                     </div>
                   ))}
                 </div>
+                {/* Promo code */}
+                <div className="border-t border-border pt-4 mb-4">
+                  <label htmlFor="checkout-promo" className="block text-xs font-medium text-foreground mb-1.5">
+                    {t("checkout.promoCode")}
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      id="checkout-promo"
+                      type="text"
+                      value={promoCode}
+                      onChange={(e) => {
+                        setPromoCode(e.target.value);
+                        if (promoApplied) { setPromoApplied(false); setPromoDiscount(0); }
+                        setPromoError("");
+                      }}
+                      disabled={applyingPromo || placing}
+                      className="flex-1 min-w-0 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500"
+                    />
+                    {promoApplied ? (
+                      <Button type="button" variant="outline" size="sm" onClick={removePromo} disabled={placing}>
+                        {t("checkout.removePromo")}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => validatePromo(promoCode, subtotal)}
+                        disabled={applyingPromo || !promoCode.trim() || placing}
+                      >
+                        {applyingPromo ? <Loader2 className="h-4 w-4 animate-spin" /> : t("common.apply")}
+                      </Button>
+                    )}
+                  </div>
+                  {promoApplied && (
+                    <p className="text-xs text-green-700 mt-1.5">
+                      {promoCode.toUpperCase()} {t("cart.promoApplied")} {formatPrice(discount)}
+                    </p>
+                  )}
+                  {promoError && <p className="text-xs text-red-600 mt-1.5" role="alert">{promoError}</p>}
+                </div>
+
                 <div className="border-t border-border pt-4 space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">{t("cart.subtotal")}</span>
-                    <span className="font-medium text-foreground">{formatPrice(subtotal)}</span>
+                    <span className="font-medium text-foreground">{formatPrice(serverTotals?.subtotal ?? subtotal)}</span>
                   </div>
+                  {(serverTotals ? serverTotals.discount : discount) > 0 && (
+                    <div className="flex justify-between text-green-700">
+                      <span>{t("checkout.discount")}</span>
+                      <span className="font-medium">-{formatPrice(serverTotals ? serverTotals.discount : discount)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">{t("checkout.shipping")}</span>
                     <span className="font-medium text-foreground">
-                      {shippingCost === 0 ? <span className="text-green-600">{t("common.free")}</span> : formatPrice(shippingCost)}
+                      {shippingCost === 0 ? <span className="text-green-700">{t("common.free")}</span> : formatPrice(shippingCost)}
                     </span>
                   </div>
                   <div className="border-t border-border pt-2 flex justify-between">
                     <span className="text-base font-bold text-foreground">{t("cart.total")}</span>
-                    <span className="text-base font-bold text-gold-500">{formatPrice(total)}</span>
+                    <span className="text-base font-bold text-gold-text">{formatPrice(total)}</span>
                   </div>
+                  {!serverTotals && (
+                    <p className="text-xs text-muted-foreground pt-1">{t("checkout.estimateNote")}</p>
+                  )}
                 </div>
               </div>
             </div>

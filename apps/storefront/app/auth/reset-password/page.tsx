@@ -8,6 +8,7 @@ import { Lock, Eye, EyeOff, CheckCircle, AlertCircle, AlertTriangle, ArrowLeft }
 import Button from "@/components/ui/Button";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { useTranslation } from "@/lib/i18n";
+import { isValidPassword, PASSWORD_MAX } from "@/lib/password";
 import { authApi } from "@/lib/api";
 
 function ResetPasswordForm() {
@@ -26,7 +27,7 @@ function ResetPasswordForm() {
     e.preventDefault();
     setError("");
 
-    if (newPassword.length < 8) {
+    if (!isValidPassword(newPassword)) {
       setError(t("passwordTooShort"));
       return;
     }
@@ -181,7 +182,7 @@ function ResetPasswordForm() {
       </form>
 
       <div className="mt-6 text-center">
-        <Link href="/auth/login" className="inline-flex items-center gap-1.5 text-sm text-gold-500 hover:text-gold-600 font-medium">
+        <Link href="/auth/login" className="inline-flex items-center gap-1.5 text-sm text-gold-text hover:underline font-medium">
           <ArrowLeft className="h-4 w-4" />
           {t("backToLogin")}
         </Link>

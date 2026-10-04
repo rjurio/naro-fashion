@@ -13,8 +13,10 @@ import {
   XCircle,
   Send,
 } from 'lucide-react';
-import { eventsApi } from '@/lib/api';
+import { eventsApi, tokenStore } from '@/lib/api';
 import { useToast } from '@/contexts/ToastContext';
+import { useTranslation } from '@/lib/i18n';
+import { safeHttpsUrl } from '@/lib/sanitize';
 
 interface ExistingEvent {
   id: string;
@@ -26,6 +28,7 @@ interface ExistingEvent {
 export default function SubmitEventPage() {
   const router = useRouter();
   const toast = useToast();
+  const { t: tr } = useTranslation('events');
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [existingEvent, setExistingEvent] = useState<ExistingEvent | null>(null);
@@ -45,9 +48,9 @@ export default function SubmitEventPage() {
   const [newUrl, setNewUrl] = useState('');
 
   useEffect(() => {
-    const t = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    const t = typeof window !== 'undefined' ? tokenStore.getAccess() : null;
     if (!t) {
-      router.push('/auth/login');
+      router.push('/auth/login?redirect=/events/submit');
       return;
     }
     setToken(t);
@@ -66,6 +69,10 @@ export default function SubmitEventPage() {
 
   function addUrl() {
     const url = newUrl.trim();
+    if (url && !safeHttpsUrl(url)) {
+      toast.error(tr('httpsOnly'));
+      return;
+    }
     if (url && !imageUrls.includes(url)) {
       setImageUrls((prev) => [...prev, url]);
       setNewUrl('');
@@ -79,6 +86,14 @@ export default function SubmitEventPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!token || submitting) return;
+    // Social links are rendered as outbound links on the public gallery —
+    // only accept https: URLs.
+    for (const v of [instagram, facebook, tiktok]) {
+      if (v.trim() && !safeHttpsUrl(v)) {
+        toast.error(tr('httpsOnly'));
+        return;
+      }
+    }
     setSubmitting(true);
 
     try {
@@ -109,7 +124,7 @@ export default function SubmitEventPage() {
 
       setSuccess(true);
     } catch {
-      toast.error('Failed to submit. Please try again.');
+      toast.error(tr('submitFailed'));
     } finally {
       setSubmitting(false);
     }
@@ -129,17 +144,17 @@ export default function SubmitEventPage() {
       PENDING_APPROVAL: {
         icon: <Clock className="h-8 w-8 text-yellow-500" />,
         color: 'border-yellow-500/30 bg-yellow-500/5',
-        label: 'Pending Review',
+        label: tr('pendingReview'),
       },
       APPROVED: {
         icon: <CheckCircle className="h-8 w-8 text-green-500" />,
         color: 'border-green-500/30 bg-green-500/5',
-        label: 'Approved',
+        label: tr('approved'),
       },
       REJECTED: {
         icon: <XCircle className="h-8 w-8 text-red-500" />,
         color: 'border-red-500/30 bg-red-500/5',
-        label: 'Rejected',
+        label: tr('rejected'),
       },
     };
 
@@ -153,18 +168,18 @@ export default function SubmitEventPage() {
             className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-gold-500 transition-colors mb-8"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to Galleries
+            {tr('backToGalleries')}
           </Link>
 
-          <h1 className="text-3xl font-heading font-bold mb-8">Your Submission</h1>
+          <h1 className="text-3xl font-heading font-bold mb-8">{tr('yourSubmission')}</h1>
 
           <div className={`rounded-xl border ${config.color} p-6 sm:p-8 text-center`}>
             {config.icon}
             <h2 className="text-xl font-heading font-semibold mt-4 mb-1">{existingEvent.title}</h2>
-            <p className="text-sm font-medium text-muted-foreground mb-4">Status: {config.label}</p>
+            <p className="text-sm font-medium text-muted-foreground mb-4">{tr('statusLabel')} {config.label}</p>
             {existingEvent.status === 'REJECTED' && existingEvent.rejectionReason && (
               <div className="mt-4 p-4 rounded-lg bg-red-500/10 text-sm text-red-600 dark:text-red-400">
-                <strong>Reason:</strong> {existingEvent.rejectionReason}
+                <strong>{tr('reasonLabel')}</strong> {existingEvent.rejectionReason}
               </div>
             )}
           </div>
@@ -179,16 +194,15 @@ export default function SubmitEventPage() {
       <div className="min-h-screen flex items-center justify-center">
         <div className="max-w-md mx-auto px-4 text-center">
           <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
-          <h1 className="text-2xl font-heading font-bold mb-3">Gallery Submitted!</h1>
+          <h1 className="text-2xl font-heading font-bold mb-3">{tr('gallerySubmitted')}</h1>
           <p className="text-muted-foreground mb-6">
-            Your gallery has been submitted for review. It will be published within 24-48 hours after
-            approval.
+            {tr('gallerySubmittedDesc')}
           </p>
           <Link
             href="/events"
             className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gold-500 text-white font-medium hover:bg-gold-600 transition-colors"
           >
-            View Galleries
+            {tr('viewGalleries')}
           </Link>
         </div>
       </div>
@@ -204,41 +218,41 @@ export default function SubmitEventPage() {
           className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-gold-500 transition-colors mb-8"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to Galleries
+          {tr('backToGalleries')}
         </Link>
 
         <div className="mb-8">
           <Camera className="h-8 w-8 text-gold-500 mb-3" />
           <h1 className="text-3xl sm:text-4xl font-heading font-bold">
-            Share Your <span className="text-gold-500">Wedding Story</span>
+            {tr('shareYour')} <span className="text-gold-500">{tr('weddingStory')}</span>
           </h1>
           <p className="text-muted-foreground mt-2">
-            Fill in the details below and upload your beautiful wedding photos.
+            {tr('formIntro')}
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Title */}
           <div>
-            <label className="block text-sm font-medium mb-1.5">Title *</label>
+            <label className="block text-sm font-medium mb-1.5">{tr('titleLabel')}</label>
             <input
               type="text"
               required
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g., Sarah & John's Garden Wedding"
+              placeholder={tr('titlePlaceholder')}
               className="w-full px-4 py-2.5 rounded-xl border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-gold-500/50 focus:border-gold-500"
             />
           </div>
 
           {/* Description */}
           <div>
-            <label className="block text-sm font-medium mb-1.5">Description</label>
+            <label className="block text-sm font-medium mb-1.5">{tr('descriptionLabel')}</label>
             <textarea
               rows={4}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Tell us about your special day..."
+              placeholder={tr('descriptionPlaceholder')}
               className="w-full px-4 py-2.5 rounded-xl border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-gold-500/50 focus:border-gold-500 resize-none"
             />
           </div>
@@ -246,7 +260,7 @@ export default function SubmitEventPage() {
           {/* Date + Location row */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1.5">Event Date *</label>
+              <label className="block text-sm font-medium mb-1.5">{tr('eventDateLabel')}</label>
               <input
                 type="date"
                 required
@@ -256,12 +270,12 @@ export default function SubmitEventPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1.5">Location</label>
+              <label className="block text-sm font-medium mb-1.5">{tr('locationLabel')}</label>
               <input
                 type="text"
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
-                placeholder="e.g., Dar es Salaam"
+                placeholder={tr('locationPlaceholder')}
                 className="w-full px-4 py-2.5 rounded-xl border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-gold-500/50 focus:border-gold-500"
               />
             </div>
@@ -269,27 +283,27 @@ export default function SubmitEventPage() {
 
           {/* Social links */}
           <div>
-            <label className="block text-sm font-medium mb-1.5">Social Links</label>
+            <label className="block text-sm font-medium mb-1.5">{tr('socialLinks')}</label>
             <div className="space-y-3">
               <input
                 type="url"
                 value={instagram}
                 onChange={(e) => setInstagram(e.target.value)}
-                placeholder="Instagram URL"
+                placeholder={tr('instagramUrl')}
                 className="w-full px-4 py-2.5 rounded-xl border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-gold-500/50 focus:border-gold-500"
               />
               <input
                 type="url"
                 value={facebook}
                 onChange={(e) => setFacebook(e.target.value)}
-                placeholder="Facebook URL"
+                placeholder={tr('facebookUrl')}
                 className="w-full px-4 py-2.5 rounded-xl border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-gold-500/50 focus:border-gold-500"
               />
               <input
                 type="url"
                 value={tiktok}
                 onChange={(e) => setTiktok(e.target.value)}
-                placeholder="TikTok URL"
+                placeholder={tr('tiktokUrl')}
                 className="w-full px-4 py-2.5 rounded-xl border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-gold-500/50 focus:border-gold-500"
               />
             </div>
@@ -297,22 +311,22 @@ export default function SubmitEventPage() {
 
           {/* Product */}
           <div>
-            <label className="block text-sm font-medium mb-1.5">Product Name or ID</label>
+            <label className="block text-sm font-medium mb-1.5">{tr('productLabel')}</label>
             <input
               type="text"
               value={productId}
               onChange={(e) => setProductId(e.target.value)}
-              placeholder="Enter the name or ID of the gown you wore"
+              placeholder={tr('productPlaceholder')}
               className="w-full px-4 py-2.5 rounded-xl border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-gold-500/50 focus:border-gold-500"
             />
             <p className="text-xs text-muted-foreground mt-1">
-              If you purchased or rented from us, enter the product name or order ID.
+              {tr('productHint')}
             </p>
           </div>
 
           {/* Image URLs */}
           <div>
-            <label className="block text-sm font-medium mb-1.5">Photo URLs</label>
+            <label className="block text-sm font-medium mb-1.5">{tr('photoUrls')}</label>
             <div className="space-y-2 mb-3">
               {imageUrls.map((url, i) => (
                 <div
@@ -323,6 +337,7 @@ export default function SubmitEventPage() {
                   <button
                     type="button"
                     onClick={() => removeUrl(i)}
+                    aria-label={tr('removeUrl')}
                     className="text-red-500 hover:text-red-600 shrink-0"
                   >
                     <X className="h-4 w-4" />
@@ -335,7 +350,7 @@ export default function SubmitEventPage() {
                 type="url"
                 value={newUrl}
                 onChange={(e) => setNewUrl(e.target.value)}
-                placeholder="Paste image URL..."
+                placeholder={tr('photoUrlPlaceholder')}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
@@ -347,13 +362,14 @@ export default function SubmitEventPage() {
               <button
                 type="button"
                 onClick={addUrl}
+                aria-label={tr('addUrl')}
                 className="px-4 py-2.5 rounded-xl border border-border hover:bg-muted transition-colors"
               >
                 <Plus className="h-5 w-5" />
               </button>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Add URLs for your wedding photos. Supported: images and video files.
+              {tr('photoUrlsHint')}
             </p>
           </div>
 
@@ -366,12 +382,12 @@ export default function SubmitEventPage() {
             {submitting ? (
               <>
                 <div className="h-5 w-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Submitting...
+                {tr('submitting')}
               </>
             ) : (
               <>
                 <Send className="h-5 w-5" />
-                Submit Gallery
+                {tr('submitGallery')}
               </>
             )}
           </button>

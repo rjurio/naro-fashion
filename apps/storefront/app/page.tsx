@@ -22,7 +22,7 @@ import Button from "@/components/ui/Button";
 import { formatCountdown } from "@/lib/utils";
 import InstagramFeed from "@/components/social/InstagramFeed";
 import { useTranslation } from "@/lib/i18n";
-import { categoriesApi, productsApi, flashSalesApi, cmsApi } from "@/lib/api";
+import { categoriesApi, productsApi, flashSalesApi, cmsApi, eventsApi } from "@/lib/api";
 import { ParallaxSection } from "@/components/effects/ParallaxSection";
 import { RevealOnScroll } from "@/components/effects/RevealOnScroll";
 
@@ -252,8 +252,8 @@ export default function HomePage() {
 
   // Fetch real weddings events
   useEffect(() => {
-    fetch(`${API_BASE_URL}/events?page=1&limit=4`)
-      .then((res) => res.json())
+    // Via the API client so X-Tenant-Id is injected.
+    eventsApi.getAll({ page: 1, limit: 4 })
       .then((data) => setRealWeddings(data?.data || []))
       .catch(() => setRealWeddings([]))
       .finally(() => setLoadingWeddings(false));

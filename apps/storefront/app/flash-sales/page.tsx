@@ -219,7 +219,7 @@ export default function FlashSalesPage() {
                       <span className="text-xs text-muted-foreground">{product.rating} ({product.reviewCount})</span>
                     </div>
                     <div className="flex items-center gap-2 mt-2">
-                      <span className="text-base font-bold text-gold-500">{formatPrice(product.salePrice)}</span>
+                      <span className="text-base font-bold text-gold-text">{formatPrice(product.salePrice)}</span>
                       {product.originalPrice > product.salePrice && (
                         <span className="text-xs text-muted-foreground line-through">{formatPrice(product.originalPrice)}</span>
                       )}

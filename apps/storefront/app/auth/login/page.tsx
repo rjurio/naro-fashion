@@ -9,6 +9,7 @@ import Button from "@/components/ui/Button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { useTranslation } from "@/lib/i18n";
+import { safeRedirectPath } from "@/lib/safe-redirect";
 
 export default function LoginPage() {
   const { t } = useTranslation("auth");
@@ -16,18 +17,15 @@ export default function LoginPage() {
   const { login, isAuthenticated, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Only accept same-origin relative paths. An absolute (https://evil.com) or
-  // protocol-relative (//evil.com) value would let ?redirect= bounce the user
-  // off-site after login — a phishing vector on a legitimate domain.
-  const rawRedirect = searchParams.get("redirect") || "/account";
-  const redirect =
-    rawRedirect.startsWith("/") && !rawRedirect.startsWith("//")
-      ? rawRedirect
-      : "/account";
+  // Only accept same-origin path-absolute targets (see lib/safe-redirect.ts).
+  // Absolute, protocol-relative (//evil.com) and backslash (/\evil.com)
+  // values would otherwise bounce the user off-site after login.
+  const redirect = safeRedirectPath(searchParams.get("redirect"), "/account");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -43,7 +41,7 @@ export default function LoginPage() {
     setError("");
     setIsLoading(true);
     try {
-      await login(email, password);
+      await login(email, password, rememberMe);
       router.push(redirect);
     } catch (err: any) {
       const message =
@@ -105,7 +103,7 @@ export default function LoginPage() {
             </h1>
             <p className="mt-2 text-muted-foreground">
               {t("noAccount")}{" "}
-              <Link href="/auth/register" className="text-gold-500 hover:text-gold-600 font-medium">
+              <Link href="/auth/register" className="text-gold-text hover:underline font-medium">
                 {t("createOne")}
               </Link>
             </p>
@@ -146,7 +144,7 @@ export default function LoginPage() {
                 <label htmlFor="password" className="block text-sm font-medium text-foreground">
                   {t("password")}
                 </label>
-                <Link href="/auth/forgot-password" className="text-xs text-gold-500 hover:text-gold-600 font-medium">
+                <Link href="/auth/forgot-password" className="text-xs text-gold-text hover:underline font-medium">
                   {t("forgotPassword")}
                 </Link>
               </div>
@@ -177,6 +175,8 @@ export default function LoginPage() {
               <input
                 id="remember"
                 type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
                 className="h-4 w-4 rounded border-border text-gold-500 focus:ring-gold-500"
               />
               <label htmlFor="remember" className="text-sm text-muted-foreground">

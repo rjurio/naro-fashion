@@ -22,7 +22,7 @@ import MobileMenu from "./MobileMenu";
 import { useTranslation } from "@/lib/i18n";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
-import { cartApi, categoriesApi, productsApi, flashSalesApi, eventsApi } from "@/lib/api";
+import { cartApi, categoriesApi, productsApi, flashSalesApi, eventsApi, tokenStore } from "@/lib/api";
 
 export default function Header() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -51,7 +51,7 @@ export default function Header() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const refresh = () => {
-      const token = localStorage.getItem("token");
+      const token = tokenStore.getAccess();
       if (!token) {
         setCartCount(0);
         return;

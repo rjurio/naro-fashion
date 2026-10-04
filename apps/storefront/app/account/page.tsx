@@ -15,7 +15,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
-import { authApi, ordersApi, rentalsApi, wishlistApi } from "@/lib/api";
+import { authApi, ordersApi, rentalsApi, wishlistApi, tokenStore } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 
 const statusColors: Record<string, string> = {
@@ -46,7 +46,7 @@ export default function AccountPage() {
   ];
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
+    const token = tokenStore.getAccess();
     const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
     async function fetchData() {
@@ -148,7 +148,7 @@ export default function AccountPage() {
             <div className="rounded-xl border border-border bg-card p-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-bold text-foreground">{t("account.recentOrders")}</h2>
-                <Link href="/account/orders" className="text-sm text-gold-500 hover:text-gold-600 font-medium">
+                <Link href="/account/orders" className="text-sm text-gold-text hover:underline font-medium">
                   {t("account.viewAll")}
                 </Link>
               </div>

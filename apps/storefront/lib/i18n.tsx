@@ -4,7 +4,7 @@ import { createContext, useContext, useState, useCallback, useEffect, ReactNode 
 import en from '@/messages/en.json';
 import sw from '@/messages/sw.json';
 
-type Locale = 'en' | 'sw';
+export type Locale = 'en' | 'sw';
 type Messages = typeof en;
 
 const messages: Record<Locale, Messages> = { en, sw };
@@ -17,18 +17,51 @@ interface I18nContextType {
 
 const I18nContext = createContext<I18nContextType | null>(null);
 
-export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>('en');
+export const LOCALE_COOKIE = 'locale';
+
+function persistLocale(locale: Locale) {
+  try {
+    localStorage.setItem('locale', locale);
+  } catch {
+    /* storage unavailable */
+  }
+  // Mirrored to a cookie so the server can render <html lang> correctly.
+  document.cookie = `${LOCALE_COOKIE}=${locale}; path=/; max-age=31536000; samesite=lax`;
+}
+
+export function I18nProvider({
+  children,
+  initialLocale = 'en',
+}: {
+  children: ReactNode;
+  initialLocale?: Locale;
+}) {
+  const [locale, setLocaleState] = useState<Locale>(
+    messages[initialLocale] ? initialLocale : 'en',
+  );
 
   useEffect(() => {
-    const saved = localStorage.getItem('locale') as Locale;
-    if (saved && messages[saved]) setLocaleState(saved);
+    let saved: Locale | null = null;
+    try {
+      saved = localStorage.getItem('locale') as Locale | null;
+    } catch {
+      /* storage unavailable */
+    }
+    if (saved && messages[saved]) {
+      setLocaleState(saved);
+      // Back-fill the cookie for visitors whose choice predates it.
+      persistLocale(saved);
+    }
   }, []);
+
+  // Keep <html lang> in sync with the active locale (screen readers, hyphenation).
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   const setLocale = useCallback((newLocale: Locale) => {
     setLocaleState(newLocale);
-    localStorage.setItem('locale', newLocale);
-    document.documentElement.lang = newLocale;
+    persistLocale(newLocale);
   }, []);
 
   const t = useCallback((key: string): string => {

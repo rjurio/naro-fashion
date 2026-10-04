@@ -2,25 +2,29 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Upload, Shield, CheckCircle, Clock, AlertCircle, Camera, X, Loader2 } from "lucide-react";
-import { getImagePreset, formatAllowedMimesForToast } from "@naro/shared";
+import { ArrowLeft, Upload, Shield, CheckCircle, Clock, AlertCircle, Camera, X, Loader2, FileText } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useTranslation } from "@/lib/i18n";
-import { idVerificationApi, uploadApi } from "@/lib/api";
-
-const ID_PRESET = getImagePreset("idDocument");
+import {
+  idVerificationApi,
+  uploadApi,
+  ApiError,
+  ID_DOCUMENT_MAX_BYTES,
+  ID_DOCUMENT_MIMES,
+} from "@/lib/api";
 
 type VerificationStatus = "unverified" | "pending" | "verified" | "rejected";
+
+/** Local preview of a picked file (object URL for images; PDFs get an icon). */
+type PickedFile = { file: File; previewUrl: string | null };
 
 export default function IDVerificationPage() {
   const { t } = useTranslation("idVerification");
   const { t: tc } = useTranslation("common");
   const [status, setStatus] = useState<VerificationStatus>("unverified");
   const [rejectionReason, setRejectionReason] = useState("");
-  const [frontImage, setFrontImage] = useState<string | null>(null);
-  const [backImage, setBackImage] = useState<string | null>(null);
-  const [frontFile, setFrontFile] = useState<File | null>(null);
-  const [backFile, setBackFile] = useState<File | null>(null);
+  const [front, setFront] = useState<PickedFile | null>(null);
+  const [back, setBack] = useState<PickedFile | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -41,57 +45,107 @@ export default function IDVerificationPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleFileSelect = (side: "front" | "back") => async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Release object URLs when previews change / on unmount.
+  useEffect(() => () => { if (front?.previewUrl) URL.revokeObjectURL(front.previewUrl); }, [front]);
+  useEffect(() => () => { if (back?.previewUrl) URL.revokeObjectURL(back.previewUrl); }, [back]);
+
+  const handleFileSelect = (side: "front" | "back") => (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
 
-    // Validate against the idDocument preset (no crop, no recompress — evidence integrity).
-    if (!ID_PRESET.allowedMimes.includes(file.type)) {
-      setError(`Allowed formats: ${formatAllowedMimesForToast(ID_PRESET)}`);
-      e.target.value = "";
+    // Same limits as the API (jpg/png/webp/pdf, 8MB) — no crop/recompress,
+    // the original is kept as evidence.
+    if (!ID_DOCUMENT_MIMES.includes(file.type)) {
+      setError(t("invalidFileType"));
       return;
     }
-    if (file.size > ID_PRESET.maxFileSizeMB * 1024 * 1024) {
-      setError(`File too large. Max ${ID_PRESET.maxFileSizeMB} MB.`);
-      e.target.value = "";
+    if (file.size > ID_DOCUMENT_MAX_BYTES) {
+      setError(t("fileTooLarge"));
       return;
     }
     setError("");
 
-    const url = URL.createObjectURL(file);
-    if (side === "front") {
-      setFrontImage(url);
-      setFrontFile(file);
-    } else {
-      setBackImage(url);
-      setBackFile(file);
-    }
+    const picked: PickedFile = {
+      file,
+      previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+    };
+    if (side === "front") setFront(picked);
+    else setBack(picked);
   };
 
   const handleSubmit = async () => {
-    if (!frontFile || !backFile) return;
+    if (!front || !back) return;
     setIsUploading(true);
     setError("");
 
     try {
-      // Upload both images
+      // Upload each side to the private id-document store. The API returns
+      // `private://id-documents/...` refs — the only values /id-verification/submit accepts.
       const [frontResult, backResult] = await Promise.all([
-        uploadApi.uploadFile(frontFile, 'id-documents'),
-        uploadApi.uploadFile(backFile, 'id-documents'),
+        uploadApi.uploadIdDocument(front.file, "front"),
+        uploadApi.uploadIdDocument(back.file, "back"),
       ]);
 
-      // Submit verification with uploaded URLs
       await idVerificationApi.submit({
         frontImageUrl: frontResult.url,
         backImageUrl: backResult.url,
       });
 
       setStatus("pending");
-    } catch {
-      setError("Failed to submit verification. Please try again.");
+      setFront(null);
+      setBack(null);
+    } catch (err) {
+      const apiMsg = err instanceof ApiError ? err.message : "";
+      setError(apiMsg && !/failed with status/i.test(apiMsg) ? apiMsg : t("submitFailed"));
     } finally {
       setIsUploading(false);
     }
+  };
+
+  const renderPicker = (side: "front" | "back") => {
+    const picked = side === "front" ? front : back;
+    const clear = () => (side === "front" ? setFront(null) : setBack(null));
+    if (picked) {
+      return (
+        <div className="relative rounded-lg overflow-hidden border border-border">
+          {picked.previewUrl ? (
+            <img
+              src={picked.previewUrl}
+              alt={side === "front" ? t("frontPreviewAlt") : t("backPreviewAlt")}
+              className="w-full h-48 object-cover"
+            />
+          ) : (
+            <div className="w-full h-48 flex flex-col items-center justify-center gap-2 bg-muted">
+              <FileText className="h-10 w-10 text-muted-foreground" />
+              <span className="text-sm font-medium text-foreground">{t("pdfSelected")}</span>
+              <span className="text-xs text-muted-foreground truncate max-w-[90%]">{picked.file.name}</span>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={clear}
+            aria-label={t("removeFile")}
+            className="absolute top-2 right-2 p-1 rounded-full bg-black/50 text-white hover:bg-black/70"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      );
+    }
+    return (
+      <label className="flex flex-col items-center justify-center h-48 rounded-lg border-2 border-dashed border-border hover:border-gold-500 cursor-pointer transition-colors">
+        <Camera className="h-8 w-8 text-muted-foreground mb-2" />
+        <span className="text-sm text-muted-foreground">{t("clickToUpload")}</span>
+        <span className="text-xs text-muted-foreground mt-1">{t("fileFormats")}</span>
+        <input
+          type="file"
+          accept={ID_DOCUMENT_MIMES.join(",")}
+          onChange={handleFileSelect(side)}
+          className="hidden"
+        />
+      </label>
+    );
   };
 
   const statusConfig = {
@@ -176,54 +230,20 @@ export default function IDVerificationPage() {
 
             {/* Front of ID */}
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">{t("frontSide")}</label>
-              {frontImage ? (
-                <div className="relative rounded-lg overflow-hidden border border-border">
-                  <img src={frontImage} alt="ID Front" className="w-full h-48 object-cover" />
-                  <button
-                    onClick={() => { setFrontImage(null); setFrontFile(null); }}
-                    className="absolute top-2 right-2 p-1 rounded-full bg-black/50 text-white hover:bg-black/70"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ) : (
-                <label className="flex flex-col items-center justify-center h-48 rounded-lg border-2 border-dashed border-border hover:border-gold-500 cursor-pointer transition-colors">
-                  <Camera className="h-8 w-8 text-muted-foreground mb-2" />
-                  <span className="text-sm text-muted-foreground">{t("clickToUpload")}</span>
-                  <span className="text-xs text-muted-foreground mt-1">{t("fileFormats")}</span>
-                  <input type="file" accept="image/*" onChange={handleFileSelect("front")} className="hidden" />
-                </label>
-              )}
+              <p className="block text-sm font-medium text-foreground mb-2">{t("frontSide")}</p>
+              {renderPicker("front")}
             </div>
 
             {/* Back of ID */}
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">{t("backSide")}</label>
-              {backImage ? (
-                <div className="relative rounded-lg overflow-hidden border border-border">
-                  <img src={backImage} alt="ID Back" className="w-full h-48 object-cover" />
-                  <button
-                    onClick={() => { setBackImage(null); setBackFile(null); }}
-                    className="absolute top-2 right-2 p-1 rounded-full bg-black/50 text-white hover:bg-black/70"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ) : (
-                <label className="flex flex-col items-center justify-center h-48 rounded-lg border-2 border-dashed border-border hover:border-gold-500 cursor-pointer transition-colors">
-                  <Camera className="h-8 w-8 text-muted-foreground mb-2" />
-                  <span className="text-sm text-muted-foreground">{t("clickToUpload")}</span>
-                  <span className="text-xs text-muted-foreground mt-1">{t("fileFormats")}</span>
-                  <input type="file" accept="image/*" onChange={handleFileSelect("back")} className="hidden" />
-                </label>
-              )}
+              <p className="block text-sm font-medium text-foreground mb-2">{t("backSide")}</p>
+              {renderPicker("back")}
             </div>
 
             <Button
               onClick={handleSubmit}
               loading={isUploading}
-              disabled={!frontFile || !backFile}
+              disabled={!front || !back || isUploading}
               className="w-full gap-2"
               size="lg"
             >

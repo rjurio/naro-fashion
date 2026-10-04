@@ -15,7 +15,7 @@ import {
 import Button from "@/components/ui/Button";
 import { useTranslation } from "@/lib/i18n";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
-import { newsletterApi, categoriesApi } from "@/lib/api";
+import api, { newsletterApi, categoriesApi } from "@/lib/api";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -35,8 +35,8 @@ export default function Footer() {
 
   useEffect(() => {
     // Load payment methods from API
-    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1'}/payment-methods`)
-      .then((r) => r.json())
+    // Through the API client so X-Tenant-Id is injected (tenant-scoped list).
+    api.get<any[]>('/payment-methods')
       .then((data) => { if (Array.isArray(data)) setPaymentMethods(data); })
       .catch(() => {});
 
@@ -64,14 +64,11 @@ export default function Footer() {
       'about': t('footer.aboutNaroFashion'),
       'terms': t('footer.termsOfService'),
       'privacy': t('footer.privacyPolicy'),
+      'privacy-policy': t('footer.privacyPolicy'),
     };
 
     // The pages endpoint is public and returns all non-deleted pages
-    const tenantId = document.cookie.match(/(?:^|;\s*)tenantId=([^;]*)/)?.[1] || '';
-    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1'}/cms/pages`, {
-      headers: tenantId ? { 'X-Tenant-Id': tenantId } : {},
-    })
-      .then((r) => r.json())
+    api.get<any[]>('/cms/pages')
       .then((pages: any[]) => {
         if (!Array.isArray(pages)) return;
         const slugSet = new Set(pages.filter((p) => p.isPublished).map((p) => p.slug));
@@ -98,7 +95,7 @@ export default function Footer() {
         setCompanyLinks([
           { name: t('footer.aboutNaroFashion'), href: '/pages/about' },
           { name: t('footer.termsOfService'), href: '/pages/terms' },
-          { name: t('footer.privacyPolicy'), href: '/pages/privacy' },
+          { name: t('footer.privacyPolicy'), href: '/pages/privacy-policy' },
         ]);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -314,6 +311,10 @@ export default function Footer() {
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <p className="text-xs text-dark-300">
               © {new Date().getFullYear()} {settings.businessName}. {t('footer.allRightsReserved')}
+              {' · '}
+              <Link href="/pages/privacy-policy" className="underline-offset-2 hover:text-gold-500 hover:underline">
+                {t('footer.privacyPolicy')}
+              </Link>
             </p>
 
             {/* Payment Methods */}

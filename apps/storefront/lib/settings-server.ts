@@ -1,25 +1,18 @@
-import { cookies } from 'next/headers';
+import { serverTenantHeaders } from './tenant-server';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
 
 /**
- * Build an `X-Tenant-Id` header from the `tenantId` cookie set by
- * `apps/storefront/middleware.ts` during tenant resolution.
+ * Build an `X-Tenant-Id` header for SSR fetches. Reads the `x-tenant-id`
+ * request header that middleware.ts forwards on EVERY request first (so the
+ * first visit / crawlers get the right tenant), then the `tenantId` cookie.
  *
- * Required for SSR fetches: server components don't auto-forward cookies the
- * way the browser does, so without this the API returns the default tenant's
- * data (or errors) for every domain — manifest.json + first-paint metadata
- * end up identical for every tenant.
+ * Without this the API returns the default tenant's data (or errors) for every
+ * domain — manifest.json + first-paint metadata end up identical for every
+ * tenant.
  */
 async function tenantHeader(): Promise<Record<string, string>> {
-  try {
-    const c = await cookies(); // Next 15: cookies() is async
-    const id = c.get('tenantId')?.value;
-    return id ? { 'X-Tenant-Id': id } : {};
-  } catch {
-    // cookies() is unavailable outside a request context (e.g. during build).
-    return {};
-  }
+  return serverTenantHeaders();
 }
 
 export interface BusinessProfile {

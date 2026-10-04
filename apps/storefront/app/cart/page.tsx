@@ -104,18 +104,33 @@ export default function CartPage() {
     (sum, item) => sum + item.price * item.quantity,
     0
   );
-  const deliveryFee = subtotal >= 100000 ? 0 : 5000;
+  // Delivery is chosen at checkout and priced by the server (standard 5,000 /
+  // express 15,000 / pickup free by default, tenant-overridable) — there is no
+  // "free over X" rule, so the cart only shows the lowest paid option as a hint
+  // and the total EXCLUDES delivery.
+  const MIN_PAID_DELIVERY = 5000;
   const discount = promoApplied ? promoDiscount : 0;
-  const total = subtotal + deliveryFee - discount;
+  const total = Math.max(0, subtotal - discount);
 
   const applyPromo = async () => {
-    if (!promoCode.trim()) return;
+    const code = promoCode.trim();
+    if (!code) return;
     setApplyingPromo(true);
     setPromoError("");
     try {
-      const result = await promoCodesApi.validate(promoCode, subtotal);
-      setPromoDiscount(result.discountAmount);
+      // Always HTTP 200 — check `valid`.
+      const result = await promoCodesApi.validate(code, subtotal);
+      if (!result?.valid) {
+        setPromoError(result?.message || t("cart.invalidPromoCode"));
+        setPromoApplied(false);
+        setPromoDiscount(0);
+        try { sessionStorage.removeItem("checkoutPromoCode"); } catch { /* ignore */ }
+        return;
+      }
+      setPromoDiscount(Number(result.discount ?? result.discountAmount ?? 0));
       setPromoApplied(true);
+      // Carry the code to checkout; the server re-validates it on order create.
+      try { sessionStorage.setItem("checkoutPromoCode", code); } catch { /* ignore */ }
     } catch (err: any) {
       setPromoError(err?.data?.message || err?.message || t("cart.invalidPromoCode"));
       setPromoApplied(false);
@@ -287,8 +302,20 @@ export default function CartPage() {
                   </Button>
                 </div>
                 {promoApplied && (
-                  <p className="text-xs text-green-600 mt-1.5">
-                    {promoCode.toUpperCase()} {t("cart.promoApplied")} {formatPrice(discount)}
+                  <p className="text-xs text-green-700 mt-1.5 flex items-center gap-2">
+                    <span>{promoCode.toUpperCase()} {t("cart.promoApplied")} {formatPrice(discount)}</span>
+                    <button
+                      type="button"
+                      className="underline text-muted-foreground hover:text-foreground"
+                      onClick={() => {
+                        setPromoApplied(false);
+                        setPromoDiscount(0);
+                        setPromoCode("");
+                        try { sessionStorage.removeItem("checkoutPromoCode"); } catch { /* ignore */ }
+                      }}
+                    >
+                      {t("cart.removePromo")}
+                    </button>
                   </p>
                 )}
                 {promoError && (
@@ -306,12 +333,8 @@ export default function CartPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">{t("cart.shipping")}</span>
-                  <span className="font-medium text-foreground">
-                    {deliveryFee === 0 ? (
-                      <span className="text-green-600">{t("common.free")}</span>
-                    ) : (
-                      formatPrice(deliveryFee)
-                    )}
+                  <span className="font-medium text-foreground text-right">
+                    {t("cart.shippingFromEstimate").replace("{amount}", formatPrice(MIN_PAID_DELIVERY))}
                   </span>
                 </div>
                 {discount > 0 && (
@@ -321,7 +344,7 @@ export default function CartPage() {
                   </div>
                 )}
                 <div className="border-t border-border pt-3 flex justify-between">
-                  <span className="text-base font-bold text-foreground">{t("cart.total")}</span>
+                  <span className="text-base font-bold text-foreground">{t("cart.estimatedTotal")}</span>
                   <span className="text-base font-bold text-foreground">
                     {formatPrice(total)}
                   </span>

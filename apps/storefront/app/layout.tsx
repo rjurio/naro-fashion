@@ -3,7 +3,8 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { Inter, Playfair_Display } from "next/font/google";
 import { ThemeProvider } from "next-themes";
-import { I18nProvider } from "@/lib/i18n";
+import { I18nProvider, type Locale } from "@/lib/i18n";
+import { cookies } from "next/headers";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { SiteSettingsProvider } from "@/contexts/SiteSettingsContext";
 import { ToastProvider } from "@/contexts/ToastContext";
@@ -68,14 +69,24 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  // Render <html lang> from the locale cookie (mirrored from localStorage by
+  // I18nProvider) so screen readers / crawlers get the right language on
+  // first paint. I18nProvider keeps it in sync client-side afterwards.
+  let locale: Locale = "en";
+  try {
+    const c = await cookies();
+    if (c.get("locale")?.value === "sw") locale = "sw";
+  } catch {
+    /* outside a request */
+  }
   return (
     <html
-      lang="en"
+      lang={locale}
       suppressHydrationWarning
       className={`${inter.variable} ${playfair.variable}`}
     >
@@ -90,7 +101,7 @@ export default function RootLayout({
           themes={["light", "dark", "standard"]}
           enableSystem={false}
         >
-          <I18nProvider>
+          <I18nProvider initialLocale={locale}>
             <ToastProvider>
             <SiteSettingsProvider>
             <ParallaxProvider>

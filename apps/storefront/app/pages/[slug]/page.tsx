@@ -8,7 +8,8 @@ import Button from "@/components/ui/Button";
 import { useTranslation } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
-import { cmsApi } from "@/lib/api";
+import api, { cmsApi } from "@/lib/api";
+import { sanitizeHtml } from "@/lib/sanitize";
 
 // Fallback config for pages that haven't been created via CMS yet
 const fallbackPages: Record<string, { titleKey: string; sections: { headingKey: string; contentKey: string }[] }> = {
@@ -77,6 +78,10 @@ const fallbackPages: Record<string, { titleKey: string; sections: { headingKey: 
     ],
   },
 };
+
+// Footer links /pages/privacy-policy — show the built-in privacy copy until the
+// tenant publishes a CMS page with that slug.
+fallbackPages["privacy-policy"] = fallbackPages.privacy;
 
 interface CmsPage {
   id: string;
@@ -174,8 +179,9 @@ export default function CMSPage() {
                 prose-ol:list-decimal prose-ol:pl-5 prose-ol:mb-4
                 prose-li:mb-1
                 prose-strong:text-foreground
-                prose-a:text-gold-500 prose-a:no-underline hover:prose-a:underline"
-              dangerouslySetInnerHTML={{ __html: content }}
+                prose-a:text-gold-text prose-a:no-underline hover:prose-a:underline"
+              // Defense in depth: API sanitizes on write; sanitize again on render.
+              dangerouslySetInnerHTML={{ __html: sanitizeHtml(content) }}
             />
           </div>
         </div>
@@ -243,6 +249,7 @@ function isValidCoordinate(lat: string, lng: string): boolean {
 
 function ContactPage() {
   const { settings } = useSiteSettings();
+  const { t } = useTranslation('contact');
   const [form, setForm] = useState({ name: '', email: '', phone: '', subject: '', message: '' });
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -255,20 +262,15 @@ function ContactPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name.trim() || !form.email.trim() || !form.message.trim()) {
-      setError('Please fill in your name, email, and message.');
+      setError(t('fillRequired'));
       return;
     }
     setSending(true);
     setError('');
     try {
-      // Send to API — contact form endpoint
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
-      const res = await fetch(`${API_URL}/cms/contact`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
-      if (!res.ok) throw new Error('Failed');
+      // Via the API client so X-Tenant-Id is injected (the message must reach
+      // THIS tenant's inbox, not the default one).
+      await api.post('/cms/contact', form);
       setSent(true);
       setForm({ name: '', email: '', phone: '', subject: '', message: '' });
     } catch {
@@ -279,7 +281,7 @@ function ContactPage() {
         setSent(true);
         setForm({ name: '', email: '', phone: '', subject: '', message: '' });
       } else {
-        setError('Unable to send message right now. Please try WhatsApp or email us directly.');
+        setError(t('unableToSend'));
       }
     } finally {
       setSending(false);
@@ -303,10 +305,10 @@ function ContactPage() {
         <div className="absolute top-0 right-0 w-96 h-96 rounded-full bg-gold-500/5 blur-[120px]" />
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-20 text-center">
           <h1 className="text-3xl sm:text-4xl lg:text-5xl font-heading font-bold text-white">
-            Get in <span className="text-gold-500">Touch</span>
+            {t('getIn')} <span className="text-gold-500">{t('touch')}</span>
           </h1>
           <p className="mt-3 text-white/60 max-w-xl mx-auto">
-            We&apos;d love to hear from you. Reach out via the form below, WhatsApp, or visit us.
+            {t('heroSubtitle')}
           </p>
         </div>
       </section>
@@ -322,7 +324,7 @@ function ContactPage() {
                 <MapPin className="h-5 w-5 text-gold-500" />
               </div>
               <div>
-                <h3 className="font-semibold text-foreground text-sm">Visit Us</h3>
+                <h3 className="font-semibold text-foreground text-sm">{t('visitUs')}</h3>
                 <p className="text-sm text-muted-foreground mt-1">{settings.contactAddress}</p>
               </div>
             </div>
@@ -333,7 +335,7 @@ function ContactPage() {
                 <Phone className="h-5 w-5 text-gold-500" />
               </div>
               <div>
-                <h3 className="font-semibold text-foreground text-sm">Call Us</h3>
+                <h3 className="font-semibold text-foreground text-sm">{t('callUs')}</h3>
                 <a href={`tel:${settings.contactPhone}`} className="text-sm text-muted-foreground mt-1 block hover:text-gold-500 transition-colors">{settings.contactPhone}</a>
               </div>
             </div>
@@ -344,7 +346,7 @@ function ContactPage() {
                 <Mail className="h-5 w-5 text-gold-500" />
               </div>
               <div>
-                <h3 className="font-semibold text-foreground text-sm">Email Us</h3>
+                <h3 className="font-semibold text-foreground text-sm">{t('emailUs')}</h3>
                 <a href={`mailto:${settings.contactEmail}`} className="text-sm text-muted-foreground mt-1 block hover:text-gold-500 transition-colors">{settings.contactEmail}</a>
               </div>
             </div>
@@ -355,9 +357,9 @@ function ContactPage() {
                 <Clock className="h-5 w-5 text-gold-500" />
               </div>
               <div>
-                <h3 className="font-semibold text-foreground text-sm">Business Hours</h3>
-                <p className="text-sm text-muted-foreground mt-1">Mon – Sat: 9:00 AM – 6:00 PM</p>
-                <p className="text-sm text-muted-foreground">Sunday: Closed</p>
+                <h3 className="font-semibold text-foreground text-sm">{t('businessHours')}</h3>
+                <p className="text-sm text-muted-foreground mt-1">{t('hoursWeekdays')}</p>
+                <p className="text-sm text-muted-foreground">{t('hoursSunday')}</p>
               </div>
             </div>
 
@@ -369,7 +371,7 @@ function ContactPage() {
                 className="w-full flex items-center justify-center gap-3 px-5 py-4 rounded-2xl bg-[#25D366] text-white font-semibold text-sm hover:bg-[#20BD5A] transition-colors"
               >
                 <WhatsAppIcon className="h-5 w-5" />
-                Chat on WhatsApp
+                {t('chatOnWhatsApp')}
               </button>
             )}
           </div>
@@ -382,40 +384,40 @@ function ContactPage() {
                   <div className="w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center mx-auto mb-4">
                     <CheckCircle2 className="h-8 w-8 text-emerald-600" />
                   </div>
-                  <h2 className="text-xl font-heading font-bold text-foreground mb-2">Message Sent!</h2>
+                  <h2 className="text-xl font-heading font-bold text-foreground mb-2">{t('messageSent')}</h2>
                   <p className="text-muted-foreground text-sm max-w-sm mx-auto">
-                    Thank you for reaching out. We&apos;ll get back to you as soon as possible.
+                    {t('messageSentDesc')}
                   </p>
                   <button
                     type="button"
                     onClick={() => setSent(false)}
                     className="mt-6 text-sm text-gold-500 hover:underline font-medium"
                   >
-                    Send another message
+                    {t('sendAnother')}
                   </button>
                 </div>
               ) : (
                 <>
                   <div className="mb-6">
-                    <h2 className="text-lg font-heading font-bold text-foreground">Send us a Message</h2>
-                    <p className="text-sm text-muted-foreground mt-1">Fill out the form and we&apos;ll respond within 24 hours.</p>
+                    <h2 className="text-lg font-heading font-bold text-foreground">{t('sendUsMessage')}</h2>
+                    <p className="text-sm text-muted-foreground mt-1">{t('formIntro')}</p>
                   </div>
 
                   <form onSubmit={handleSubmit} className="space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-medium text-foreground mb-1.5">Full Name *</label>
+                        <label className="block text-xs font-medium text-foreground mb-1.5">{t('fullName')}</label>
                         <input
                           type="text"
                           required
                           value={form.name}
                           onChange={(e) => setForm({ ...form, name: e.target.value })}
                           className={inputClass}
-                          placeholder="Your name"
+                          placeholder={t('namePlaceholder')}
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-foreground mb-1.5">Email *</label>
+                        <label className="block text-xs font-medium text-foreground mb-1.5">{t('email')}</label>
                         <input
                           type="email"
                           required
@@ -429,7 +431,7 @@ function ContactPage() {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-medium text-foreground mb-1.5">Phone (optional)</label>
+                        <label className="block text-xs font-medium text-foreground mb-1.5">{t('phoneOptional')}</label>
                         <input
                           type="tel"
                           value={form.phone}
@@ -439,33 +441,33 @@ function ContactPage() {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-foreground mb-1.5">Subject</label>
+                        <label className="block text-xs font-medium text-foreground mb-1.5">{t('subject')}</label>
                         <select
-                          title="Subject"
+                          title={t('subject')}
                           value={form.subject}
                           onChange={(e) => setForm({ ...form, subject: e.target.value })}
                           className={inputClass}
                         >
-                          <option value="">General Inquiry</option>
-                          <option value="Order Inquiry">Order Inquiry</option>
-                          <option value="Rental Question">Rental Question</option>
-                          <option value="Returns & Exchange">Returns & Exchange</option>
-                          <option value="Size Help">Size Help</option>
-                          <option value="Partnership">Partnership</option>
-                          <option value="Other">Other</option>
+                          <option value="">{t('subjectGeneral')}</option>
+                          <option value="Order Inquiry">{t('subjectOrder')}</option>
+                          <option value="Rental Question">{t('subjectRental')}</option>
+                          <option value="Returns & Exchange">{t('subjectReturns')}</option>
+                          <option value="Size Help">{t('subjectSize')}</option>
+                          <option value="Partnership">{t('subjectPartnership')}</option>
+                          <option value="Other">{t('subjectOther')}</option>
                         </select>
                       </div>
                     </div>
 
                     <div>
-                      <label className="block text-xs font-medium text-foreground mb-1.5">Message *</label>
+                      <label className="block text-xs font-medium text-foreground mb-1.5">{t('message')}</label>
                       <textarea
                         required
                         rows={5}
                         value={form.message}
                         onChange={(e) => setForm({ ...form, message: e.target.value })}
                         className={`${inputClass} resize-y`}
-                        placeholder="How can we help you?"
+                        placeholder={t('messagePlaceholder')}
                       />
                     </div>
 
@@ -476,7 +478,7 @@ function ContactPage() {
                     <div className="flex flex-col sm:flex-row gap-3 pt-2">
                       <Button type="submit" className="flex-1 gap-2" disabled={sending}>
                         {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                        {sending ? 'Sending...' : 'Send Message'}
+                        {sending ? t('sending') : t('sendMessage')}
                       </Button>
                       {whatsappNumber && (
                         <button
@@ -485,7 +487,7 @@ function ContactPage() {
                           className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl border border-[#25D366] text-[#25D366] font-medium text-sm hover:bg-[#25D366] hover:text-white transition-colors"
                         >
                           <WhatsAppIcon className="h-4 w-4" />
-                          WhatsApp Instead
+                          {t('whatsappInstead')}
                         </button>
                       )}
                     </div>
@@ -499,15 +501,15 @@ function ContactPage() {
         {/* Google Map — only shown when valid coordinates are configured */}
         {hasMap && (
           <div className="mt-12">
-            <h2 className="text-xl font-heading font-bold text-foreground mb-4 text-center">Find Us</h2>
+            <h2 className="text-xl font-heading font-bold text-foreground mb-4 text-center">{t('findUs')}</h2>
             <div className="rounded-2xl overflow-hidden border border-border">
               <iframe
-                title="Business Location"
+                title={t('mapTitle')}
                 width="100%"
                 height="400"
                 loading="lazy"
                 referrerPolicy="no-referrer-when-downgrade"
-                src={`https://www.google.com/maps?q=${settings.mapLatitude},${settings.mapLongitude}&z=15&output=embed`}
+                src={`https://www.google.com/maps?q=${encodeURIComponent(`${Number(settings.mapLatitude)},${Number(settings.mapLongitude)}`)}&z=15&output=embed`}
                 className="w-full border-0"
               />
             </div>

@@ -2,56 +2,119 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
 const TENANT_SLUG_FALLBACK = process.env.NEXT_PUBLIC_TENANT_SLUG || 'naro-fashion';
+const IS_PROD = process.env.NODE_ENV === 'production';
 
-// Simple in-memory cache for tenant resolution
-const tenantCache = new Map<string, { data: any; expiry: number }>();
+/**
+ * Hosts that may fall back to the `NEXT_PUBLIC_TENANT_SLUG` tenant when the
+ * domain lookup finds nothing. In production an unknown Host must NOT be
+ * served the default tenant (that would let any domain pointed at this server
+ * impersonate the store, and lets cache/SEO poisoning attach our content to
+ * arbitrary hosts) — it gets a 404 instead.
+ *
+ * - `localhost` / `127.0.0.1` are always allowed outside production.
+ * - `STOREFRONT_DEFAULT_HOSTS` (comma-separated, e.g.
+ *   `narofashion.co.tz,www.narofashion.co.tz`) whitelists hosts in production.
+ *   The primary tenant normally resolves via `/tenants/resolve?domain=` (its
+ *   apex domain is stored on the Tenant row, and `www.` is stripped before the
+ *   lookup), so this allowlist is a safety net, not the primary path.
+ */
+const DEFAULT_HOSTS = new Set(
+  (process.env.STOREFRONT_DEFAULT_HOSTS || '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean),
+);
+
+function mayUseSlugFallback(hostname: string): boolean {
+  if (DEFAULT_HOSTS.has(hostname)) return true;
+  if (IS_PROD) return false;
+  return hostname === 'localhost' || hostname === '127.0.0.1';
+}
+
+// Bounded LRU + TTL cache for tenant resolution. A Map preserves insertion
+// order, so re-inserting on hit moves the key to the "most recent" end and the
+// first key is always the least recently used.
 const CACHE_TTL = 60_000; // 60 seconds
+const CACHE_MAX = 500;
+const NEGATIVE_CACHE_TTL = 10_000; // 10 seconds
+const tenantCache = new Map<string, { data: any; expiry: number }>();
+
+function cacheGet(key: string): any | undefined {
+  const hit = tenantCache.get(key);
+  if (!hit) return undefined;
+  if (hit.expiry <= Date.now()) {
+    tenantCache.delete(key);
+    return undefined;
+  }
+  tenantCache.delete(key);
+  tenantCache.set(key, hit);
+  return hit.data;
+}
+
+function cacheSet(key: string, data: any, ttl = CACHE_TTL) {
+  if (tenantCache.has(key)) tenantCache.delete(key);
+  tenantCache.set(key, { data, expiry: Date.now() + ttl });
+  while (tenantCache.size > CACHE_MAX) {
+    const oldest = tenantCache.keys().next().value;
+    if (oldest === undefined) break;
+    tenantCache.delete(oldest);
+  }
+}
 
 async function resolveTenant(hostname: string): Promise<any | null> {
-  // Check cache first
-  const cached = tenantCache.get(hostname);
-  if (cached && cached.expiry > Date.now()) {
-    return cached.data;
-  }
+  const cached = cacheGet(hostname);
+  if (cached !== undefined) return cached;
 
   // Strip leading "www." so www.narofashion.co.tz and narofashion.co.tz both
   // resolve to the same tenant row (which is stored under the apex domain).
-  // Without this, the www variant falls through to the slug fallback and
-  // we unnecessarily waste a round-trip on every request.
   const lookupDomain = hostname.replace(/^www\./i, '');
 
   try {
-    // Try domain resolution
-    const res = await fetch(`${API_URL}/tenants/resolve?domain=${lookupDomain}`, {
-      next: { revalidate: 60 },
-    });
-
+    const res = await fetch(
+      `${API_URL}/tenants/resolve?domain=${encodeURIComponent(lookupDomain)}`,
+      { cache: 'no-store' },
+    );
     if (res.ok) {
       const tenant = await res.json();
-      tenantCache.set(hostname, { data: tenant, expiry: Date.now() + CACHE_TTL });
-      return tenant;
+      if (tenant?.id) {
+        cacheSet(hostname, tenant);
+        return tenant;
+      }
     }
   } catch {
-    // Domain lookup failed — try slug fallback for local dev
+    // Domain lookup failed — maybe fall back below
   }
 
-  // Fallback: use TENANT_SLUG env var (local development)
+  if (!mayUseSlugFallback(hostname)) {
+    cacheSet(hostname, null, NEGATIVE_CACHE_TTL);
+    return null;
+  }
+
   try {
-    const res = await fetch(`${API_URL}/tenants/resolve?slug=${TENANT_SLUG_FALLBACK}`);
+    const res = await fetch(
+      `${API_URL}/tenants/resolve?slug=${encodeURIComponent(TENANT_SLUG_FALLBACK)}`,
+      { cache: 'no-store' },
+    );
     if (res.ok) {
       const tenant = await res.json();
-      tenantCache.set(hostname, { data: tenant, expiry: Date.now() + CACHE_TTL });
-      return tenant;
+      if (tenant?.id) {
+        cacheSet(hostname, tenant);
+        return tenant;
+      }
     }
   } catch {
     // Slug lookup also failed
   }
 
+  // Short negative cache so a flood of requests for an unknown Host doesn't
+  // turn into one API round-trip each (kept short so a transient API outage
+  // doesn't pin a real tenant to 404 for long).
+  cacheSet(hostname, null, NEGATIVE_CACHE_TTL);
   return null;
 }
 
 export async function middleware(request: NextRequest) {
-  const hostname = request.headers.get('host')?.split(':')[0] || 'localhost';
+  const hostname = (request.headers.get('host')?.split(':')[0] || 'localhost').toLowerCase();
 
   // Skip for static assets and API routes
   const { pathname } = request.nextUrl;
@@ -61,13 +124,19 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/favicon') ||
     pathname.match(/\.(ico|png|jpg|jpeg|svg|css|js|webp|woff|woff2)$/)
   ) {
+    // Never let a client-supplied x-tenant-id reach server code unverified.
+    if (request.headers.has('x-tenant-id')) {
+      const stripped = new Headers(request.headers);
+      stripped.delete('x-tenant-id');
+      stripped.delete('x-tenant-slug');
+      return NextResponse.next({ request: { headers: stripped } });
+    }
     return NextResponse.next();
   }
 
   const tenant = await resolveTenant(hostname);
 
   if (!tenant) {
-    // No tenant found — show a "store not found" page
     return new NextResponse('Store not found', { status: 404 });
   }
 
@@ -77,17 +146,25 @@ export async function middleware(request: NextRequest) {
     });
   }
 
-  // Pass tenant context to the request via headers
-  const response = NextResponse.next();
-  response.headers.set('X-Tenant-Id', tenant.id);
-  response.headers.set('X-Tenant-Slug', tenant.slug);
-  response.headers.set('X-Tenant-Name', tenant.name);
+  // Forward the tenant to the *request* so server components / route handlers
+  // (settings-server.ts, generateMetadata, sitemap, manifest) can read it via
+  // `headers()` on the very first visit — before the browser has the cookie.
+  // Never trust an inbound x-tenant-id from the client: always overwrite it.
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-tenant-id', tenant.id);
+  requestHeaders.set('x-tenant-slug', String(tenant.slug ?? ''));
 
-  // Also set a cookie so client-side code can read it
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set('X-Tenant-Id', tenant.id);
+  response.headers.set('X-Tenant-Slug', String(tenant.slug ?? ''));
+
+  // Cookie so client-side code (lib/api.ts) can inject X-Tenant-Id.
   response.cookies.set('tenantId', tenant.id, {
     httpOnly: false, // Needs to be readable by client JS
     path: '/',
     maxAge: 60 * 60, // 1 hour
+    sameSite: 'lax',
+    secure: IS_PROD,
   });
 
   return response;

@@ -29,7 +29,7 @@ const sizes = ["XS", "S", "M", "L", "XL", "XXL"];
 const colors = [
   { name: "Black", value: "#000000" },
   { name: "White", value: "#FFFFFF" },
-  { name: "Pink", value: "#D4AF37" },
+  { name: "Pink", value: "#F4A6C0" },
   { name: "Gold", value: "#D4AF37" },
   { name: "Red", value: "#DC2626" },
   { name: "Blue", value: "#2563EB" },
@@ -68,7 +68,7 @@ export default function CategoryPage() {
     setLoading(true);
     Promise.all([
       categoriesApi.getBySlug(slug).catch(() => null),
-      productsApi.getAll({ category: slug }).catch(() => ({ data: [] })),
+      productsApi.getAll({ categorySlug: slug }).catch(() => ({ data: [] })),
     ]).then(([cat, prods]) => {
       setCategory(cat);
       setProducts(Array.isArray(prods?.data) ? prods.data : Array.isArray(prods) ? prods : []);
@@ -209,7 +209,7 @@ export default function CategoryPage() {
             </div>
 
             {activeFilterCount > 0 && (
-              <button onClick={() => { setSelectedSizes([]); setSelectedColors([]); setSelectedPriceRange(null); }} className="text-sm text-gold-500 hover:text-gold-600 font-medium mb-4">
+              <button onClick={() => { setSelectedSizes([]); setSelectedColors([]); setSelectedPriceRange(null); }} className="text-sm text-gold-text hover:underline font-medium mb-4">
                 {t("products.clearAll")} ({activeFilterCount})
               </button>
             )}

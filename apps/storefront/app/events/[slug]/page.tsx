@@ -17,6 +17,9 @@ import {
   Heart,
 } from 'lucide-react';
 import { eventsApi } from '@/lib/api';
+import { useTranslation } from '@/lib/i18n';
+import { safeHttpsUrl } from '@/lib/sanitize';
+import { useDialog } from '@/lib/use-dialog';
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -52,7 +55,7 @@ interface EventDetail {
 
 function TikTokIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
       <path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.79.1v-3.5a6.37 6.37 0 00-.79-.05A6.34 6.34 0 003.15 15.2a6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.34-6.34V8.75a8.18 8.18 0 004.76 1.52V6.82a4.83 4.83 0 01-1-.13z" />
     </svg>
   );
@@ -79,13 +82,24 @@ function Skeleton() {
   );
 }
 
+// Social links are customer-submitted → only https: URLs are rendered, and
+// always with rel="noopener noreferrer nofollow".
+const SOCIAL_LINK_REL = 'noopener noreferrer nofollow';
+const socialBtnClass =
+  'flex items-center justify-center h-10 w-10 rounded-full border border-border hover:border-gold-500 hover:text-gold-500 transition-colors';
+
 export default function EventDetailPage() {
   const params = useParams();
   const slug = params?.slug as string;
+  const { t, locale } = useTranslation('events');
 
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+
+  const closeLightbox = useCallback(() => setLightboxIndex(null), []);
+  // role=dialog + focus trap + Escape-to-close + body scroll lock.
+  const dialogRef = useDialog<HTMLDivElement>(lightboxIndex !== null, closeLightbox);
 
   useEffect(() => {
     if (!slug) return;
@@ -101,12 +115,11 @@ export default function EventDetailPage() {
     })();
   }, [slug]);
 
-  // Lightbox keyboard navigation
+  // Lightbox arrow-key navigation (Escape is handled by useDialog)
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (lightboxIndex === null || !event) return;
       const images = event.media.filter((m) => m.mediaType === 'IMAGE');
-      if (e.key === 'Escape') setLightboxIndex(null);
       if (e.key === 'ArrowRight') setLightboxIndex((prev) => (prev !== null ? (prev + 1) % images.length : null));
       if (e.key === 'ArrowLeft') setLightboxIndex((prev) => (prev !== null ? (prev - 1 + images.length) % images.length : null));
     },
@@ -118,16 +131,6 @@ export default function EventDetailPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
-  // Lock body scroll when lightbox is open
-  useEffect(() => {
-    if (lightboxIndex !== null) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
-    return () => { document.body.style.overflow = ''; };
-  }, [lightboxIndex]);
-
   if (loading) return <Skeleton />;
 
   if (!event) {
@@ -137,9 +140,9 @@ export default function EventDetailPage() {
           <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
             <Camera className="h-8 w-8 text-muted-foreground/50" />
           </div>
-          <h1 className="text-2xl font-heading font-bold mb-2">Event not found</h1>
-          <Link href="/events" className="text-gold-500 hover:underline text-sm">
-            Back to galleries
+          <h1 className="text-2xl font-heading font-bold mb-2">{t('eventNotFound')}</h1>
+          <Link href="/events" className="text-gold-text hover:underline text-sm">
+            {t('backToGalleries')}
           </Link>
         </div>
       </div>
@@ -149,8 +152,15 @@ export default function EventDetailPage() {
   const coverImage = resolveUrl(event.coverImageUrl) || (event.media?.[0] ? resolveUrl(event.media[0].url) : '');
   const imageMedia = (event.media || []).filter((m) => m.mediaType === 'IMAGE');
   const allMedia = event.media || [];
-  const socialLinks = event.socialLinks || {};
+  const rawSocial = event.socialLinks || {};
+  const socialLinks = {
+    instagram: safeHttpsUrl(rawSocial.instagram),
+    facebook: safeHttpsUrl(rawSocial.facebook),
+    tiktok: safeHttpsUrl(rawSocial.tiktok),
+  };
   const hasSocials = socialLinks.instagram || socialLinks.facebook || socialLinks.tiktok;
+  const dateLocale = locale === 'sw' ? 'sw-TZ' : 'en-TZ';
+  const videoCount = allMedia.length - imageMedia.length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -178,7 +188,7 @@ export default function EventDetailPage() {
           className="absolute top-4 left-4 sm:top-6 sm:left-6 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/40 backdrop-blur-sm text-white/80 text-sm hover:bg-black/60 transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          All Galleries
+          {t('allGalleries')}
         </Link>
 
         {/* Title overlay */}
@@ -190,7 +200,7 @@ export default function EventDetailPage() {
             <div className="flex flex-wrap items-center gap-4 text-white/70 text-sm sm:text-base">
               <span className="flex items-center gap-1.5">
                 <Calendar className="h-4 w-4 text-gold-500" />
-                {new Date(event.eventDate).toLocaleDateString('en-US', {
+                {new Date(event.eventDate).toLocaleDateString(dateLocale, {
                   weekday: 'long',
                   month: 'long',
                   day: 'numeric',
@@ -226,10 +236,10 @@ export default function EventDetailPage() {
             )}
             {event.product && (
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gold-500/10 border border-gold-500/20">
-                <span className="text-sm text-foreground/70">Wearing our</span>
+                <span className="text-sm text-foreground/70">{t('wearingOur')}</span>
                 <Link
                   href={`/products/${event.product.slug}`}
-                  className="text-sm font-semibold text-gold-500 hover:underline"
+                  className="text-sm font-semibold text-gold-text hover:underline"
                 >
                   {event.product.name}
                 </Link>
@@ -239,35 +249,17 @@ export default function EventDetailPage() {
           {hasSocials && (
             <div className="flex items-center gap-2">
               {socialLinks.instagram && (
-                <a
-                  href={socialLinks.instagram}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center h-10 w-10 rounded-full border border-border hover:border-gold-500 hover:text-gold-500 transition-colors"
-                  aria-label="Instagram"
-                >
+                <a href={socialLinks.instagram} target="_blank" rel={SOCIAL_LINK_REL} className={socialBtnClass} aria-label="Instagram">
                   <Instagram className="h-4 w-4" />
                 </a>
               )}
               {socialLinks.facebook && (
-                <a
-                  href={socialLinks.facebook}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center h-10 w-10 rounded-full border border-border hover:border-gold-500 hover:text-gold-500 transition-colors"
-                  aria-label="Facebook"
-                >
+                <a href={socialLinks.facebook} target="_blank" rel={SOCIAL_LINK_REL} className={socialBtnClass} aria-label="Facebook">
                   <Facebook className="h-4 w-4" />
                 </a>
               )}
               {socialLinks.tiktok && (
-                <a
-                  href={socialLinks.tiktok}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center h-10 w-10 rounded-full border border-border hover:border-gold-500 hover:text-gold-500 transition-colors"
-                  aria-label="TikTok"
-                >
+                <a href={socialLinks.tiktok} target="_blank" rel={SOCIAL_LINK_REL} className={socialBtnClass} aria-label="TikTok">
                   <TikTokIcon className="h-4 w-4" />
                 </a>
               )}
@@ -280,8 +272,8 @@ export default function EventDetailPage() {
           <div className="flex items-center gap-2 mb-6">
             <Camera className="h-4 w-4 text-gold-500" />
             <span className="text-sm text-muted-foreground">
-              {imageMedia.length} photo{imageMedia.length !== 1 ? 's' : ''}
-              {allMedia.length > imageMedia.length && ` + ${allMedia.length - imageMedia.length} video${allMedia.length - imageMedia.length !== 1 ? 's' : ''}`}
+              {imageMedia.length} {imageMedia.length === 1 ? t('photoSingular') : t('photoPlural')}
+              {videoCount > 0 && ` + ${videoCount} ${videoCount === 1 ? t('videoSingular') : t('videoPlural')}`}
             </span>
           </div>
         )}
@@ -311,16 +303,21 @@ export default function EventDetailPage() {
               const imageIndex = imageMedia.findIndex((m) => m.id === media.id);
 
               return (
-                <div
+                <button
+                  type="button"
                   key={media.id}
-                  className="break-inside-avoid mb-3 sm:mb-4 rounded-xl overflow-hidden cursor-pointer group relative"
+                  className="block w-full text-left break-inside-avoid mb-3 sm:mb-4 rounded-xl overflow-hidden cursor-pointer group relative"
                   onClick={() => setLightboxIndex(imageIndex)}
+                  aria-label={media.altText || media.caption || event.title}
                 >
+                  {/* Masonry: intrinsic dimensions unknown, so a plain lazy <img>
+                      is kept (next/image would need fixed sizes). */}
                   <img
                     src={mediaUrl}
                     alt={media.altText || media.caption || event.title}
                     className="w-full transition-transform duration-500 group-hover:scale-[1.03]"
                     loading="lazy"
+                    decoding="async"
                   />
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors duration-300 rounded-xl" />
                   {media.caption && (
@@ -328,7 +325,7 @@ export default function EventDetailPage() {
                       <p className="text-xs text-white">{media.caption}</p>
                     </div>
                   )}
-                </div>
+                </button>
               );
             })}
           </div>
@@ -337,7 +334,7 @@ export default function EventDetailPage() {
             <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
               <Camera className="h-8 w-8 text-muted-foreground/40" />
             </div>
-            <p className="text-muted-foreground">Photos coming soon for this event.</p>
+            <p className="text-muted-foreground">{t('photosComingSoon')}</p>
           </div>
         )}
       </div>
@@ -345,14 +342,20 @@ export default function EventDetailPage() {
       {/* Lightbox */}
       {lightboxIndex !== null && imageMedia.length > 0 && (
         <div
-          className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
-          onClick={() => setLightboxIndex(null)}
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('imageViewer')}
+          tabIndex={-1}
+          className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center outline-none"
+          onClick={closeLightbox}
         >
           {/* Close */}
           <button
-            onClick={() => setLightboxIndex(null)}
+            type="button"
+            onClick={closeLightbox}
             className="absolute top-4 right-4 z-50 flex items-center justify-center h-10 w-10 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
-            aria-label="Close lightbox"
+            aria-label={t('closeLightbox')}
           >
             <X className="h-5 w-5" />
           </button>
@@ -360,6 +363,7 @@ export default function EventDetailPage() {
           {/* Prev */}
           {imageMedia.length > 1 && (
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 setLightboxIndex((prev) =>
@@ -367,7 +371,7 @@ export default function EventDetailPage() {
                 );
               }}
               className="absolute left-2 sm:left-6 z-50 flex items-center justify-center h-12 w-12 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
-              aria-label="Previous image"
+              aria-label={t('previousImage')}
             >
               <ChevronLeft className="h-6 w-6" />
             </button>
@@ -388,6 +392,7 @@ export default function EventDetailPage() {
           {/* Next */}
           {imageMedia.length > 1 && (
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 setLightboxIndex((prev) =>
@@ -395,7 +400,7 @@ export default function EventDetailPage() {
                 );
               }}
               className="absolute right-2 sm:right-6 z-50 flex items-center justify-center h-12 w-12 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
-              aria-label="Next image"
+              aria-label={t('nextImage')}
             >
               <ChevronRight className="h-6 w-6" />
             </button>
@@ -403,7 +408,10 @@ export default function EventDetailPage() {
 
           {/* Counter */}
           {imageMedia.length > 1 && (
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 text-white/70 text-sm font-medium bg-black/50 px-4 py-1.5 rounded-full">
+            <div
+              className="absolute bottom-6 left-1/2 -translate-x-1/2 text-white/70 text-sm font-medium bg-black/50 px-4 py-1.5 rounded-full"
+              aria-live="polite"
+            >
               {lightboxIndex + 1} / {imageMedia.length}
             </div>
           )}
