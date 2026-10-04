@@ -102,9 +102,12 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: 22
-          # Pin the VPS host key (ED25519, verified from the Vultr console on
-          # 2026-10-04) so a man-in-the-middle can't receive the deploy.
-          fingerprint: SHA256:5/g02liZ1pxrwxbWOHTEGaOtUdrJrtB8uzL7C7bg42M
+          # Pin the VPS host key so a man-in-the-middle can't receive the
+          # deploy. drone-ssh (Go x/crypto) negotiates the ECDSA host key, so
+          # pin that one. Server keys (2026-10-04): ECDSA
+          # SHA256:2AuvcjqqaC2wpZpD8LVeKiWNgmnS7HybLI+M93wUYxs, ED25519
+          # SHA256:5/g02liZ1pxrwxbWOHTEGaOtUdrJrtB8uzL7C7bg42M (console-verified).
+          fingerprint: SHA256:2AuvcjqqaC2wpZpD8LVeKiWNgmnS7HybLI+M93wUYxs
           command_timeout: 30m
           envs: EXPECTED_SHA
           script: |
