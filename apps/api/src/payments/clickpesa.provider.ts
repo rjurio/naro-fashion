@@ -5,6 +5,8 @@ import { verifyChecksum } from './clickpesa.checksum';
 import {
   GatewayInitiateRequest,
   GatewayInitiateResult,
+  GatewayRefundRequest,
+  GatewayRefundResult,
   GatewayStatusResult,
   PaymentProvider,
   PROVIDER_CODES,
@@ -255,6 +257,25 @@ export class ClickPesaProvider implements PaymentProvider {
       this.logger.warn(`ClickPesa webhook: invalid JSON — ${err}`);
       return false;
     }
+  }
+
+  /**
+   * Gateway refund — NOT implemented. This integration only models the
+   * USSD-push collection API (generate-token, preview/initiate-ussd-push-
+   * request, GET /payments/{orderReference}). No ClickPesa refund/reversal
+   * call is implemented or documented in this codebase, and we never invent
+   * one. ClickPesa refunds are returned outside the gateway and recorded
+   * manually via POST /orders/:id/refunds.
+   */
+  async refund(
+    _request: GatewayRefundRequest,
+    _creds?: ClickPesaCredentials,
+  ): Promise<GatewayRefundResult> {
+    return {
+      supported: false,
+      reason:
+        'ClickPesa (Mixx by YAS) refunds/reversals are not integrated (only USSD-push collections are implemented).',
+    };
   }
 
   // ─── ClickPesa HTTP calls ───────────────────────────────────────────────

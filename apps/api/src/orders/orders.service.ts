@@ -502,8 +502,14 @@ export class OrdersService {
           },
           data: {
             status: 'CANCELLED',
-            // Admin cancelling a paid order → money must go back.
-            paymentStatus: moneyCollected ? 'REFUND_PENDING' : 'CANCELLED',
+            // Admin cancelling a paid order → money must go back. An order
+            // already fully refunded keeps REFUNDED (overwriting it with
+            // CANCELLED would hide the refund history from reports).
+            paymentStatus: moneyCollected
+              ? 'REFUND_PENDING'
+              : order.paymentStatus === 'REFUNDED'
+                ? 'REFUNDED'
+                : 'CANCELLED',
           },
         });
         if (flipped.count !== 1) {

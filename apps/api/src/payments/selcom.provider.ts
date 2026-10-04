@@ -9,6 +9,8 @@ import { normalizePhone } from './phone.util';
 import {
   GatewayInitiateRequest,
   GatewayInitiateResult,
+  GatewayRefundRequest,
+  GatewayRefundResult,
   GatewayStatusResult,
   PaymentProvider,
   PROVIDER_CODES,
@@ -407,6 +409,25 @@ export class SelcomProvider implements PaymentProvider {
       this.logger.error(`Webhook signature verification error: ${error}`);
       return false;
     }
+  }
+
+  /**
+   * Gateway refund — NOT implemented. This integration only models the
+   * Checkout collection calls (/checkout/create-order-minimal,
+   * /checkout/create-order, /checkout/order-status); no Selcom refund or reversal endpoint is implemented or
+   * documented in this codebase, and we never invent one. Refunds of Selcom
+   * collections are returned to the customer outside the gateway and recorded
+   * manually via POST /orders/:id/refunds.
+   */
+  async refund(
+    _request: GatewayRefundRequest,
+    _creds?: unknown,
+  ): Promise<GatewayRefundResult> {
+    return {
+      supported: false,
+      reason:
+        'Selcom refunds/reversals are not integrated (no refund API is implemented for this provider).',
+    };
   }
 
   /**

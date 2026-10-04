@@ -9,6 +9,7 @@ import ServerPager from '@/components/ui/ServerPager';
 import { adminApi } from '@/lib/api';
 import { ADMIN_PAGE_SIZE, normalizePaginated } from '@/lib/pagination';
 import { useToast } from '@/contexts/ToastContext';
+import OrderRefundsPanel, { REFUND_RELEVANT_PAYMENT_STATUSES } from './OrderRefundsPanel';
 
 interface OrderItem {
   id: string;
@@ -59,7 +60,9 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 // Payment status badges. REFUND_PENDING = an admin cancelled a paid order and
-// the money still has to go back to the customer.
+// the money still has to go back to the customer. PARTIALLY_REFUNDED = part
+// of the collected money was refunded on an order that wasn't cancelled.
+// REFUNDED = everything collected went back (POST /orders/:id/refunds).
 const PAYMENT_STATUS_STYLES: Record<string, { label: string; cls: string }> = {
   PENDING: { label: 'Unpaid', cls: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300' },
   PROCESSING: { label: 'Processing', cls: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' },
@@ -67,6 +70,7 @@ const PAYMENT_STATUS_STYLES: Record<string, { label: string; cls: string }> = {
   PAID: { label: 'Paid', cls: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400' },
   COMPLETED: { label: 'Paid', cls: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400' },
   REFUND_PENDING: { label: 'Refund pending', cls: 'bg-amber-100 text-amber-800 ring-1 ring-amber-300 dark:bg-amber-900/30 dark:text-amber-400 dark:ring-amber-700' },
+  PARTIALLY_REFUNDED: { label: 'Partially refunded', cls: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400' },
   REFUNDED: { label: 'Refunded', cls: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400' },
   FAILED: { label: 'Failed', cls: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' },
   CANCELLED: { label: 'Cancelled', cls: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' },
@@ -403,6 +407,15 @@ export default function OrdersPage() {
                       </span>
                     )}
                   </div>
+                  {order.type !== 'POS' && REFUND_RELEVANT_PAYMENT_STATUSES.includes(order.paymentStatus) && (
+                    <OrderRefundsPanel
+                      orderId={order.id}
+                      orderNumber={order.orderNumber}
+                      onPaymentStatusChange={(ps) =>
+                        setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, paymentStatus: ps } : o)))
+                      }
+                    />
+                  )}
                   <p className="text-xs text-[hsl(var(--muted-foreground))]">
                     <span className="font-medium">Shipping:</span>{' '}
                     {order.shippingAddress

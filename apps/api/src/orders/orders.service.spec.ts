@@ -252,6 +252,22 @@ describe('OrdersService.updateStatus (cancel)', () => {
     });
   });
 
+  it('(e) admin cancel keeps refund state: PARTIALLY_REFUNDED → REFUND_PENDING, REFUNDED stays REFUNDED', async () => {
+    const a = setup({ ...base, paymentStatus: 'PARTIALLY_REFUNDED', status: 'CONFIRMED' });
+    await a.svc.updateStatus('o1', 'CANCELLED', admin);
+    expect(a.prisma.order.updateMany.mock.calls[0][0].data).toEqual({ status: 'CANCELLED', paymentStatus: 'REFUND_PENDING' });
+
+    const b = setup({ ...base, paymentStatus: 'REFUNDED', status: 'CONFIRMED' });
+    await b.svc.updateStatus('o1', 'CANCELLED', admin);
+    expect(b.prisma.order.updateMany.mock.calls[0][0].data).toEqual({ status: 'CANCELLED', paymentStatus: 'REFUNDED' });
+  });
+
+  it('(e) customer cannot cancel a PARTIALLY_REFUNDED order (money still held)', async () => {
+    const { prisma, svc } = setup({ ...base, paymentStatus: 'PARTIALLY_REFUNDED' });
+    await expect(svc.updateStatus('o1', 'CANCELLED', customer)).rejects.toThrow('Paid orders must be cancelled by the shop');
+    expect(prisma.order.updateMany).not.toHaveBeenCalled();
+  });
+
   it('(b) conditional flip: restocks only when the flip wins', async () => {
     const { prisma, svc } = setup(base);
     await svc.updateStatus('o1', 'CANCELLED', customer);

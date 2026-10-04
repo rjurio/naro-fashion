@@ -10,8 +10,30 @@ import { Prisma } from '@prisma/client';
 /** Statuses from which an order may move to CANCELLED. */
 export const CANCELLABLE_STATUSES = ['PENDING', 'CONFIRMED', 'PROCESSING'];
 
-/** paymentStatus values meaning money has been (at least partly) collected. */
-export const MONEY_COLLECTED_PAYMENT_STATUSES = ['PAID', 'PARTIAL'];
+/**
+ * paymentStatus values meaning money has been (at least partly) collected
+ * and is still held. PARTIALLY_REFUNDED = some, not all, of the collected
+ * money went back via POST /orders/:id/refunds — the rest is still held, so a
+ * cancel must still go to REFUND_PENDING.
+ */
+export const MONEY_COLLECTED_PAYMENT_STATUSES = ['PAID', 'PARTIAL', 'PARTIALLY_REFUNDED'];
+
+/**
+ * Online-order refund workflow (OrderRefundsService) payment statuses.
+ *  - REFUND_PENDING: admin cancelled a paid order; money still to go back.
+ *  - PARTIALLY_REFUNDED: part of the collected money refunded on an order
+ *    that was NOT cancelled (e.g. partial goodwill refund).
+ *  - REFUNDED: every collected shilling refunded (terminal — payments and
+ *    gateway settlement never touch a REFUNDED order again).
+ * Online `PARTIAL` keeps meaning "partially PAID" (POS reuses PARTIAL for
+ * partially refunded sales, but POS sales are refunded from POS, not here).
+ */
+export const REFUND_PENDING = 'REFUND_PENDING';
+export const PARTIALLY_REFUNDED = 'PARTIALLY_REFUNDED';
+export const REFUNDED = 'REFUNDED';
+
+/** Order paymentStatus values from which an admin may record a refund. */
+export const REFUNDABLE_PAYMENT_STATUSES = ['REFUND_PENDING', 'PAID', 'PARTIAL', 'PARTIALLY_REFUNDED'];
 
 /** paymentStatus values meaning nothing has been collected. */
 export const UNPAID_PAYMENT_STATUSES = ['PENDING', 'FAILED', 'UNPAID'];

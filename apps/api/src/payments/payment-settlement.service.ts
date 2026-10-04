@@ -27,7 +27,10 @@ export const FINAL_PAYMENT_STATUSES = ['COMPLETED', 'REFUNDED'];
 
 /** Order states that must never be flipped to PAID automatically. */
 const CLOSED_ORDER_STATUSES = ['CANCELLED', 'REFUNDED'];
-const CLOSED_ORDER_PAYMENT_STATUSES = ['CANCELLED', 'REFUNDED'];
+// Once a refund is underway the refund workflow owns paymentStatus — a late
+// gateway settlement must not overwrite REFUND_PENDING/PARTIALLY_REFUNDED with
+// PAID/PARTIAL (it's logged for manual review instead).
+const CLOSED_ORDER_PAYMENT_STATUSES = ['CANCELLED', 'REFUNDED', 'REFUND_PENDING', 'PARTIALLY_REFUNDED'];
 
 /**
  * Map a raw gateway/webhook status string to an internal status.

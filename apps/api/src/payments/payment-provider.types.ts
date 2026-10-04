@@ -48,6 +48,35 @@ export interface GatewayStatusResult {
 }
 
 /**
+ * Input for a gateway refund/reversal of a previously COMPLETED collection.
+ * Gateway-agnostic: providers pick the identifier their API needs.
+ */
+export interface GatewayRefundRequest {
+  /** Our Payment.transactionRef of the original collection. */
+  transactionRef?: string | null;
+  /** The gateway's id for the original collection (Payment.providerTransactionId). */
+  providerTransactionId?: string | null;
+  amount: number;
+  currency?: string;
+  reason?: string;
+}
+
+/**
+ * Result of `PaymentProvider.refund()`. `supported: false` means the provider
+ * has no implemented/documented refund API — callers must fall back to a
+ * manually recorded refund (money returned outside the gateway).
+ */
+export interface GatewayRefundResult {
+  supported: boolean;
+  success?: boolean;
+  /** Why the refund is unsupported or failed (human readable). */
+  reason?: string;
+  /** Gateway reference for the refund, when one is issued. */
+  refundReference?: string;
+  rawResponse?: any;
+}
+
+/**
  * Per-tenant credentials resolved from PaymentMethod.integrationParams.
  * Shape is provider-specific — providers cast to their own type internally.
  */
@@ -75,4 +104,15 @@ export interface PaymentProvider {
     signature: string | undefined,
     creds?: ProviderCredentials,
   ): boolean;
+
+  /**
+   * Refund (reverse) a completed collection through the gateway. Providers
+   * without an implemented refund API return `{ supported: false, reason }`
+   * — never invent an undocumented endpoint. Used by OrderRefundsService
+   * for `method: 'GATEWAY'` refunds.
+   */
+  refund(
+    request: GatewayRefundRequest,
+    creds?: ProviderCredentials,
+  ): Promise<GatewayRefundResult>;
 }

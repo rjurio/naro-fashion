@@ -5,7 +5,10 @@ import { eatMonthBounds } from './eat-time.util';
 import { CreateFinancialPeriodDto } from './dto/create-financial-period.dto';
 
 /** Order paymentStatus values that count as realised sales revenue. */
-export const REVENUE_PAYMENT_STATUSES = ['PAID', 'REFUNDED'] as const;
+// Orders whose money was collected. Refunds are subtracted separately (as
+// REFUNDED payment rows), so refund-in-progress orders must stay in gross sales
+// or revenue understates (and can go negative).
+export const REVENUE_PAYMENT_STATUSES = ['PAID', 'REFUNDED', 'REFUND_PENDING', 'PARTIALLY_REFUNDED'] as const;
 
 /** Rental statuses that represent a paid (down payment onwards) rental. */
 export const RENTAL_REVENUE_STATUSES = [
