@@ -11,6 +11,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { adminApi } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import InstagramConnectionCard from './InstagramConnectionCard';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
 const API_ORIGIN = API_BASE_URL.replace('/api/v1', '');
@@ -219,6 +220,9 @@ export default function InstagramPostsPage() {
           </Button>
         </div>
       </div>
+
+      {/* Connection (Page token status + connect form) */}
+      <InstagramConnectionCard onConnected={fetchPosts} />
 
       {/* Auto-Sync Config */}
       <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-sm">

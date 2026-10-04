@@ -47,6 +47,32 @@ export interface OrderRefundSummary {
   refunds: OrderRefundRow[];
 }
 
+// ===== Instagram connection (GET /cms/instagram/token-status, POST /cms/instagram/connect) =====
+export interface InstagramTokenStatus {
+  connected: boolean;
+  tokenType: 'PAGE' | 'USER' | string | null;
+  pageName: string | null;
+  igUsername: string | null;
+  /** ISO date, 'never', or null when unknown. */
+  expiresAt: string | null;
+  dataAccessExpiresAt: string | null;
+  checkedAt: string | null;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  valid: boolean;
+  scopes: string[];
+}
+
+export interface InstagramConnectResult {
+  pageName: string;
+  igUsername: string | null;
+  tokenType: 'PAGE';
+  expiresAt: string;
+  scopes: string[];
+  synced: number;
+  syncErrors: number;
+}
+
 // ============================================================
 // Token storage helpers — the single source of truth for where the
 // admin SPA keeps its JWTs. "Remember me" → localStorage, otherwise
@@ -946,6 +972,17 @@ class AdminApiClient {
   }
   updateInstagramSyncConfig(interval: string) {
     return this.patch<{ interval: string; message: string }>('/cms/instagram-sync-config', { interval });
+  }
+  /** Connection status of the tenant's Instagram token (never returns the token). */
+  getInstagramTokenStatus(refresh = false) {
+    return this.get<InstagramTokenStatus>(
+      '/cms/instagram/token-status',
+      refresh ? { params: { refresh: 'true' } } : undefined,
+    );
+  }
+  /** Exchange a Graph API Explorer user token for a non-expiring Page token (server-side). */
+  connectInstagram(userAccessToken: string) {
+    return this.post<InstagramConnectResult>('/cms/instagram/connect', { userAccessToken });
   }
 
   // ===== Newsletter =====

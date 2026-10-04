@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
@@ -15,6 +15,82 @@ export const IG_SETTING_ACCOUNT_ID = 'instagram_business_account_id';
 export const IG_SETTING_INTERVAL = 'instagram_sync_interval';
 export const IG_SETTING_LAST_SYNC = 'instagram_last_sync_at';
 export const IG_DEFAULT_INTERVAL = 'EVERY_6_HOURS';
+/** Non-secret connection metadata (safe to show to admins). */
+export const IG_SETTING_TOKEN_TYPE = 'instagram_token_type';
+export const IG_SETTING_PAGE_ID = 'instagram_page_id';
+export const IG_SETTING_PAGE_NAME = 'instagram_page_name';
+export const IG_SETTING_USERNAME = 'instagram_username';
+export const IG_SETTING_TOKEN_EXPIRES_AT = 'instagram_token_expires_at';
+export const IG_SETTING_DATA_ACCESS_EXPIRES_AT = 'instagram_data_access_expires_at';
+export const IG_SETTING_TOKEN_CHECKED_AT = 'instagram_token_checked_at';
+export const IG_SETTING_TOKEN_VALID = 'instagram_token_valid';
+export const IG_SETTING_LAST_ERROR = 'instagram_last_sync_error';
+
+export const GRAPH_BASE = 'https://graph.facebook.com/v25.0';
+/** A user token expiring within this window raises INSTAGRAM_TOKEN_EXPIRING. */
+export const IG_EXPIRY_WARNING_MS = 14 * 24 * 60 * 60 * 1000;
+const TOKEN_STATUS_CACHE_MS = 10 * 60 * 1000;
+const MAX_ACCOUNT_PAGES = 10;
+
+export interface InstagramConnectResult {
+  pageName: string;
+  igUsername: string | null;
+  tokenType: 'PAGE';
+  /** ISO date or 'never'. */
+  expiresAt: string;
+  scopes: string[];
+  synced: number;
+  syncErrors: number;
+}
+
+export interface InstagramTokenStatus {
+  connected: boolean;
+  tokenType: string | null;
+  pageName: string | null;
+  igUsername: string | null;
+  expiresAt: string | null;
+  dataAccessExpiresAt: string | null;
+  checkedAt: string | null;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  valid: boolean;
+  scopes: string[];
+}
+
+export interface InstagramTokenCheckResult {
+  tenantId: string;
+  tokenType: string | null;
+  valid: boolean;
+  /** ISO date or 'never' (null if debug_token couldn't be reached). */
+  expiresAt: string | null;
+  /** USER token invalid or expiring within IG_EXPIRY_WARNING_MS. */
+  expiringSoon: boolean;
+  /** fb_exchange_token was attempted (USER tokens only). */
+  exchanged: boolean;
+  error?: string;
+}
+
+interface DebugTokenInfo {
+  isValid: boolean;
+  type: string | null;
+  appId: string | null;
+  /** 0 = never expires. */
+  expiresAt: number;
+  dataAccessExpiresAt: number;
+  scopes: string[];
+  errorMessage: string | null;
+}
+
+/** Last 4 chars only — the most of a token we ever log. */
+export function tokenHint(token: string | null | undefined): string {
+  if (!token) return '(none)';
+  return `…${token.slice(-4)}`;
+}
+
+/** Unix seconds (0 = never) → ISO or 'never'. */
+export function expiryToIso(expiresAt: number): string {
+  return !expiresAt ? 'never' : new Date(expiresAt * 1000).toISOString();
+}
 
 /** Per-tenant sync interval keys (same keys the admin UI already uses). */
 export const INSTAGRAM_SYNC_INTERVAL_MS: Record<string, number | null> = {
@@ -212,9 +288,10 @@ export class InstagramService {
 
     let synced = 0;
     let errors = 0;
+    let lastError = '';
 
     try {
-      const url = `https://graph.facebook.com/v25.0/${encodeURIComponent(accountId)}/media`;
+      const url = `${GRAPH_BASE}/${encodeURIComponent(accountId)}/media`;
       const response = await axios.get(url, {
         params: {
           fields: 'id,caption,media_type,media_url,permalink,thumbnail_url,timestamp',
@@ -229,7 +306,7 @@ export class InstagramService {
       const posts = response.data?.data;
       if (!Array.isArray(posts)) {
         this.logger.warn(`Instagram API returned unexpected format (tenant ${tenantId})`);
-        return { synced: 0, errors: 1 };
+        throw new Error('Instagram API returned an unexpected response format');
       }
 
       for (const post of posts) {
@@ -284,9 +361,18 @@ export class InstagramService {
       }
 
       this.logger.log(`Instagram sync completed for tenant ${tenantId}: ${synced} synced, ${errors} errors`);
+      lastError = '';
     } catch (err) {
-      this.logger.error(`Instagram API call failed (tenant ${tenantId}): ${this.describeGraphError(err)}`);
+      lastError = this.describeGraphError(err);
+      this.logger.error(`Instagram API call failed (tenant ${tenantId}): ${lastError}`);
       errors++;
+    }
+
+    // Surface the last Graph failure in Admin → CMS → Instagram (cleared on success).
+    try {
+      await this.setTenantSetting(tenantId, IG_SETTING_LAST_ERROR, lastError.slice(0, 500));
+    } catch {
+      /* non-fatal */
     }
 
     // Record the attempt so the hourly sweep honours the tenant's interval
@@ -305,15 +391,18 @@ export class InstagramService {
    * "Request failed with status code 400" hid a token expiry for 10 weeks;
    * the body says exactly what's wrong (OAuthException code 190 etc.).
    */
-  private describeGraphError(err: unknown): string {
+  describeGraphError(err: unknown): string {
     const fbError = (err as any)?.response?.data?.error;
     if (fbError?.message) {
-      const hint =
-        fbError.code === 190
-          ? ` — token expired/invalid: generate a new long-lived token and store it in the tenant's SiteSetting ${IG_SETTING_TOKEN}`
-          : '';
+      let hint = '';
+      if (fbError.code === 190) {
+        hint = ' — token expired/invalid: re-connect Instagram in Admin → CMS → Instagram (paste a fresh Graph API Explorer token)';
+      } else if (fbError.code === 10 || fbError.code === 200 || (fbError.code >= 200 && fbError.code < 300)) {
+        hint = ' — missing permission: the token needs instagram_basic, pages_show_list, pages_read_engagement, business_management';
+      }
       return `${fbError.type ?? 'GraphError'} code ${fbError.code}: ${fbError.message}${hint}`;
     }
+    // Never echo axios internals (err.config carries the access_token / app secret).
     return err instanceof Error ? err.message : String(err);
   }
 
@@ -381,7 +470,7 @@ export class InstagramService {
     }
 
     try {
-      const response = await axios.get('https://graph.facebook.com/v25.0/oauth/access_token', {
+      const response = await axios.get(`${GRAPH_BASE}/oauth/access_token`, {
         params: {
           grant_type: 'fb_exchange_token',
           client_id: this.configService.get<string>('FACEBOOK_APP_ID', ''),
@@ -404,5 +493,394 @@ export class InstagramService {
       this.logger.error(`Instagram token refresh failed (tenant ${tenantId}): ${this.describeGraphError(err)}`);
       return false;
     }
+  }
+
+  // ----------------------------------------------------- connect (Page token)
+
+  private appCredentials(): { appId: string; appSecret: string } {
+    const appId = this.configService.get<string>('FACEBOOK_APP_ID', '') || '';
+    const appSecret = this.configService.get<string>('FACEBOOK_APP_SECRET', '') || '';
+    return { appId, appSecret };
+  }
+
+  /**
+   * `GET /debug_token` with the app access token (`<app_id>|<app_secret>`,
+   * server-side only). Throws on transport errors / missing app config.
+   */
+  private async debugToken(inputToken: string): Promise<DebugTokenInfo> {
+    const { appId, appSecret } = this.appCredentials();
+    if (!appId || !appSecret) {
+      throw new Error('FACEBOOK_APP_ID / FACEBOOK_APP_SECRET are not configured on the server');
+    }
+    const res = await axios.get(`${GRAPH_BASE}/debug_token`, {
+      params: { input_token: inputToken, access_token: `${appId}|${appSecret}` },
+      timeout: 15000,
+    });
+    const d = res.data?.data ?? {};
+    return {
+      isValid: d.is_valid === true,
+      type: typeof d.type === 'string' ? d.type.toUpperCase() : null,
+      appId: d.app_id != null ? String(d.app_id) : null,
+      expiresAt: Number(d.expires_at) || 0,
+      dataAccessExpiresAt: Number(d.data_access_expires_at) || 0,
+      scopes: Array.isArray(d.scopes) ? d.scopes.map(String) : [],
+      errorMessage: d.error?.message ? String(d.error.message) : null,
+    };
+  }
+
+  /**
+   * Turn a (short- or long-lived) Facebook USER token from Graph API
+   * Explorer into the tenant's durable credential: a Page access token
+   * derived from a long-lived user token, which Facebook issues with NO
+   * expiry (debug_token expires_at = 0). Long-lived user tokens die 60 days
+   * after issue and `fb_exchange_token` does NOT extend them — that is what
+   * froze the feed on 2026-09-26.
+   *
+   * Tokens are never logged (last 4 chars at most) and never returned.
+   */
+  async connectWithUserToken(tenantId: string, userToken: string): Promise<InstagramConnectResult> {
+    if (!tenantId) throw new BadRequestException('Tenant context is required');
+    const rawUserToken = (userToken ?? '').trim();
+    if (!rawUserToken) throw new BadRequestException('Paste the User access token from Graph API Explorer');
+
+    const { appId, appSecret } = this.appCredentials();
+    if (!appId || !appSecret) {
+      throw new BadRequestException(
+        'Instagram connect is not configured on the server (FACEBOOK_APP_ID / FACEBOOK_APP_SECRET missing). Contact the platform operator.',
+      );
+    }
+
+    // (a) short/long-lived user token → long-lived user token.
+    let longLivedUserToken: string;
+    try {
+      const res = await axios.get(`${GRAPH_BASE}/oauth/access_token`, {
+        params: {
+          grant_type: 'fb_exchange_token',
+          client_id: appId,
+          client_secret: appSecret,
+          fb_exchange_token: rawUserToken,
+        },
+        timeout: 15000,
+      });
+      longLivedUserToken = res.data?.access_token;
+      if (!longLivedUserToken) throw new Error('Facebook did not return a long-lived token');
+    } catch (err) {
+      const msg = this.describeGraphError(err);
+      this.logger.warn(`Instagram connect: user-token exchange failed (tenant ${tenantId}): ${msg}`);
+      throw new BadRequestException(`Facebook rejected the pasted token: ${msg}`);
+    }
+
+    // (b) Pages this user administers, with their linked IG business account.
+    type PageRow = {
+      id: string;
+      name: string;
+      access_token?: string;
+      instagram_business_account?: { id: string; username?: string };
+    };
+    const pages: PageRow[] = [];
+    try {
+      let url: string | null = `${GRAPH_BASE}/me/accounts`;
+      let params: Record<string, string | number> | undefined = {
+        fields: 'id,name,access_token,instagram_business_account{id,username}',
+        limit: 100,
+        access_token: longLivedUserToken,
+      };
+      for (let i = 0; url && i < MAX_ACCOUNT_PAGES; i++) {
+        const res: any = await axios.get(url, { params, timeout: 15000 });
+        const rows = res.data?.data;
+        if (Array.isArray(rows)) pages.push(...rows);
+        url = typeof res.data?.paging?.next === 'string' ? res.data.paging.next : null;
+        params = undefined; // `next` already carries every query param
+      }
+    } catch (err) {
+      const msg = this.describeGraphError(err);
+      this.logger.warn(`Instagram connect: /me/accounts failed (tenant ${tenantId}): ${msg}`);
+      throw new BadRequestException(`Could not list your Facebook Pages: ${msg}`);
+    }
+
+    // (c) pick the Page linked to the tenant's IG business account.
+    const withIg = pages.filter((p) => p.instagram_business_account?.id);
+    const describePages = () =>
+      pages.length
+        ? pages
+            .map((p) =>
+              p.instagram_business_account?.id
+                ? `"${p.name}" (Instagram ${p.instagram_business_account.username ? '@' + p.instagram_business_account.username : p.instagram_business_account.id})`
+                : `"${p.name}" (no Instagram business account linked)`,
+            )
+            .join(', ')
+        : 'none';
+
+    const configuredIgId = await this.getAccountId(tenantId);
+    let page: PageRow | undefined;
+    if (configuredIgId) {
+      page = withIg.find((p) => p.instagram_business_account!.id === configuredIgId);
+      if (!page) {
+        throw new BadRequestException(
+          `None of your Facebook Pages is linked to Instagram account ${configuredIgId}. Pages found: ${describePages()}. ` +
+            'Log in to Graph API Explorer as an admin of the Page linked to the shop\'s Instagram account and tick pages_show_list.',
+        );
+      }
+    } else if (withIg.length === 1) {
+      page = withIg[0];
+    } else {
+      throw new BadRequestException(
+        withIg.length === 0
+          ? `No Facebook Page with a linked Instagram business account was found. Pages found: ${describePages()}.`
+          : `Several Pages have an Instagram account — set ${IG_SETTING_ACCOUNT_ID} first to choose one. Pages found: ${describePages()}.`,
+      );
+    }
+
+    const pageToken = page.access_token;
+    const igId = page.instagram_business_account!.id;
+    if (!pageToken) {
+      throw new BadRequestException(
+        `Facebook returned Page "${page.name}" without a Page token — make sure you are an admin of that Page and granted pages_show_list.`,
+      );
+    }
+
+    // (d) verify the Page token, then prove it can read the media edge.
+    let info: DebugTokenInfo;
+    try {
+      info = await this.debugToken(pageToken);
+    } catch (err) {
+      throw new BadRequestException(`Could not verify the Page token: ${this.describeGraphError(err)}`);
+    }
+    if (!info.isValid) {
+      throw new BadRequestException(
+        `Facebook reports the Page token for "${page.name}" as invalid${info.errorMessage ? `: ${info.errorMessage}` : ''}.`,
+      );
+    }
+    if (info.appId && info.appId !== appId) {
+      throw new BadRequestException(
+        'The pasted token was generated for a different Facebook app. In Graph API Explorer choose the app "Narofashion".',
+      );
+    }
+    try {
+      await axios.get(`${GRAPH_BASE}/${encodeURIComponent(igId)}/media`, {
+        params: { fields: 'id', limit: 1, access_token: pageToken },
+        timeout: 15000,
+      });
+    } catch (err) {
+      throw new BadRequestException(
+        `The Page token cannot read Instagram media yet: ${this.describeGraphError(err)}`,
+      );
+    }
+
+    // (e) persist — tenant-scoped rows only.
+    const expiresAtIso = expiryToIso(info.expiresAt);
+    const nowIso = new Date().toISOString();
+    const igUsername = page.instagram_business_account?.username ?? null;
+    await this.setTenantSetting(tenantId, IG_SETTING_TOKEN, pageToken);
+    await this.setTenantSetting(tenantId, IG_SETTING_ACCOUNT_ID, igId);
+    await this.setTenantSetting(tenantId, IG_SETTING_TOKEN_TYPE, 'PAGE');
+    await this.setTenantSetting(tenantId, IG_SETTING_PAGE_ID, page.id);
+    await this.setTenantSetting(tenantId, IG_SETTING_PAGE_NAME, page.name);
+    await this.setTenantSetting(tenantId, IG_SETTING_USERNAME, igUsername ?? '');
+    await this.setTenantSetting(tenantId, IG_SETTING_TOKEN_EXPIRES_AT, expiresAtIso);
+    await this.setTenantSetting(
+      tenantId,
+      IG_SETTING_DATA_ACCESS_EXPIRES_AT,
+      info.dataAccessExpiresAt ? expiryToIso(info.dataAccessExpiresAt) : '',
+    );
+    await this.setTenantSetting(tenantId, IG_SETTING_TOKEN_CHECKED_AT, nowIso);
+    await this.setTenantSetting(tenantId, IG_SETTING_TOKEN_VALID, 'true');
+    this.statusCache.delete(tenantId);
+
+    this.logger.log(
+      `Instagram connected for tenant ${tenantId}: Page "${page.name}" → IG ${igUsername ? '@' + igUsername : igId}, ` +
+        `PAGE token ${tokenHint(pageToken)}, expires ${expiresAtIso}`,
+    );
+
+    // (f) sync now.
+    const r = await this.syncTenant(tenantId);
+    return {
+      pageName: page.name,
+      igUsername,
+      tokenType: 'PAGE',
+      expiresAt: expiresAtIso,
+      scopes: info.scopes,
+      synced: r.synced,
+      syncErrors: r.errors,
+    };
+  }
+
+  // ------------------------------------------------------------ token status
+
+  private readonly statusCache = new Map<string, { at: number; hint: string; value: InstagramTokenStatus }>();
+
+  /**
+   * Admin-facing connection status. Calls debug_token live at most every
+   * 10 minutes per tenant (or on `force`). NEVER includes the token.
+   */
+  async getTokenStatus(tenantId: string, force = false): Promise<InstagramTokenStatus> {
+    const token = await this.getActiveToken(tenantId);
+    const hint = tokenHint(token);
+    const cached = this.statusCache.get(tenantId);
+    if (!force && cached && cached.hint === hint && Date.now() - cached.at < TOKEN_STATUS_CACHE_MS) {
+      // lastSync/lastError change on every sync — always read them fresh.
+      const [lastSyncAt, lastError] = await Promise.all([
+        this.getTenantSetting(tenantId, IG_SETTING_LAST_SYNC),
+        this.getTenantSetting(tenantId, IG_SETTING_LAST_ERROR),
+      ]);
+      return { ...cached.value, lastSyncAt, lastError };
+    }
+
+    const keys = [
+      IG_SETTING_TOKEN_TYPE,
+      IG_SETTING_PAGE_NAME,
+      IG_SETTING_USERNAME,
+      IG_SETTING_TOKEN_EXPIRES_AT,
+      IG_SETTING_DATA_ACCESS_EXPIRES_AT,
+      IG_SETTING_TOKEN_CHECKED_AT,
+      IG_SETTING_LAST_SYNC,
+      IG_SETTING_LAST_ERROR,
+      IG_SETTING_TOKEN_VALID,
+    ];
+    const values = await Promise.all(keys.map((k) => this.getTenantSetting(tenantId, k)));
+    const s = Object.fromEntries(keys.map((k, i) => [k, values[i]])) as Record<string, string | null>;
+
+    const status: InstagramTokenStatus = {
+      connected: !!token,
+      tokenType: s[IG_SETTING_TOKEN_TYPE],
+      pageName: s[IG_SETTING_PAGE_NAME],
+      igUsername: s[IG_SETTING_USERNAME],
+      expiresAt: s[IG_SETTING_TOKEN_EXPIRES_AT],
+      dataAccessExpiresAt: s[IG_SETTING_DATA_ACCESS_EXPIRES_AT],
+      checkedAt: s[IG_SETTING_TOKEN_CHECKED_AT],
+      lastSyncAt: s[IG_SETTING_LAST_SYNC],
+      lastError: s[IG_SETTING_LAST_ERROR],
+      valid: s[IG_SETTING_TOKEN_VALID] === 'true',
+      scopes: [],
+    };
+
+    if (!token) {
+      status.valid = false;
+      status.lastError = status.lastError || 'Instagram is not connected';
+      return status;
+    }
+
+    try {
+      const info = await this.debugToken(token);
+      status.valid = info.isValid;
+      status.tokenType = info.type ?? status.tokenType;
+      status.expiresAt = expiryToIso(info.expiresAt);
+      status.dataAccessExpiresAt = info.dataAccessExpiresAt ? expiryToIso(info.dataAccessExpiresAt) : null;
+      status.scopes = info.scopes;
+      status.checkedAt = new Date().toISOString();
+      if (!info.isValid && info.errorMessage) status.lastError = info.errorMessage;
+      await this.recordCheck(tenantId, info, status.checkedAt);
+    } catch (err) {
+      // Can't reach Graph / app not configured: report stored values.
+      status.lastError = `Token check failed: ${this.describeGraphError(err)}`;
+    }
+
+    this.statusCache.set(tenantId, { at: Date.now(), hint, value: status });
+    return status;
+  }
+
+  private async recordCheck(tenantId: string, info: DebugTokenInfo, checkedAtIso: string): Promise<void> {
+    try {
+      await this.setTenantSetting(tenantId, IG_SETTING_TOKEN_CHECKED_AT, checkedAtIso);
+      await this.setTenantSetting(tenantId, IG_SETTING_TOKEN_VALID, info.isValid ? 'true' : 'false');
+      if (info.isValid) {
+        await this.setTenantSetting(tenantId, IG_SETTING_TOKEN_EXPIRES_AT, expiryToIso(info.expiresAt));
+        if (info.type) await this.setTenantSetting(tenantId, IG_SETTING_TOKEN_TYPE, info.type);
+      }
+    } catch (err) {
+      this.logger.warn(`Could not record Instagram token check for tenant ${tenantId}: ${(err as Error).message}`);
+    }
+  }
+
+  // -------------------------------------------------- scheduled token check
+
+  /**
+   * Daily token health check for every non-blocked tenant holding a token
+   * (called by SchedulerService's `instagram-token-refresh` cron).
+   *   - PAGE / never-expiring tokens: NO exchange; just record validity.
+   *   - USER tokens: keep the (harmless) fb_exchange_token, but flag
+   *     `expiringSoon` when invalid or < 14 days left — Facebook does NOT
+   *     extend a long-lived user token by re-exchanging it.
+   */
+  async checkAllTenantTokens(now: Date = new Date()): Promise<InstagramTokenCheckResult[]> {
+    const tenants = await this.prisma.tenant.findMany({
+      where: { status: { notIn: BLOCKED_STATUSES } },
+      select: { id: true },
+    });
+    const results: InstagramTokenCheckResult[] = [];
+    for (const t of tenants) {
+      try {
+        if (!(await this.getActiveToken(t.id))) continue;
+        results.push(await this.checkTenantToken(t.id, now));
+      } catch (err) {
+        results.push({
+          tenantId: t.id,
+          tokenType: null,
+          valid: false,
+          expiresAt: null,
+          expiringSoon: false,
+          exchanged: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return results;
+  }
+
+  async checkTenantToken(tenantId: string, now: Date = new Date()): Promise<InstagramTokenCheckResult> {
+    const token = await this.getActiveToken(tenantId);
+    const storedType = await this.getTenantSetting(tenantId, IG_SETTING_TOKEN_TYPE);
+    const base: InstagramTokenCheckResult = {
+      tenantId,
+      tokenType: storedType,
+      valid: false,
+      expiresAt: null,
+      expiringSoon: false,
+      exchanged: false,
+    };
+    if (!token) return { ...base, error: 'no token' };
+
+    let info: DebugTokenInfo | null = null;
+    try {
+      info = await this.debugToken(token);
+    } catch (err) {
+      base.error = `debug_token failed: ${this.describeGraphError(err)}`;
+    }
+
+    if (!info) {
+      // Graph unreachable / app creds missing. Never exchange a PAGE token;
+      // for anything else fall back to the legacy exchange.
+      if (storedType !== 'PAGE') {
+        base.exchanged = true;
+        base.valid = await this.refreshTenantToken(tenantId);
+      }
+      return base;
+    }
+
+    const checkedAt = now.toISOString();
+    await this.recordCheck(tenantId, info, checkedAt);
+    this.statusCache.delete(tenantId);
+
+    const tokenType = info.type ?? storedType;
+    const result: InstagramTokenCheckResult = {
+      ...base,
+      tokenType,
+      valid: info.isValid,
+      expiresAt: expiryToIso(info.expiresAt),
+      error: info.isValid ? undefined : info.errorMessage ?? 'token is invalid',
+    };
+
+    if (tokenType === 'PAGE' || (info.isValid && info.expiresAt === 0)) {
+      return result; // durable token — nothing to exchange
+    }
+
+    // USER (or unknown, expiring) token.
+    if (info.isValid) {
+      result.exchanged = true;
+      await this.refreshTenantToken(tenantId);
+    }
+    const msLeft = info.expiresAt ? info.expiresAt * 1000 - now.getTime() : Infinity;
+    result.expiringSoon = !info.isValid || msLeft < IG_EXPIRY_WARNING_MS;
+    return result;
   }
 }

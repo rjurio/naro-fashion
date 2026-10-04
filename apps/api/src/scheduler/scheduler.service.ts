@@ -664,19 +664,54 @@ export class SchedulerService implements OnModuleInit {
       const result = await this.instagramService.syncFromInstagram();
       this.logger.log(`Instagram sync done: ${result.synced} synced, ${result.errors} errors`);
     } catch (error) {
-      this.logger.error('Error in Instagram sync cron:', error);
+      this.logger.error(`Error in Instagram sync cron: ${error instanceof Error ? error.message : error}`);
     }
   }
 
-  // --- Instagram token refresh: 1st and 15th of each month ---
-  @Cron('0 0 1,15 * *', { name: 'instagram-token-refresh' })
+  // --- Instagram token health check: daily at 03:00 ---
+  // Was a 1st/15th fb_exchange_token "refresh", which never extended a
+  // long-lived USER token (the feed died 60 days after the July bootstrap).
+  // Tenants now hold a non-expiring PAGE token (Admin → CMS → Instagram →
+  // Connect); this job verifies each token via debug_token, skips the
+  // exchange for PAGE tokens, and raises INSTAGRAM_TOKEN_EXPIRING (once per
+  // day — the job runs daily) for user tokens that are invalid or < 14 days
+  // from expiry. Stays on this singleton (crons never run on request-scoped
+  // providers).
+  @Cron('0 3 * * *', { name: 'instagram-token-refresh' })
   async handleInstagramTokenRefresh() {
-    this.logger.log('Refreshing Instagram access token...');
+    this.logger.log('Checking Instagram access tokens...');
     try {
-      const success = await this.instagramService.refreshAccessToken();
-      this.logger.log(`Instagram token refresh: ${success ? 'success' : 'failed'}`);
+      const results = await this.instagramService.checkAllTenantTokens();
+      for (const r of results) {
+        if (r.tokenType === 'PAGE' || r.expiresAt === 'never') {
+          if (!r.valid && !r.error?.startsWith('debug_token failed')) {
+            this.logger.error(
+              `INSTAGRAM_TOKEN_INVALID tenant ${r.tenantId}: Page token rejected by Facebook (${r.error ?? 'invalid'}) — ` +
+                're-connect Instagram in Admin → CMS → Instagram.',
+            );
+          } else if (r.error) {
+            this.logger.warn(`Instagram token check for tenant ${r.tenantId}: ${r.error}`);
+          }
+          continue;
+        }
+        if (r.expiringSoon) {
+          const contact = await this.getAdminContact(r.tenantId).catch(() => ({ email: '', phone: '' }));
+          // No generic admin-alert email template exists yet; the ERROR line
+          // is the alert (grep pm2 logs for INSTAGRAM_TOKEN_EXPIRING).
+          this.logger.error(
+            `INSTAGRAM_TOKEN_EXPIRING tenant ${r.tenantId}: ${r.tokenType ?? 'USER'} token ` +
+              `${r.valid ? `expires ${r.expiresAt}` : `is invalid (${r.error ?? 'unknown'})`} — ` +
+              're-connect Instagram in Admin → CMS → Instagram to switch to a non-expiring Page token' +
+              (contact.email ? ` (tenant admin: ${contact.email})` : ''),
+          );
+        } else if (r.error) {
+          this.logger.warn(`Instagram token check for tenant ${r.tenantId}: ${r.error}`);
+        }
+      }
+      this.logger.log(`Instagram token check done for ${results.length} tenant(s)`);
     } catch (error) {
-      this.logger.error('Error in Instagram token refresh cron:', error);
+      // Message only — an axios error object carries the token in its config.
+      this.logger.error(`Error in Instagram token check cron: ${error instanceof Error ? error.message : error}`);
     }
   }
 }

@@ -30,6 +30,7 @@ import {
   ReplyContactDto,
 } from './cms.service';
 import { InstagramService, INSTAGRAM_SYNC_INTERVAL_MS } from './instagram.service';
+import { ConnectInstagramDto } from './instagram-connect.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { PermissionGuard } from '../auth/guards/permission.guard';
@@ -331,6 +332,28 @@ export class CmsController {
     return this.instagramService.syncTenant(this.tenantContext.requireId);
   }
 
+  // --- Instagram connection (Page token) ---
+
+  /**
+   * Exchange a Graph API Explorer USER token for the tenant's non-expiring
+   * Page access token (server-side, app secret never leaves the API).
+   * Never returns the token.
+   */
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('settings:manage')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('instagram/connect')
+  connectInstagram(@Body() dto: ConnectInstagramDto) {
+    return this.instagramService.connectWithUserToken(this.tenantContext.requireId, dto.userAccessToken);
+  }
+
+  /** Token health for Admin → CMS → Instagram (debug_token cached 10 min; `?refresh=true` forces). */
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('cms:manage')
+  @Get('instagram/token-status')
+  getInstagramTokenStatus(@Query('refresh') refresh?: string) {
+    return this.instagramService.getTokenStatus(this.tenantContext.requireId, refresh === 'true');
+  }
   // --- Instagram Sync Config ---
 
   @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
