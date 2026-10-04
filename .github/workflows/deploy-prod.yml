@@ -102,6 +102,9 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: 22
+          # Pin the VPS host key (ED25519, verified from the Vultr console on
+          # 2026-10-04) so a man-in-the-middle can't receive the deploy.
+          fingerprint: SHA256:5/g02liZ1pxrwxbWOHTEGaOtUdrJrtB8uzL7C7bg42M
           command_timeout: 30m
           envs: EXPECTED_SHA
           script: |
