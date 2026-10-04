@@ -6,12 +6,13 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import TwoFactorLoginStep from '@/components/auth/TwoFactorLoginStep';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSiteSettings } from '@/contexts/SiteSettingsContext';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login } = useAuth();
+  const { login, verify2FA } = useAuth();
   const { settings } = useSiteSettings();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -19,6 +20,8 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  // Second step (admins with TOTP enabled)
+  const [challengeToken, setChallengeToken] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,7 +29,12 @@ export default function LoginPage() {
     setError('');
 
     try {
-      await login(email, password, rememberMe);
+      const outcome = await login(email, password, rememberMe);
+      if (outcome.requires2FA) {
+        setChallengeToken(outcome.challengeToken);
+        setPassword('');
+        return;
+      }
       router.push('/dashboard');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Invalid email or password';
@@ -34,6 +42,11 @@ export default function LoginPage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const backToPassword = () => {
+    setChallengeToken(null);
+    setError('');
   };
 
   return (
@@ -67,19 +80,30 @@ export default function LoginPage() {
 
           <div className="mb-8">
             <h2 className="text-2xl font-bold text-[hsl(var(--foreground))]">
-              Welcome back
+              {challengeToken ? 'Two-factor authentication' : 'Welcome back'}
             </h2>
             <p className="mt-2 text-[hsl(var(--muted-foreground))]">
-              Sign in to your admin account
+              {challengeToken
+                ? 'Enter the 6-digit code from your authenticator app, or use a recovery code.'
+                : 'Sign in to your admin account'}
             </p>
           </div>
 
           {error && (
-            <div className="mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm">
+            <div role="alert" className="mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm">
               {error}
             </div>
           )}
 
+          {challengeToken ? (
+            <TwoFactorLoginStep
+              onVerify={async (code) => {
+                await verify2FA(challengeToken, code, rememberMe);
+                router.push('/dashboard');
+              }}
+              onBack={backToPassword}
+            />
+          ) : (
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Email */}
             <div>
@@ -169,6 +193,7 @@ export default function LoginPage() {
               )}
             </Button>
           </form>
+          )}
 
           <p className="mt-8 text-center text-xs text-[hsl(var(--muted-foreground))]">
             {settings.businessName} Admin Panel v1.0

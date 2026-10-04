@@ -19,12 +19,19 @@ interface User {
   avatarUrl?: string;
   tenantId?: string;
   isPlatformAdmin?: boolean;
+  /** Effective TOTP state (flag + real enrolment) from /auth/me. */
+  is2FAEnabled?: boolean;
+  /** Unused recovery codes left (only when 2FA is on). */
+  twoFARecoveryCodesRemaining?: number;
   enabledModules?: string[];
   /** Effective RBAC permission codes — only present if /auth/me returns them. */
   permissions?: string[];
 }
 
 type ProfileLoadResult = 'ok' | 'unauthorized' | 'transient';
+
+/** Outcome of the password step: done, or a TOTP code is required (call verify2FA). */
+export type LoginOutcome = { requires2FA: false } | { requires2FA: true; challengeToken: string };
 
 interface AuthContextType {
   user: User | null;
@@ -35,8 +42,13 @@ interface AuthContextType {
    * screen instead of bouncing the operator to the login page.
    */
   connectionError: string | null;
-  login: (email: string, password: string, rememberMe?: boolean) => Promise<void>;
-  platformLogin: (email: string, password: string, rememberMe?: boolean) => Promise<void>;
+  login: (email: string, password: string, rememberMe?: boolean) => Promise<LoginOutcome>;
+  /**
+   * Second login step (tenant or platform admin with TOTP enabled). `code` is a
+   * 6-digit TOTP code or a recovery code. Respects the same Remember-me choice.
+   */
+  verify2FA: (challengeToken: string, code: string, rememberMe?: boolean) => Promise<void>;
+  platformLogin: (email: string, password: string, rememberMe?: boolean) => Promise<LoginOutcome>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   retrySession: () => Promise<void>;
@@ -119,21 +131,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (result === 'transient') throw new Error("Signed in, but couldn't load your profile. Please try again.");
   };
 
-  const login = async (email: string, password: string, rememberMe = false) => {
+  const login = async (email: string, password: string, rememberMe = false): Promise<LoginOutcome> => {
     const res = await adminApi.login(email, password);
+    if (res?.requires2FA && typeof res.challengeToken === 'string') {
+      // Password accepted, but no tokens until the TOTP code is verified.
+      return { requires2FA: true, challengeToken: res.challengeToken };
+    }
     await finishLogin(
       res.access_token || res.accessToken || res.token,
       res.refresh_token || res.refreshToken,
       rememberMe,
     );
+    return { requires2FA: false };
   };
 
-  const platformLogin = async (email: string, password: string, rememberMe = false) => {
-    const res = await adminApi.post<{ accessToken: string; refreshToken?: string; user: any }>('/auth/platform-login', {
+  const verify2FA = async (challengeToken: string, code: string, rememberMe = false) => {
+    const res = await adminApi.verify2FA(challengeToken, code);
+    await finishLogin(res.accessToken, res.refreshToken, rememberMe);
+  };
+
+  const platformLogin = async (email: string, password: string, rememberMe = false): Promise<LoginOutcome> => {
+    const res = await adminApi.post<{
+      accessToken?: string;
+      refreshToken?: string;
+      user?: any;
+      requires2FA?: boolean;
+      challengeToken?: string;
+    }>('/auth/platform-login', {
       email,
       password,
     });
+    if (res?.requires2FA && typeof res.challengeToken === 'string') {
+      // Same second step as tenant admins — /auth/2fa/verify issues platform tokens.
+      return { requires2FA: true, challengeToken: res.challengeToken };
+    }
     await finishLogin(res.accessToken, res.refreshToken, rememberMe);
+    return { requires2FA: false };
   };
 
   const logout = () => {
@@ -180,6 +213,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         connectionError,
         login,
+        verify2FA,
         platformLogin,
         logout,
         refreshUser,

@@ -4,6 +4,7 @@ import {
   ConflictException,
   NotFoundException,
   UnauthorizedException,
+  ServiceUnavailableException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -17,7 +18,21 @@ import {
   requireJwtSecret,
   isTokenTypeAllowed,
   isTokenVersionCurrent,
+  TWO_FA_CHALLENGE_TYP,
 } from './util/jwt-secrets';
+import { buildOtpauthUrl, generateTotpSecret, verifyTotp, timeStep } from './util/totp';
+import {
+  generateRecoveryCodes,
+  hashRecoveryCode,
+  looksLikeRecoveryCode,
+  normalizeRecoveryCode,
+} from './util/recovery-codes';
+import {
+  decryptTwoFaSecret,
+  encryptTwoFaSecret,
+  isEncryptedTwoFaSecret,
+  resolveTwoFaKey,
+} from './util/two-fa-crypto';
 
 // Setting keys used to override JWT lifetimes per-tenant via the CMS settings UI.
 export const ACCESS_EXPIRES_SETTING_KEY = 'auth_access_token_expires';
@@ -36,7 +51,16 @@ export const MIN_ACCESS_EXPIRES_MS = 30 * 1000; // 30s — anything shorter just
  */
 export const GENERIC_LOGIN_ERROR = 'Invalid credentials or account temporarily locked';
 export const SUSPENDED_ACCOUNT_ERROR = 'This account has been suspended. Please contact support.';
-export const TWO_FA_UNAVAILABLE_ERROR = 'Two-factor authentication is not available yet';
+/** Legacy `PATCH /auth/2fa` — enabling / disabling a real enrolment moved to dedicated endpoints. */
+export const TWO_FA_USE_NEW_ENDPOINTS_ERROR =
+  'Use POST /auth/2fa/setup + /auth/2fa/enable to turn on two-factor authentication, and POST /auth/2fa/disable (password + code) to turn it off';
+export const TWO_FA_ADMIN_ONLY_ERROR = 'Two-factor authentication is available for admin accounts only';
+export const TWO_FA_NOT_CONFIGURED_ERROR =
+  'Two-factor authentication is not configured on this server. Ask the platform operator to set TWO_FA_ENCRYPTION_KEY.';
+export const TWO_FA_INVALID_CODE_ERROR = 'Invalid or expired authentication code';
+export const TWO_FA_CHALLENGE_INVALID_ERROR = 'Your sign-in attempt has expired. Please sign in again.';
+export const TWO_FA_CHALLENGE_TTL = '5m';
+const TWO_FA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
 export const MAX_FAILED_LOGIN_ATTEMPTS = 5;
 export const LOCKOUT_DURATION_MS = 30 * 60 * 1000;
@@ -47,6 +71,7 @@ const INACTIVE_TENANT_STATUSES = new Set(['SUSPENDED', 'DEACTIVATED']);
 const SENSITIVE_PRINCIPAL_FIELDS = [
   'passwordHash',
   'twoFASecret',
+  'twoFARecoveryCodes',
   'passwordResetToken',
   'passwordResetExpires',
   'failedLoginAttempts',
@@ -78,6 +103,35 @@ export function isCredentialShapeValid(email: unknown, password: unknown): email
     password.length > 0 &&
     password.length <= 256
   );
+}
+
+/**
+ * True when an AdminUser row has a REAL TOTP enrolment (flag on + an
+ * encrypted secret). Legacy rows that only carry `is2FAEnabled=true` from the
+ * old free toggle (no secret) are NOT challenged — they'd be locked out.
+ */
+export function adminRequiresTwoFactor(row: { is2FAEnabled?: boolean | null; twoFASecret?: string | null } | null | undefined): boolean {
+  return !!row?.is2FAEnabled && isEncryptedTwoFaSecret(row?.twoFASecret);
+}
+
+/** Which principal table a 2FA operation targets. */
+export type TwoFaKind = 'admin' | 'platform';
+
+/** The AdminUser / PlatformAdmin columns the 2FA code touches (PlatformAdmin has no tenantId / deletedAt). */
+interface TwoFaRow {
+  id: string;
+  email: string;
+  passwordHash: string;
+  role: string;
+  isActive: boolean;
+  tokenVersion: number;
+  is2FAEnabled: boolean;
+  twoFASecret: string | null;
+  twoFARecoveryCodes: string[];
+  failedLoginAttempts: number;
+  lockedUntil: Date | null;
+  tenantId?: string | null;
+  deletedAt?: Date | null;
 }
 
 export interface LoginMeta {
@@ -121,6 +175,13 @@ export class AuthService {
   // every login. Empty string key = global (no tenant).
   private expiryCache = new Map<string, { access: string; refresh: string; at: number }>();
   private readonly EXPIRY_CACHE_TTL_MS = 30 * 1000;
+
+  // TOTP replay protection: last accepted time-step per admin. A code (and
+  // any code from an earlier step) can be used at most once. In-memory, so
+  // it is per API process — fine for the single-instance PM2 deployment.
+  private readonly lastTotpStep = new Map<string, number>();
+  // Single-use 2FA challenge tokens (jti → expiry ms).
+  private readonly usedChallenges = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -267,7 +328,12 @@ export class AuthService {
     const admin = await this.prisma.adminUser.findUnique({ where: { email } });
     if (!admin) return null;
 
-    const ok = await this.verifyWithLockout('admin', admin, pwd, meta);
+    // With TOTP enrolled, a correct password is only half a login: the
+    // failed-attempt counter is NOT reset here (only after the code is
+    // verified), so password + code guesses share one lockout budget.
+    const ok = await this.verifyWithLockout('admin', admin, pwd, meta, {
+      deferSuccess: adminRequiresTwoFactor(admin),
+    });
     if (!ok) return null;
 
     if (!admin.isActive || admin.deletedAt) {
@@ -290,7 +356,9 @@ export class AuthService {
     const admin = await this.prisma.platformAdmin.findUnique({ where: { email } });
     if (!admin) return null;
 
-    const ok = await this.verifyWithLockout('platform', admin, password as string, meta);
+    const ok = await this.verifyWithLockout('platform', admin, password as string, meta, {
+      deferSuccess: adminRequiresTwoFactor(admin),
+    });
     if (!ok) return null;
 
     if (!admin.isActive) {
@@ -318,6 +386,7 @@ export class AuthService {
     row: { id: string; email: string; passwordHash: string; lockedUntil: Date | null; tenantId?: string | null },
     password: string,
     meta?: LoginMeta,
+    opts: { deferSuccess?: boolean } = {},
   ): Promise<boolean> {
     const delegate: any = kind === 'admin' ? this.prisma.adminUser : this.prisma.platformAdmin;
     const tenantId = kind === 'admin' ? row.tenantId ?? null : null;
@@ -362,6 +431,16 @@ export class AuthService {
       }
       await this.logLoginAttempt(row.email, false, tenantId, meta);
       return false;
+    }
+
+    if (opts.deferSuccess) {
+      // Password OK but a second factor is pending: give back the reserved
+      // attempt without clearing earlier failures (e.g. bad TOTP codes).
+      await delegate.updateMany({
+        where: { id: row.id, failedLoginAttempts: { gt: 0 } },
+        data: { failedLoginAttempts: { decrement: 1 } },
+      });
+      return true;
     }
 
     await delegate.update({
@@ -571,10 +650,22 @@ export class AuthService {
           firstName: true,
           lastName: true,
           role: true,
+          is2FAEnabled: true,
+          twoFASecret: true,
+          twoFARecoveryCodes: true,
           createdAt: true,
         },
       });
-      if (admin) return { ...admin, isPlatformAdmin: true };
+      if (admin) {
+        const { twoFASecret: _s, twoFARecoveryCodes: codes, ...adminRest } = admin;
+        const is2FAEnabled = adminRequiresTwoFactor(admin);
+        return {
+          ...adminRest,
+          is2FAEnabled,
+          twoFARecoveryCodesRemaining: is2FAEnabled ? (codes ?? []).length : 0,
+          isPlatformAdmin: true,
+        };
+      }
     }
 
     // Tenant admin profile
@@ -589,11 +680,18 @@ export class AuthService {
           phone: true,
           role: true,
           is2FAEnabled: true,
+          twoFASecret: true,
+          twoFARecoveryCodes: true,
           tenantId: true,
           createdAt: true,
         },
       });
       if (admin) {
+        // Report the EFFECTIVE state (flag + real encrypted enrolment); the
+        // secret and recovery-code hashes never leave the API.
+        const { twoFASecret: _secret, twoFARecoveryCodes: codes, ...adminRest } = admin;
+        const is2FAEnabled = adminRequiresTwoFactor(admin);
+        const twoFARecoveryCodesRemaining = is2FAEnabled ? (codes ?? []).length : 0;
         // Fetch enabled modules for this tenant
         let enabledModules: string[] = [];
         if (admin.tenantId) {
@@ -603,7 +701,7 @@ export class AuthService {
           });
           enabledModules = modules.map((m) => m.moduleCode);
         }
-        return { ...admin, isAdmin: true, enabledModules };
+        return { ...adminRest, is2FAEnabled, twoFARecoveryCodesRemaining, isAdmin: true, enabledModules };
       }
     }
 
@@ -722,24 +820,31 @@ export class AuthService {
   }
 
   /**
-   * 2FA is NOT implemented: there is no TOTP enrolment (secret generation /
-   * QR) and no code verification at login. The flag used to be toggled
-   * freely, making the admin UI falsely claim protection. Now:
-   *  - enabling → 400 "Two-factor authentication is not available yet"
-   *  - disabling (clearing a stale flag) → requires the current password.
+   * Legacy `PATCH /auth/2fa` (kept for backward compatibility).
+   *  - enabling → 400 pointing at POST /auth/2fa/setup + /auth/2fa/enable
+   *  - disabling a REAL enrolment → 400 pointing at POST /auth/2fa/disable
+   *    (which also requires a current code)
+   *  - disabling a stale legacy flag (is2FAEnabled=true, no encrypted
+   *    secret) → still allowed with the current password, to clean it up.
    */
   async toggle2FA(principal: AuthPrincipal, enabled: boolean, currentPassword: unknown) {
     if (enabled) {
-      throw new BadRequestException(TWO_FA_UNAVAILABLE_ERROR);
+      throw new BadRequestException(TWO_FA_USE_NEW_ENDPOINTS_ERROR);
+    }
+    if (principal.isPlatformAdmin) {
+      throw new BadRequestException(TWO_FA_USE_NEW_ENDPOINTS_ERROR);
     }
     if (!principal.isAdmin) {
-      throw new BadRequestException(TWO_FA_UNAVAILABLE_ERROR);
+      throw new BadRequestException(TWO_FA_ADMIN_ONLY_ERROR);
     }
     if (typeof currentPassword !== 'string' || !currentPassword) {
       throw new UnauthorizedException('Current password is incorrect');
     }
     const admin = await this.prisma.adminUser.findUnique({ where: { id: principal.id } });
     if (!admin) throw new NotFoundException('Admin user not found');
+    if (adminRequiresTwoFactor(admin)) {
+      throw new BadRequestException(TWO_FA_USE_NEW_ENDPOINTS_ERROR);
+    }
     const ok = await bcrypt.compare(currentPassword, admin.passwordHash);
     if (!ok) throw new UnauthorizedException('Current password is incorrect');
 
@@ -748,6 +853,417 @@ export class AuthService {
       data: { is2FAEnabled: false, twoFASecret: null },
       select: { id: true, is2FAEnabled: true },
     });
+  }
+
+  // ===================================================================
+  // TOTP two-factor authentication — AdminUser AND PlatformAdmin.
+  // Same lifecycle for both: setup (pending secret) → enable (code; returns
+  // recovery codes once) → login challenge → verify (TOTP or recovery code)
+  // → disable / regenerate recovery codes (password + code).
+  // ===================================================================
+
+  private requireTwoFaKey(): Buffer {
+    const key = resolveTwoFaKey(this.configService);
+    if (!key) throw new BadRequestException(TWO_FA_NOT_CONFIGURED_ERROR);
+    return key;
+  }
+
+  /** admin = tenant AdminUser, platform = PlatformAdmin; customers get 400. */
+  private twoFaKindOf(principal: AuthPrincipal): TwoFaKind {
+    if (principal?.isPlatformAdmin) return 'platform';
+    if (principal?.isAdmin) return 'admin';
+    throw new BadRequestException(TWO_FA_ADMIN_ONLY_ERROR);
+  }
+
+  private twoFaDelegate(kind: TwoFaKind): any {
+    return kind === 'platform' ? this.prisma.platformAdmin : this.prisma.adminUser;
+  }
+
+  private async loadPrincipalForTwoFactor(kind: TwoFaKind, id: string): Promise<TwoFaRow> {
+    const row = await this.twoFaDelegate(kind).findUnique({ where: { id } });
+    if (!row || !row.isActive || (kind === 'admin' && row.deletedAt)) {
+      throw new NotFoundException('Admin user not found');
+    }
+    return row;
+  }
+
+  private async assertPassword(passwordHash: string, currentPassword: unknown) {
+    // 400 (not 401) so the admin client's refresh-on-401 doesn't replay it.
+    if (typeof currentPassword !== 'string' || !currentPassword || currentPassword.length > 256) {
+      throw new BadRequestException('Current password is incorrect');
+    }
+    if (!(await bcrypt.compare(currentPassword, passwordHash))) {
+      throw new BadRequestException('Current password is incorrect');
+    }
+  }
+
+  /**
+   * Check a TOTP code and consume its time-step (replay protection). Returns
+   * false for a wrong code OR a code whose step was already used.
+   */
+  private checkAndConsumeTotp(replayKey: string, secretBase32: string, code: unknown, nowMs = Date.now()): boolean {
+    const step = verifyTotp(secretBase32, code, { nowMs });
+    if (step === null) return false;
+    const last = this.lastTotpStep.get(replayKey);
+    if (last !== undefined && step <= last) return false;
+    this.lastTotpStep.set(replayKey, step);
+    if (this.lastTotpStep.size > 5000) {
+      const cutoff = timeStep(Math.floor(nowMs / 1000)) - 2;
+      for (const [k, v] of this.lastTotpStep) if (v < cutoff) this.lastTotpStep.delete(k);
+    }
+    return true;
+  }
+
+  /**
+   * Atomically remove one recovery code. Compare-and-swap on the WHOLE array
+   * (`equals` the list we read) so two concurrent requests can never both
+   * consume the same code, nor resurrect a code another request just removed.
+   */
+  private async consumeRecoveryCode(kind: TwoFaKind, id: string, code: unknown): Promise<boolean> {
+    const normalized = normalizeRecoveryCode(code);
+    if (!normalized) return false;
+    const hash = hashRecoveryCode(normalized);
+    const delegate = this.twoFaDelegate(kind);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const row = await delegate.findUnique({ where: { id }, select: { twoFARecoveryCodes: true } });
+      const current: string[] = Array.isArray(row?.twoFARecoveryCodes) ? row.twoFARecoveryCodes : [];
+      if (!current.includes(hash)) return false;
+      const res = await delegate.updateMany({
+        where: { id, twoFARecoveryCodes: { equals: current } },
+        data: { twoFARecoveryCodes: { set: current.filter((h) => h !== hash) } },
+      });
+      if (res.count === 1) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Second-factor check used by verify / disable / regenerate: a 6-digit
+   * TOTP code (replay-protected) or a one-time recovery code.
+   */
+  private async checkSecondFactor(
+    kind: TwoFaKind,
+    row: TwoFaRow,
+    secret: string,
+    code: unknown,
+  ): Promise<'totp' | 'recovery' | null> {
+    if (looksLikeRecoveryCode(code)) {
+      return (await this.consumeRecoveryCode(kind, row.id, code)) ? 'recovery' : null;
+    }
+    return this.checkAndConsumeTotp(`${kind}:${row.id}`, secret, code) ? 'totp' : null;
+  }
+
+  private decryptOrFail(stored: string | null): string {
+    const key = resolveTwoFaKey(this.configService);
+    const plain = key ? decryptTwoFaSecret(stored, key) : null;
+    if (!plain) {
+      this.logger.error(
+        '2FA secret could not be decrypted — TWO_FA_ENCRYPTION_KEY missing or changed since enrolment',
+      );
+      throw new ServiceUnavailableException('Two-factor verification is temporarily unavailable. Contact the platform operator.');
+    }
+    return plain;
+  }
+
+  private async auditTwoFactor(
+    kind: TwoFaKind,
+    row: { id: string; email?: string; tenantId?: string | null },
+    action: string,
+    meta?: LoginMeta,
+    details?: Record<string, any>,
+  ) {
+    // AdminActivityLog.adminUserId is an FK to AdminUser, so platform-admin
+    // events go to the application log instead.
+    if (kind === 'platform') {
+      this.logger.log(`[2FA] ${action} platformAdmin=${row.id} ip=${meta?.ipAddress ?? '-'}${details ? ` ${JSON.stringify(details)}` : ''}`);
+      return;
+    }
+    // Written directly (AuditService is request-scoped and would make this
+    // singleton — and the Passport strategies that use it — request-scoped).
+    try {
+      await this.prisma.adminActivityLog.create({
+        data: {
+          tenantId: row.tenantId ?? null,
+          adminUserId: row.id,
+          action,
+          entity: 'AdminUser',
+          entityId: row.id,
+          details: details ?? undefined,
+          ipAddress: meta?.ipAddress ?? null,
+        },
+      });
+    } catch (err: any) {
+      this.logger.warn(`Failed to write 2FA audit log: ${err?.message}`);
+    }
+  }
+
+  private freshPrincipal(kind: TwoFaKind, updated: any) {
+    const base = { id: updated.id, email: updated.email, role: updated.role, tokenVersion: updated.tokenVersion };
+    return kind === 'platform'
+      ? { ...base, isPlatformAdmin: true as const }
+      : { ...base, tenantId: updated.tenantId ?? null, isAdmin: true as const };
+  }
+
+  /**
+   * Step 1 of enrolment: re-authenticate, generate a NEW secret and store it
+   * encrypted as *pending* (is2FAEnabled stays false until a code confirms it).
+   */
+  async setupTwoFactor(principal: AuthPrincipal, currentPassword: unknown) {
+    const kind = this.twoFaKindOf(principal);
+    const key = this.requireTwoFaKey();
+    const row = await this.loadPrincipalForTwoFactor(kind, principal.id);
+    await this.assertPassword(row.passwordHash, currentPassword);
+    if (adminRequiresTwoFactor(row)) {
+      throw new BadRequestException('Two-factor authentication is already enabled. Disable it first to re-enrol.');
+    }
+
+    const secret = generateTotpSecret();
+    await this.twoFaDelegate(kind).update({
+      where: { id: row.id },
+      data: { twoFASecret: encryptTwoFaSecret(secret, key), is2FAEnabled: false, twoFARecoveryCodes: { set: [] } },
+    });
+
+    let issuer = this.configService.get<string>('TWO_FA_ISSUER') || 'Naro Fashion';
+    if (kind === 'platform') {
+      issuer = `${issuer} Platform`;
+    } else if (row.tenantId) {
+      try {
+        const tenant = await this.prisma.tenant.findUnique({ where: { id: row.tenantId }, select: { name: true } });
+        if (tenant?.name) issuer = tenant.name;
+      } catch {
+        // cosmetic only
+      }
+    }
+    issuer = issuer.replace(/:/g, '').trim() || 'Naro Fashion';
+
+    return { otpauthUrl: buildOtpauthUrl(issuer, row.email, secret), secret, issuer };
+  }
+
+  /**
+   * Step 2 of enrolment: confirm the pending secret with a TOTP code. Flips
+   * is2FAEnabled, stores hashed recovery codes and bumps tokenVersion (every
+   * other session dies); returns the plaintext recovery codes ONCE plus the
+   * refreshed principal so the controller can re-issue THIS session.
+   */
+  async enableTwoFactor(principal: AuthPrincipal, code: unknown, meta?: LoginMeta) {
+    const kind = this.twoFaKindOf(principal);
+    this.requireTwoFaKey();
+    const row = await this.loadPrincipalForTwoFactor(kind, principal.id);
+    if (adminRequiresTwoFactor(row)) {
+      throw new BadRequestException('Two-factor authentication is already enabled.');
+    }
+    if (!isEncryptedTwoFaSecret(row.twoFASecret)) {
+      throw new BadRequestException('Start two-factor setup first (POST /auth/2fa/setup).');
+    }
+    const secret = this.decryptOrFail(row.twoFASecret);
+    // Enrolment must prove the authenticator works — TOTP only.
+    if (!this.checkAndConsumeTotp(`${kind}:${row.id}`, secret, code)) {
+      await this.auditTwoFactor(kind, row, '2FA_ENABLE_FAILED', meta);
+      throw new BadRequestException(TWO_FA_INVALID_CODE_ERROR);
+    }
+
+    const recovery = generateRecoveryCodes();
+    const updated = await this.twoFaDelegate(kind).update({
+      where: { id: row.id },
+      data: {
+        is2FAEnabled: true,
+        twoFARecoveryCodes: { set: recovery.hashes },
+        tokenVersion: { increment: 1 },
+      },
+    });
+    await this.auditTwoFactor(kind, row, '2FA_ENABLED', meta);
+    return {
+      message: 'Two-factor authentication enabled. Other sessions have been signed out.',
+      recoveryCodes: recovery.plain,
+      principal: this.freshPrincipal(kind, updated),
+    };
+  }
+
+  /** Turn 2FA off — requires BOTH the current password and a code (TOTP or recovery). */
+  async disableTwoFactor(principal: AuthPrincipal, currentPassword: unknown, code: unknown, meta?: LoginMeta) {
+    const kind = this.twoFaKindOf(principal);
+    const row = await this.loadPrincipalForTwoFactor(kind, principal.id);
+    if (!adminRequiresTwoFactor(row)) {
+      throw new BadRequestException('Two-factor authentication is not enabled.');
+    }
+    await this.assertPassword(row.passwordHash, currentPassword);
+    const secret = this.decryptOrFail(row.twoFASecret);
+    const used = await this.checkSecondFactor(kind, row, secret, code);
+    if (!used) {
+      await this.auditTwoFactor(kind, row, '2FA_DISABLE_FAILED', meta);
+      throw new BadRequestException(TWO_FA_INVALID_CODE_ERROR);
+    }
+    if (used === 'recovery') await this.auditTwoFactor(kind, row, '2FA_RECOVERY_USED', meta, { purpose: 'disable' });
+
+    const updated = await this.twoFaDelegate(kind).update({
+      where: { id: row.id },
+      data: {
+        is2FAEnabled: false,
+        twoFASecret: null,
+        twoFARecoveryCodes: { set: [] },
+        tokenVersion: { increment: 1 },
+      },
+    });
+    this.lastTotpStep.delete(`${kind}:${row.id}`);
+    await this.auditTwoFactor(kind, row, '2FA_DISABLED', meta);
+    return {
+      message: 'Two-factor authentication disabled. Other sessions have been signed out.',
+      principal: this.freshPrincipal(kind, updated),
+    };
+  }
+
+  /** Replace all recovery codes (password + code). Returns the new plaintext set once. */
+  async regenerateRecoveryCodes(principal: AuthPrincipal, currentPassword: unknown, code: unknown, meta?: LoginMeta) {
+    const kind = this.twoFaKindOf(principal);
+    const row = await this.loadPrincipalForTwoFactor(kind, principal.id);
+    if (!adminRequiresTwoFactor(row)) {
+      throw new BadRequestException('Two-factor authentication is not enabled.');
+    }
+    await this.assertPassword(row.passwordHash, currentPassword);
+    const secret = this.decryptOrFail(row.twoFASecret);
+    const used = await this.checkSecondFactor(kind, row, secret, code);
+    if (!used) {
+      await this.auditTwoFactor(kind, row, '2FA_RECOVERY_REGENERATE_FAILED', meta);
+      throw new BadRequestException(TWO_FA_INVALID_CODE_ERROR);
+    }
+    if (used === 'recovery') await this.auditTwoFactor(kind, row, '2FA_RECOVERY_USED', meta, { purpose: 'regenerate' });
+
+    const recovery = generateRecoveryCodes();
+    await this.twoFaDelegate(kind).update({
+      where: { id: row.id },
+      data: { twoFARecoveryCodes: { set: recovery.hashes } },
+    });
+    await this.auditTwoFactor(kind, row, '2FA_RECOVERY_REGENERATED', meta);
+    return { message: 'New recovery codes generated. Previous codes no longer work.', recoveryCodes: recovery.plain };
+  }
+
+  /**
+   * Short-lived (5 min) token proving the password step succeeded. Signed
+   * with JWT_SECRET but `typ: '2fa_challenge'` — JwtStrategy / refresh /
+   * logout reject it because the explicit typ mismatches. Records the
+   * principal type in `pt` ('admin' | 'platform') but carries no tenantId /
+   * isAdmin / isPlatformAdmin claims, so tenant/module guards ignore it.
+   */
+  issueTwoFactorChallenge(row: { id: string; tokenVersion?: number | null }, kind: TwoFaKind = 'admin'): string {
+    return this.jwtService.sign(
+      {
+        sub: row.id,
+        tv: row.tokenVersion ?? 0,
+        typ: TWO_FA_CHALLENGE_TYP,
+        pt: kind,
+        jti: crypto.randomBytes(16).toString('hex'),
+      },
+      { secret: requireJwtSecret('JWT_SECRET', this.configService), expiresIn: TWO_FA_CHALLENGE_TTL as any },
+    );
+  }
+
+  /**
+   * Step 2 of login. Validates the challenge token (typ, pt, tv, single use),
+   * enforces the shared lockout counter (failed codes count like failed
+   * passwords), checks a TOTP code (replay-protected) or a one-time recovery
+   * code, and returns the principal to issue normal tokens for — an AdminUser
+   * (isAdmin) or a PlatformAdmin (isPlatformAdmin), exactly like the
+   * respective password login.
+   */
+  async verifyTwoFactorLogin(challengeToken: unknown, code: unknown, meta?: LoginMeta) {
+    if (typeof challengeToken !== 'string' || !challengeToken) {
+      throw new UnauthorizedException(TWO_FA_CHALLENGE_INVALID_ERROR);
+    }
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(challengeToken, {
+        secret: requireJwtSecret('JWT_SECRET', this.configService),
+      });
+    } catch {
+      throw new UnauthorizedException(TWO_FA_CHALLENGE_INVALID_ERROR);
+    }
+    if (
+      payload?.typ !== TWO_FA_CHALLENGE_TYP ||
+      (payload.pt !== 'admin' && payload.pt !== 'platform') ||
+      typeof payload.sub !== 'string' ||
+      typeof payload.jti !== 'string'
+    ) {
+      throw new UnauthorizedException(TWO_FA_CHALLENGE_INVALID_ERROR);
+    }
+    const kind: TwoFaKind = payload.pt;
+    this.pruneChallenges();
+    if (this.usedChallenges.has(payload.jti)) {
+      throw new UnauthorizedException(TWO_FA_CHALLENGE_INVALID_ERROR);
+    }
+
+    const delegate = this.twoFaDelegate(kind);
+    const row: TwoFaRow | null = await delegate.findUnique({ where: { id: payload.sub } });
+    if (
+      !row ||
+      !row.isActive ||
+      (kind === 'admin' && row.deletedAt) ||
+      !adminRequiresTwoFactor(row) ||
+      !isTokenVersionCurrent(payload, row.tokenVersion)
+    ) {
+      throw new UnauthorizedException(TWO_FA_CHALLENGE_INVALID_ERROR);
+    }
+    const tenantId = kind === 'admin' ? row.tenantId ?? null : null;
+
+    const now = new Date();
+    if (row.lockedUntil && row.lockedUntil > now) {
+      await this.logLoginAttempt(row.email, false, tenantId, meta);
+      throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
+    }
+
+    // Decrypt BEFORE reserving an attempt: a server-side key problem must
+    // not burn the admin's lockout budget.
+    const secret = this.decryptOrFail(row.twoFASecret);
+
+    const reserved: { failedLoginAttempts: number } = await delegate.update({
+      where: { id: row.id },
+      data: { failedLoginAttempts: { increment: 1 } },
+      select: { failedLoginAttempts: true },
+    });
+    if (reserved.failedLoginAttempts > MAX_FAILED_LOGIN_ATTEMPTS) {
+      await delegate.update({
+        where: { id: row.id },
+        data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
+      });
+      await this.logLoginAttempt(row.email, false, tenantId, meta);
+      throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
+    }
+
+    const used = await this.checkSecondFactor(kind, row, secret, code);
+    if (!used) {
+      if (reserved.failedLoginAttempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
+        await delegate.update({
+          where: { id: row.id },
+          data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
+        });
+      }
+      await this.logLoginAttempt(row.email, false, tenantId, meta);
+      await this.auditTwoFactor(kind, row, '2FA_VERIFY_FAILED', meta, { attempts: reserved.failedLoginAttempts });
+      throw new UnauthorizedException(TWO_FA_INVALID_CODE_ERROR);
+    }
+    if (used === 'recovery') {
+      const left = await delegate.findUnique({ where: { id: row.id }, select: { twoFARecoveryCodes: true } });
+      await this.auditTwoFactor(kind, row, '2FA_RECOVERY_USED', meta, {
+        purpose: 'login',
+        remaining: Array.isArray(left?.twoFARecoveryCodes) ? left.twoFARecoveryCodes.length : undefined,
+      });
+    }
+
+    this.usedChallenges.set(payload.jti, Date.now() + TWO_FA_CHALLENGE_TTL_MS);
+    await delegate.update({
+      where: { id: row.id },
+      data: { failedLoginAttempts: 0, lockedUntil: null },
+    });
+    await this.logLoginAttempt(row.email, true, tenantId, meta);
+
+    const { passwordHash: _p, ...rest } = row;
+    return kind === 'platform'
+      ? { ...rest, isPlatformAdmin: true as const }
+      : { ...rest, isAdmin: true as const };
+  }
+
+  private pruneChallenges() {
+    const now = Date.now();
+    for (const [jti, exp] of this.usedChallenges) if (exp < now) this.usedChallenges.delete(jti);
   }
 
   /**

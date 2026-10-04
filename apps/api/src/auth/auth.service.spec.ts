@@ -4,7 +4,7 @@ import {
   AuthService,
   GENERIC_LOGIN_ERROR,
   SUSPENDED_ACCOUNT_ERROR,
-  TWO_FA_UNAVAILABLE_ERROR,
+  TWO_FA_USE_NEW_ENDPOINTS_ERROR,
   isCredentialShapeValid,
   toPublicPrincipal,
 } from './auth.service';
@@ -356,13 +356,13 @@ describe('AuthService (security regressions)', () => {
     });
   });
 
-  describe('2FA is not falsely enabled', () => {
-    it('enabling returns 400', async () => {
-      await expect(service.toggle2FA({ id: 'a1', isAdmin: true }, true, 'x')).rejects.toThrow(TWO_FA_UNAVAILABLE_ERROR);
+  describe('legacy PATCH /auth/2fa toggle', () => {
+    it('enabling returns 400 pointing at the new endpoints', async () => {
+      await expect(service.toggle2FA({ id: 'a1', isAdmin: true }, true, 'x')).rejects.toThrow(TWO_FA_USE_NEW_ENDPOINTS_ERROR);
       expect(prisma.adminUser.update).not.toHaveBeenCalled();
     });
 
-    it('disabling requires the current password', async () => {
+    it('clearing a stale legacy flag requires the current password', async () => {
       prisma.adminUser.findUnique.mockResolvedValue({ id: 'a1', passwordHash: hash });
       await expect(service.toggle2FA({ id: 'a1', isAdmin: true }, false, 'wrong')).rejects.toBeInstanceOf(UnauthorizedException);
       prisma.adminUser.update.mockResolvedValue({ id: 'a1', is2FAEnabled: false });

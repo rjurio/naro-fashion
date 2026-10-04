@@ -7,8 +7,7 @@ import Button from '@/components/ui/Button';
 import { useAuth } from '@/contexts/AuthContext';
 import adminApi from '@/lib/api';
 import { validatePassword, PASSWORD_HINT, PASSWORD_MAX_LENGTH } from '@/lib/password-policy';
-
-const TWO_FA_UNAVAILABLE_MSG = 'Two-factor authentication is not available yet.';
+import TwoFactorSettings from '@/components/auth/TwoFactorSettings';
 
 export default function AdminSettingsPage() {
   const { user, refreshUser } = useAuth();
@@ -25,13 +24,9 @@ export default function AdminSettingsPage() {
   });
   const [showPasswords, setShowPasswords] = useState(false);
 
+  // Effective TOTP state from /auth/me (flag + real enrolment).
   const [twoFA, setTwoFA] = useState(false);
-  const [twoFASaving, setTwoFASaving] = useState(false);
-  // Server message once the API reports 2FA as not available.
-  const [twoFAUnavailable, setTwoFAUnavailable] = useState<string | null>(null);
-  // Inline "confirm with current password" step for disabling 2FA.
-  const [twoFADisabling, setTwoFADisabling] = useState(false);
-  const [twoFADisablePassword, setTwoFADisablePassword] = useState('');
+  const [twoFARemaining, setTwoFARemaining] = useState<number | undefined>(undefined);
   const [selectedTheme, setSelectedTheme] = useState<string>('light');
 
   // Session timing — backed by SiteSetting keys auth_access_token_expires
@@ -81,6 +76,7 @@ export default function AdminSettingsPage() {
       try {
         const profile: any = await adminApi.get('/auth/me');
         if (profile.is2FAEnabled !== undefined) setTwoFA(profile.is2FAEnabled);
+        if (typeof profile.twoFARecoveryCodesRemaining === 'number') setTwoFARemaining(profile.twoFARecoveryCodesRemaining);
       } catch {}
     };
     if (user) loadSettings();
@@ -133,40 +129,6 @@ export default function AdminSettingsPage() {
       showMsg(msg, 'error');
     } finally {
       setSaving(false);
-    }
-  };
-
-  // Enabling 2FA always returns 400 "not available yet" until a real second
-  // factor ships, so the toggle is only actionable for turning it OFF (legacy
-  // rows with is2FAEnabled=true), which requires the current password.
-  const handleToggle2FA = (enabled: boolean) => {
-    if (twoFASaving) return;
-    if (enabled) {
-      showMsg(TWO_FA_UNAVAILABLE_MSG, 'error');
-      return;
-    }
-    setTwoFADisablePassword('');
-    setTwoFADisabling(true);
-  };
-
-  const confirmDisable2FA = async () => {
-    if (!twoFADisablePassword) {
-      showMsg('Enter your current password to disable two-factor authentication.', 'error');
-      return;
-    }
-    setTwoFASaving(true);
-    try {
-      await adminApi.toggle2FA(false, twoFADisablePassword);
-      setTwoFA(false);
-      setTwoFADisabling(false);
-      setTwoFADisablePassword('');
-      showMsg('Two-factor authentication disabled.', 'success');
-    } catch (err: any) {
-      const msg: string = err?.message || '';
-      if (err?.status === 400 && /not available/i.test(msg)) setTwoFAUnavailable(msg);
-      showMsg(msg || 'Failed to update 2FA setting.', 'error');
-    } finally {
-      setTwoFASaving(false);
     }
   };
 
@@ -349,46 +311,13 @@ export default function AdminSettingsPage() {
           <h2 className="font-semibold text-[hsl(var(--foreground))]">Security</h2>
         </div>
         <div className="p-4 sm:p-5 md:p-6 space-y-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-[hsl(var(--foreground))]">Two-Factor Authentication</p>
-              <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">
-                {twoFA
-                  ? 'Enabled on this account. You can turn it off (requires your current password).'
-                  : (twoFAUnavailable || `${TWO_FA_UNAVAILABLE_MSG} It will appear here once supported.`)}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              {twoFASaving && <Loader2 className="w-4 h-4 animate-spin text-brand-gold" />}
-              {/* Only actionable when ON (to disable) — enabling isn't offered by the API yet. */}
-              <Toggle checked={twoFA} onChange={handleToggle2FA} disabled={!twoFA || twoFASaving || twoFADisabling} />
-            </div>
-          </div>
-          {twoFADisabling && (
-            <div className="flex flex-col sm:flex-row sm:items-end gap-2 rounded-lg border border-[hsl(var(--border))] p-3">
-              <div className="flex-1">
-                <label className="block text-xs font-medium text-[hsl(var(--foreground))] mb-1">Current password</label>
-                <input
-                  type="password"
-                  autoFocus
-                  value={twoFADisablePassword}
-                  onChange={(e) => setTwoFADisablePassword(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') confirmDisable2FA(); }}
-                  maxLength={PASSWORD_MAX_LENGTH}
-                  className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold"
-                />
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => { setTwoFADisabling(false); setTwoFADisablePassword(''); }} disabled={twoFASaving}>
-                  Cancel
-                </Button>
-                <Button onClick={confirmDisable2FA} disabled={twoFASaving}>
-                  {twoFASaving && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Disable 2FA
-                </Button>
-              </div>
-            </div>
-          )}
+          <TwoFactorSettings
+            enabled={twoFA}
+            recoveryCodesRemaining={twoFARemaining}
+            accountEmail={user.email}
+            onEnabledChange={setTwoFA}
+            onMessage={showMsg}
+          />
 
           {/* Session Timing — adjustable JWT expiration */}
           <div className="pt-4 border-t border-[hsl(var(--border))] space-y-4">

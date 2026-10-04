@@ -13,6 +13,40 @@ export class ApiError extends Error {
   }
 }
 
+// ===== Order refunds (POST/GET /orders/:id/refunds) =====
+export type OrderRefundMethod = 'MOBILE_MONEY' | 'BANK_TRANSFER' | 'CASH' | 'GATEWAY';
+
+export interface CreateOrderRefundInput {
+  amount: number;
+  method: OrderRefundMethod;
+  reference?: string;
+  note?: string;
+}
+
+export interface OrderRefundRow {
+  id: string;
+  amount: number;
+  method: string;
+  reference: string | null;
+  providerCode: string | null;
+  note: string | null;
+  refundedBy: string | null;
+  refundedByName: string | null;
+  kind: string | null;
+  createdAt: string;
+}
+
+export interface OrderRefundSummary {
+  orderId: string;
+  orderNumber: string;
+  paymentStatus: string;
+  totalCollected: number;
+  totalRefunded: number;
+  refundable: number;
+  canRefund: boolean;
+  refunds: OrderRefundRow[];
+}
+
 // ============================================================
 // Token storage helpers — the single source of truth for where the
 // admin SPA keeps its JWTs. "Remember me" → localStorage, otherwise
@@ -84,6 +118,7 @@ type RefreshResult =
 const NO_REFRESH_ENDPOINTS = new Set([
   '/auth/login',
   '/auth/platform-login',
+  '/auth/2fa/verify',
   '/auth/refresh',
   // Logout is @Public on the API and identifies the principal from the
   // (possibly expired) access token OR the refresh token in the body, so a
@@ -292,8 +327,65 @@ class AdminApiClient {
   }
 
   // ===== Auth =====
+  /**
+   * Password step. Returns tokens, OR `{ requires2FA: true, challengeToken }`
+   * when the admin has TOTP enabled — then call verify2FA().
+   */
   login(email: string, password: string) {
     return this.post<any>('/auth/login', { email, password });
+  }
+
+  /**
+   * Login step 2 for admins / platform admins with TOTP: exchanges the challenge
+   * + a 6-digit code OR a recovery code for normal login tokens.
+   */
+  verify2FA(challengeToken: string, code: string) {
+    return this.post<{ message: string; accessToken: string; refreshToken?: string; user: any }>(
+      '/auth/2fa/verify',
+      { challengeToken, code },
+    );
+  }
+
+  /** Persist a fresh token pair the API issued after a tokenVersion bump, into the storage holding the session. */
+  private persistFreshTokens(res: { accessToken?: string; refreshToken?: string } | null | undefined) {
+    if (!res?.accessToken) return;
+    const remember = !!safeStorage('local')?.getItem(ACCESS_TOKEN_KEY) || !!safeStorage('local')?.getItem(REFRESH_TOKEN_KEY);
+    storeAuthTokens(res.accessToken, res.refreshToken || getRefreshToken(), remember);
+    this.token = res.accessToken;
+  }
+
+  /** TOTP enrolment step 1 (re-auth with password) → secret + otpauth:// URI. Nothing is enabled yet. */
+  setup2FA(currentPassword: string) {
+    return this.post<{ otpauthUrl: string; secret: string; issuer: string }>('/auth/2fa/setup', { currentPassword });
+  }
+
+  /**
+   * TOTP enrolment step 2. The API bumps tokenVersion (other sessions are
+   * signed out) and returns fresh tokens for this session — persisted here —
+   * plus 10 one-time recovery codes (show them once).
+   */
+  async enable2FA(code: string) {
+    const res = await this.post<{ message: string; is2FAEnabled: boolean; recoveryCodes: string[]; accessToken?: string; refreshToken?: string }>(
+      '/auth/2fa/enable',
+      { code },
+    );
+    this.persistFreshTokens(res);
+    return res;
+  }
+
+  /** Replace all recovery codes (password + TOTP/recovery code). Returns the new plaintext set — show it once. */
+  regenerateRecoveryCodes(currentPassword: string, code: string) {
+    return this.post<{ message: string; recoveryCodes: string[] }>('/auth/2fa/recovery-codes/regenerate', { currentPassword, code });
+  }
+
+  /** Turn TOTP off (password + current code). Fresh tokens are returned and persisted, like enable2FA. */
+  async disable2FA(currentPassword: string, code: string) {
+    const res = await this.post<{ message: string; is2FAEnabled: boolean; accessToken?: string; refreshToken?: string }>(
+      '/auth/2fa/disable',
+      { currentPassword, code },
+    );
+    this.persistFreshTokens(res);
+    return res;
   }
 
   getProfile() {
@@ -320,15 +412,14 @@ class AdminApiClient {
       '/auth/change-password',
       { currentPassword, newPassword },
     );
-    if (res?.accessToken) {
-      const remember = !!safeStorage('local')?.getItem(ACCESS_TOKEN_KEY) || !!safeStorage('local')?.getItem(REFRESH_TOKEN_KEY);
-      storeAuthTokens(res.accessToken, res.refreshToken || getRefreshToken(), remember);
-      this.token = res.accessToken;
-    }
+    this.persistFreshTokens(res);
     return res;
   }
 
-  /** Toggle own 2FA. Enabling currently always 400s ("not available yet"); disabling needs the current password. */
+  /**
+   * Legacy toggle. Only useful to clear a stale `is2FAEnabled` flag that has
+   * no real enrolment behind it; use setup2FA/enable2FA/disable2FA otherwise.
+   */
   toggle2FA(enabled: boolean, currentPassword?: string) {
     return this.patch<any>('/auth/2fa', currentPassword ? { enabled, currentPassword } : { enabled });
   }
@@ -498,6 +589,14 @@ class AdminApiClient {
   }
   getOrderStats() {
     return this.get<any>('/orders/stats');
+  }
+  /** Refund history + balances (`orders:refund`). */
+  getOrderRefunds(orderId: string) {
+    return this.get<OrderRefundSummary>(`/orders/${orderId}/refunds`);
+  }
+  /** Record (or, for GATEWAY, execute) a refund on an online order (`orders:refund`). */
+  createOrderRefund(orderId: string, data: CreateOrderRefundInput) {
+    return this.post<any>(`/orders/${orderId}/refunds`, data);
   }
   getRecentOrders() {
     // No `sort` param: AdminQueryOrdersDto doesn't declare one (forbidNonWhitelisted

@@ -69,6 +69,51 @@ export class Toggle2FADto {
   currentPassword: string;
 }
 
+/** `POST /auth/2fa/setup` — re-authenticate before generating a new secret. */
+export class TwoFASetupDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(256)
+  currentPassword: string;
+}
+
+/** `POST /auth/2fa/enable` — confirm the pending secret with a code from the app. */
+export class TwoFAEnableDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(16)
+  code: string;
+}
+
+/** `POST /auth/2fa/disable` — needs BOTH the password and a current code. */
+export class TwoFADisableDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(256)
+  currentPassword: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(16)
+  code: string;
+}
+
+/** `POST /auth/2fa/recovery-codes/regenerate` — same proof as disable. */
+export class TwoFARegenerateRecoveryDto extends TwoFADisableDto {}
+
+/** `POST /auth/2fa/verify` — second login step (public). `code` = 6-digit TOTP or a recovery code. */
+export class TwoFAVerifyDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(4096)
+  challengeToken: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(16)
+  code: string;
+}
+
 export class UpdateMeDto {
   @IsOptional()
   @IsString()

@@ -23,6 +23,14 @@ describe('JwtStrategy.validate', () => {
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
   });
 
+  it('rejects a 2FA challenge token used as an access token (typ confusion)', async () => {
+    await expect(
+      strategy.validate({ sub: 'a1', email: undefined as any, typ: '2fa_challenge', tv: 0 }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.adminUser.findUnique).not.toHaveBeenCalled();
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+  });
+
   it('accepts a current customer token and strips internal fields', async () => {
     prisma.user.findUnique.mockResolvedValue(customer);
     const res: any = await strategy.validate({ sub: 'u1', email: 'c', typ: 'access', tv: 0, tenantId: 't1' });

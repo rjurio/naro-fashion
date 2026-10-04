@@ -57,8 +57,15 @@ export function requireJwtSecret(
   return ephemeralCache[name];
 }
 
-/** JWT `typ` claim values — a token used for the wrong purpose is rejected. */
-export type JwtTokenType = 'access' | 'refresh';
+/**
+ * JWT `typ` claim values — a token used for the wrong purpose is rejected.
+ * `2fa_challenge` is the short-lived token issued after a correct password
+ * when the admin has TOTP enabled; it is ONLY accepted by POST /auth/2fa/verify
+ * (strict match there) and is rejected as an access/refresh token because
+ * its explicit typ mismatches.
+ */
+export type JwtTokenType = 'access' | 'refresh' | '2fa_challenge';
+export const TWO_FA_CHALLENGE_TYP = '2fa_challenge' as const;
 
 /**
  * True when a payload's `typ` claim is compatible with the expected use.

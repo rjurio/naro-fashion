@@ -22,6 +22,7 @@ const ALWAYS_ALLOWED_PATHS = new Set([
   '/api/v1/health',
   '/api/v1/auth/login',
   '/api/v1/auth/platform-login',
+  '/api/v1/auth/2fa/verify', // login step 2 — same treatment as /auth/login
   '/api/v1/auth/forgot-password',
   '/api/v1/auth/reset-password',
   '/api/v1/auth/refresh',

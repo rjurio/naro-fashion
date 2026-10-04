@@ -3,22 +3,30 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import TwoFactorLoginStep from '@/components/auth/TwoFactorLoginStep';
 
 export default function PlatformLoginPage() {
   const router = useRouter();
-  const { platformLogin } = useAuth();
+  const { platformLogin, verify2FA } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // Second step when the platform admin has TOTP enabled
+  const [challengeToken, setChallengeToken] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
-      await platformLogin(email, password, rememberMe);
+      const outcome = await platformLogin(email, password, rememberMe);
+      if (outcome.requires2FA) {
+        setChallengeToken(outcome.challengeToken);
+        setPassword('');
+        return;
+      }
       router.push('/platform');
     } catch (err: any) {
       setError(err.message || 'Invalid credentials');
@@ -32,9 +40,24 @@ export default function PlatformLoginPage() {
       <div className="bg-gray-800 rounded-lg shadow-xl p-8 w-full max-w-md">
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold text-white">Platform Admin</h1>
-          <p className="text-gray-400 mt-2">Sign in to manage tenants</p>
+          <p className="text-gray-400 mt-2">
+            {challengeToken ? 'Enter the code from your authenticator app' : 'Sign in to manage tenants'}
+          </p>
         </div>
 
+        {challengeToken ? (
+          <TwoFactorLoginStep
+            variant="platform"
+            onVerify={async (code) => {
+              await verify2FA(challengeToken, code, rememberMe);
+              router.push('/platform');
+            }}
+            onBack={() => {
+              setChallengeToken(null);
+              setError('');
+            }}
+          />
+        ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (
             <div className="bg-red-500/10 border border-red-500 text-red-400 px-4 py-3 rounded">
@@ -77,11 +100,12 @@ export default function PlatformLoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white rounded font-medium transition-colors"
+            className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:cursor-not-allowed text-white rounded font-medium transition-colors"
           >
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
+        )}
       </div>
     </div>
   );

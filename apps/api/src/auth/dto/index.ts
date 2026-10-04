@@ -7,6 +7,11 @@ export {
   ResetPasswordDto,
   ChangePasswordDto,
   Toggle2FADto,
+  TwoFASetupDto,
+  TwoFAEnableDto,
+  TwoFADisableDto,
+  TwoFAVerifyDto,
+  TwoFARegenerateRecoveryDto,
   UpdateMeDto,
   DeleteAccountDto,
 } from './auth-requests.dto';

@@ -16,6 +16,7 @@ import { Request, Response } from 'express';
 import {
   AuthService,
   GENERIC_LOGIN_ERROR,
+  adminRequiresTwoFactor,
   parseDurationMs,
   toPublicPrincipal,
 } from './auth.service';
@@ -27,10 +28,16 @@ import {
   ResetPasswordDto,
   ChangePasswordDto,
   Toggle2FADto,
+  TwoFASetupDto,
+  TwoFAEnableDto,
+  TwoFADisableDto,
+  TwoFAVerifyDto,
+  TwoFARegenerateRecoveryDto,
   UpdateMeDto,
 } from './dto';
 import { LocalAuthGuard } from './guards/local-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { AdminGuard } from './guards/admin.guard';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 
@@ -107,7 +114,20 @@ export class AuthController {
       isPlatformAdmin?: boolean;
       role?: string;
       tokenVersion?: number;
+      is2FAEnabled?: boolean;
+      twoFASecret?: string | null;
     };
+
+    // Admin with TOTP enrolled: password was correct, but no tokens / cookies
+    // until POST /auth/2fa/verify succeeds.
+    if (user.isAdmin && adminRequiresTwoFactor(user)) {
+      return {
+        message: 'Two-factor authentication required',
+        requires2FA: true,
+        challengeToken: this.authService.issueTwoFactorChallenge(user, 'admin'),
+      };
+    }
+
     const tokens = await this.authService.generateTokens(user);
     setAuthCookies(res, tokens);
 
@@ -182,6 +202,15 @@ export class AuthController {
     if (!admin) {
       throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
     }
+    // Platform admin with TOTP enrolled → second step via POST /auth/2fa/verify,
+    // which then issues platform tokens exactly like this endpoint.
+    if (adminRequiresTwoFactor(admin)) {
+      return {
+        message: 'Two-factor authentication required',
+        requires2FA: true,
+        challengeToken: this.authService.issueTwoFactorChallenge(admin, 'platform'),
+      };
+    }
     const tokens = await this.authService.generateTokens(admin);
     setAuthCookies(res, tokens);
 
@@ -232,6 +261,11 @@ export class AuthController {
     };
   }
 
+  /**
+   * Legacy toggle — kept for backward compatibility. Enabling (and
+   * disabling a real enrolment) returns 400 pointing at the endpoints below;
+   * only clearing a stale legacy flag still works here.
+   */
   @UseGuards(JwtAuthGuard)
   @Patch('2fa')
   async toggle2FA(
@@ -239,6 +273,104 @@ export class AuthController {
     @Body() data: Toggle2FADto,
   ) {
     return this.authService.toggle2FA(user, data.enabled, data.currentPassword);
+  }
+
+  /** TOTP enrolment step 1 → `{ otpauthUrl, secret, issuer }` (pending until /enable). */
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Throttle({ default: { limit: 5, ttl: ONE_MINUTE_MS } })
+  @Post('2fa/setup')
+  @HttpCode(HttpStatus.OK)
+  setup2FA(
+    @CurrentUser() user: { id: string; isAdmin?: boolean; isPlatformAdmin?: boolean },
+    @Body() data: TwoFASetupDto,
+  ) {
+    return this.authService.setupTwoFactor(user, data.currentPassword);
+  }
+
+  /**
+   * TOTP enrolment step 2. Bumps tokenVersion (other sessions die) and
+   * returns + sets fresh tokens for THIS session.
+   */
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Throttle({ default: { limit: 5, ttl: ONE_MINUTE_MS } })
+  @Post('2fa/enable')
+  @HttpCode(HttpStatus.OK)
+  async enable2FA(
+    @CurrentUser() user: { id: string; isAdmin?: boolean; isPlatformAdmin?: boolean },
+    @Body() data: TwoFAEnableDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.enableTwoFactor(user, data.code, loginMeta(req));
+    const tokens = await this.authService.generateTokens(result.principal);
+    setAuthCookies(res, tokens);
+    return {
+      message: result.message,
+      is2FAEnabled: true,
+      // Plaintext recovery codes — returned ONCE, only hashes are stored.
+      recoveryCodes: result.recoveryCodes,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
+  }
+
+  /** Replace all recovery codes (password + TOTP/recovery code) → `{ recoveryCodes }` shown once. */
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Throttle({ default: { limit: 5, ttl: ONE_MINUTE_MS } })
+  @Post('2fa/recovery-codes/regenerate')
+  @HttpCode(HttpStatus.OK)
+  regenerateRecoveryCodes(
+    @CurrentUser() user: { id: string; isAdmin?: boolean; isPlatformAdmin?: boolean },
+    @Body() data: TwoFARegenerateRecoveryDto,
+    @Req() req: Request,
+  ) {
+    return this.authService.regenerateRecoveryCodes(user, data.currentPassword, data.code, loginMeta(req));
+  }
+
+  /** Turn TOTP off — password + current code. Bumps tokenVersion; returns fresh tokens. */
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Throttle({ default: { limit: 5, ttl: ONE_MINUTE_MS } })
+  @Post('2fa/disable')
+  @HttpCode(HttpStatus.OK)
+  async disable2FA(
+    @CurrentUser() user: { id: string; isAdmin?: boolean; isPlatformAdmin?: boolean },
+    @Body() data: TwoFADisableDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.disableTwoFactor(user, data.currentPassword, data.code, loginMeta(req));
+    const tokens = await this.authService.generateTokens(result.principal);
+    setAuthCookies(res, tokens);
+    return {
+      message: result.message,
+      is2FAEnabled: false,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
+  }
+
+  /**
+   * Login step 2 (public): `{ challengeToken, code }` from `POST /auth/login`'s
+   * `{ requires2FA, challengeToken }` response → same response as a normal login.
+   */
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: ONE_MINUTE_MS } })
+  @Post('2fa/verify')
+  @HttpCode(HttpStatus.OK)
+  async verify2FA(
+    @Body() data: TwoFAVerifyDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const admin = await this.authService.verifyTwoFactorLogin(data.challengeToken, data.code, loginMeta(req));
+    const tokens = await this.authService.generateTokens(admin);
+    setAuthCookies(res, tokens);
+    return {
+      message: 'Login successful',
+      user: toPublicPrincipal(admin),
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
   }
 
   @Public()
