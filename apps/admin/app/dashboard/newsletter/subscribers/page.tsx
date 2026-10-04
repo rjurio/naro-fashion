@@ -56,9 +56,6 @@ export default function SubscribersPage() {
   const limit = 15;
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     const fetchStats = async () => {
       try {
         const data = await adminApi.getSubscriberStats();

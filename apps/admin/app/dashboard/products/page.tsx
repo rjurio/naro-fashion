@@ -23,6 +23,8 @@ import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import BarcodeModal from '@/components/products/BarcodeModal';
 import ImportProductsModal from '@/components/products/ImportProductsModal';
+import ServerPager from '@/components/ui/ServerPager';
+import { ADMIN_PAGE_SIZE, normalizePaginated } from '@/lib/pagination';
 
 interface Product {
   id: string;
@@ -64,6 +66,12 @@ export default function ProductsPage() {
   const [barcodeProduct, setBarcodeProduct] = useState<Product | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
+  // Server-side pagination
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [fetching, setFetching] = useState(false);
 
   const handleDownloadTemplate = () => {
     const headers = [
@@ -137,20 +145,34 @@ export default function ProductsPage() {
     toast('Template downloaded — fill it in, then use Import CSV', 'success');
   };
 
-  const fetchProducts = useCallback(async () => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
+  // Debounce the search box; any new search resets to page 1.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(searchQuery.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
 
+  const fetchProducts = useCallback(async () => {
+    setFetching(true);
     try {
-      const res = await adminApi.getProducts();
-      const data = Array.isArray(res) ? res : res?.data || res?.products || [];
-      setProducts(data);
+      const params: Record<string, string> = { page: String(page), limit: String(ADMIN_PAGE_SIZE) };
+      if (debouncedSearch) params.search = debouncedSearch;
+      const res = await adminApi.getProducts(params);
+      const result = normalizePaginated<Product>(res, page, ADMIN_PAGE_SIZE, ['data', 'products', 'items']);
+      setProducts(result.items);
+      setTotal(result.total);
+      setTotalPages(result.totalPages);
     } catch {
       setProducts([]);
+      setTotal(0);
+      setTotalPages(1);
     } finally {
       setLoading(false);
+      setFetching(false);
     }
-  }, []);
+  }, [page, debouncedSearch]);
 
   useEffect(() => {
     fetchProducts();
@@ -168,10 +190,12 @@ export default function ProductsPage() {
     setDeleting(id);
     try {
       await adminApi.deleteProduct(id);
-      setProducts((prev) => prev.filter((p) => p.id !== id));
       toast('Product deleted', 'success');
-    } catch {
-      toast('Failed to delete product', 'error');
+      // Refetch so the current page back-fills from the next one.
+      if (products.length === 1 && page > 1) setPage(page - 1);
+      else fetchProducts();
+    } catch (err: any) {
+      toast(err?.message || 'Failed to delete product', 'error');
     } finally {
       setDeleting(null);
     }
@@ -183,16 +207,12 @@ export default function ProductsPage() {
       const updated = await adminApi.toggleProduct(id);
       setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, ...updated, isActive: updated.isActive } : p)));
       toast(updated.isActive ? 'Product activated' : 'Product deactivated', 'success');
-    } catch {
-      toast('Failed to toggle product', 'error');
+    } catch (err: any) {
+      toast(err?.message || 'Failed to toggle product', 'error');
     } finally {
       setTogglingId(null);
     }
   };
-
-  const filteredProducts = products.filter((p) =>
-    p.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
 
   const getImage = (item: Product) => {
     if (item.images?.[0]?.url) return item.images[0].url.startsWith('/') ? `${API_ORIGIN}${item.images[0].url}` : item.images[0].url;
@@ -335,7 +355,7 @@ export default function ProductsPage() {
         <div>
           <h1 className="text-2xl font-bold text-[hsl(var(--foreground))]">Products</h1>
           <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">
-            Manage your product inventory ({products.length} total)
+            Manage your product inventory ({total} total)
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -381,7 +401,17 @@ export default function ProductsPage() {
       </div>
 
       {/* Table */}
-      <DataTable columns={columns} data={filteredProducts} pageSize={10} />
+      {/* Server already paginates — DataTable shows the whole page as-is. */}
+      <DataTable columns={columns} data={products} pageSize={ADMIN_PAGE_SIZE} pageSizeOptions={[ADMIN_PAGE_SIZE]} />
+      <ServerPager
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        pageSize={ADMIN_PAGE_SIZE}
+        onPageChange={setPage}
+        loading={fetching}
+        itemLabel="products"
+      />
 
       {/* Barcode Modal */}
       {barcodeProduct && (

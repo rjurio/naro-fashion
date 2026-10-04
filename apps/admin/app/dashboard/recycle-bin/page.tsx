@@ -78,9 +78,6 @@ export default function RecycleBinPage() {
   });
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     // Fetch counts for all tabs
     const fetchCounts = async () => {
       const results = await Promise.allSettled(

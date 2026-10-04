@@ -4,7 +4,7 @@ interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
 }
 
-class ApiError extends Error {
+export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
     super(message);
@@ -13,12 +13,93 @@ class ApiError extends Error {
   }
 }
 
+// ============================================================
+// Token storage helpers — the single source of truth for where the
+// admin SPA keeps its JWTs. "Remember me" → localStorage, otherwise
+// sessionStorage. Every caller (pages, components, the API client)
+// must go through these instead of touching storage directly.
+// ============================================================
+
+const ACCESS_TOKEN_KEY = 'token';
+const REFRESH_TOKEN_KEY = 'refreshToken';
+
+function safeStorage(kind: 'local' | 'session'): Storage | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return kind === 'local' ? window.localStorage : window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Current access token from localStorage (remember-me) or sessionStorage. */
+export function getAuthToken(): string | null {
+  return safeStorage('local')?.getItem(ACCESS_TOKEN_KEY) || safeStorage('session')?.getItem(ACCESS_TOKEN_KEY) || null;
+}
+
+/** Current refresh token from localStorage (remember-me) or sessionStorage. */
+export function getRefreshToken(): string | null {
+  return safeStorage('local')?.getItem(REFRESH_TOKEN_KEY) || safeStorage('session')?.getItem(REFRESH_TOKEN_KEY) || null;
+}
+
+/** Persist a token pair. `remember` picks localStorage vs sessionStorage; the other store is cleared. */
+export function storeAuthTokens(accessToken: string, refreshToken: string | undefined | null, remember: boolean) {
+  const target = safeStorage(remember ? 'local' : 'session');
+  const other = safeStorage(remember ? 'session' : 'local');
+  other?.removeItem(ACCESS_TOKEN_KEY);
+  other?.removeItem(REFRESH_TOKEN_KEY);
+  target?.setItem(ACCESS_TOKEN_KEY, accessToken);
+  if (refreshToken) target?.setItem(REFRESH_TOKEN_KEY, refreshToken);
+  else target?.removeItem(REFRESH_TOKEN_KEY);
+}
+
+/** Remove access + refresh tokens from BOTH storages. */
+export function clearAuthTokens() {
+  for (const s of [safeStorage('local'), safeStorage('session')]) {
+    s?.removeItem(ACCESS_TOKEN_KEY);
+    s?.removeItem(REFRESH_TOKEN_KEY);
+  }
+}
+
+/** Event fired on `window` whenever the API answers 403 (RBAC / module gate). */
+export const API_FORBIDDEN_EVENT = 'naro:api-forbidden';
+
+/** Turn the API's 403 message into something an operator understands. */
+function friendlyForbiddenMessage(raw: string): string {
+  const missing = /^Missing required permission:\s*(.+)$/i.exec(raw);
+  if (missing) return `You don't have permission to perform this action (requires ${missing[1]}).`;
+  if (!raw || /^(Forbidden( resource)?|API Error: 403.*)$/i.test(raw)) {
+    return "You don't have permission to perform this action.";
+  }
+  return raw;
+}
+
+type RefreshResult =
+  | { token: string }
+  // 'rejected'  → the API definitively refused the refresh token (or there is none)
+  // 'transient' → network failure / 5xx; tokens may still be valid, keep them
+  | { token: null; reason: 'rejected' | 'transient' };
+
+/** Auth endpoints that must never trigger a refresh-and-retry (would loop or make no sense). */
+const NO_REFRESH_ENDPOINTS = new Set([
+  '/auth/login',
+  '/auth/platform-login',
+  '/auth/refresh',
+  // Logout is @Public on the API and identifies the principal from the
+  // (possibly expired) access token OR the refresh token in the body, so a
+  // refresh round-trip first would be pointless.
+  '/auth/logout',
+  '/auth/forgot-password',
+  '/auth/reset-password',
+]);
+
 class AdminApiClient {
   private baseUrl: string;
+  // In-memory fallback only. Storage is the source of truth (see getAuthToken).
   private token: string | null = null;
   // Single in-flight refresh promise — multiple parallel 401s share it so we
   // never trigger more than one /auth/refresh round-trip at a time.
-  private refreshPromise: Promise<string | null> | null = null;
+  private refreshPromise: Promise<RefreshResult> | null = null;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
@@ -28,11 +109,20 @@ class AdminApiClient {
     let message = `API Error: ${response.status} ${response.statusText}`;
     try {
       const body = await response.json();
-      if (body.message) {
+      if (body?.message) {
         message = Array.isArray(body.message) ? body.message.join(', ') : body.message;
+      } else if (body?.error?.message) {
+        // AI envelope shape: { success:false, error:{ code, message } }
+        message = body.error.message;
       }
     } catch {
       // Response body isn't JSON, use default message
+    }
+    if (response.status === 403) {
+      message = friendlyForbiddenMessage(message);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(API_FORBIDDEN_EVENT, { detail: { message } }));
+      }
     }
     throw new ApiError(response.status, message);
   }
@@ -49,6 +139,7 @@ class AdminApiClient {
     const url = new URL(`${this.baseUrl}${endpoint}`);
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
+        if (value === undefined || value === null) return;
         url.searchParams.append(key, value);
       });
     }
@@ -56,58 +147,40 @@ class AdminApiClient {
   }
 
   private getStoredToken(): string | null {
-    return this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-  }
-
-  private getStoredRefreshToken(): string | null {
-    return typeof window !== 'undefined' ? (localStorage.getItem('refreshToken') || sessionStorage.getItem('refreshToken')) : null;
-  }
-
-  private getHeaders(): HeadersInit {
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-    };
-    const token = this.getStoredToken();
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-    return headers;
+    return getAuthToken() || this.token;
   }
 
   /**
-   * Try to exchange the stored refreshToken for a new access token.
-   * Returns the new access token on success, or null if refresh failed
-   * (in which case the caller should treat the request as truly unauthorized).
+   * Exchange the stored refreshToken for a new access token.
    * Concurrent calls share a single in-flight promise.
    */
-  private async tryRefreshToken(): Promise<string | null> {
+  private async tryRefreshToken(): Promise<RefreshResult> {
     if (this.refreshPromise) return this.refreshPromise;
-    const refreshToken = this.getStoredRefreshToken();
-    if (!refreshToken) return null;
+    const refreshToken = getRefreshToken();
+    if (!refreshToken) return { token: null, reason: 'rejected' };
 
-    this.refreshPromise = (async () => {
+    this.refreshPromise = (async (): Promise<RefreshResult> => {
       try {
         const res = await fetch(this.buildUrl('/auth/refresh'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refreshToken }),
         });
-        if (!res.ok) return null;
-        const data = await res.json();
-        const newAccess = data?.accessToken;
-        const newRefresh = data?.refreshToken;
-        if (!newAccess) return null;
-        // Persist to whichever storage held the previous tokens
-        const inLocal = typeof window !== 'undefined' && !!localStorage.getItem('token');
-        const store = typeof window !== 'undefined' ? (inLocal ? localStorage : sessionStorage) : null;
-        if (store) {
-          store.setItem('token', newAccess);
-          if (newRefresh) store.setItem('refreshToken', newRefresh);
+        if (!res.ok) {
+          const transient = res.status >= 500 || res.status === 408 || res.status === 429;
+          return { token: null, reason: transient ? 'transient' : 'rejected' };
         }
+        const data = await res.json();
+        const newAccess: string | undefined = data?.accessToken;
+        const newRefresh: string | undefined = data?.refreshToken;
+        if (!newAccess) return { token: null, reason: 'rejected' };
+        // Persist to whichever storage held the previous tokens
+        const remember = !!safeStorage('local')?.getItem(REFRESH_TOKEN_KEY) || !!safeStorage('local')?.getItem(ACCESS_TOKEN_KEY);
+        storeAuthTokens(newAccess, newRefresh || refreshToken, remember);
         this.token = newAccess;
-        return newAccess;
+        return { token: newAccess };
       } catch {
-        return null;
+        return { token: null, reason: 'transient' };
       } finally {
         this.refreshPromise = null;
       }
@@ -116,47 +189,86 @@ class AdminApiClient {
   }
 
   /**
-   * Centralized fetch wrapper with automatic refresh-on-401.
-   * If the first attempt returns 401, it tries to refresh the access token
-   * and replays the request once with the new token. If refresh fails,
-   * clears stored auth and throws — UI layer should redirect to login.
+   * fetch() with the bearer token injected and automatic refresh-on-401.
+   * On a 401 it performs the shared single-flight refresh and replays the
+   * request once. Stored tokens are purged ONLY when the refresh is
+   * definitively rejected — network errors / 5xx keep them so a flaky
+   * connection doesn't log the operator out.
+   *
+   * Use this for every raw request (multipart uploads, blob downloads) so
+   * they get the same refresh behaviour as JSON calls.
    */
-  private async request<T>(method: string, endpoint: string, data?: unknown, options?: RequestOptions): Promise<T> {
-    const { params, ...fetchOptions } = options || {};
-    const url = this.buildUrl(endpoint, params);
-    const body = data !== undefined ? JSON.stringify(data) : undefined;
+  async authorizedFetch(url: string, init: RequestInit = {}, opts: { skipRefresh?: boolean } = {}): Promise<Response> {
+    let usedToken: string | null = null;
+    const doFetch = () => {
+      const headers = new Headers(init.headers);
+      usedToken = this.getStoredToken();
+      if (usedToken) headers.set('Authorization', `Bearer ${usedToken}`);
+      return fetch(url, { ...init, headers });
+    };
 
-    let response = await fetch(url, {
-      method,
-      headers: this.getHeaders(),
-      body,
-      ...fetchOptions,
-    });
-
-    // Try one refresh + replay on 401 (skip when calling /auth/* to avoid loops)
-    if (response.status === 401 && !endpoint.startsWith('/auth/')) {
-      const newToken = await this.tryRefreshToken();
-      if (newToken) {
-        response = await fetch(url, {
-          method,
-          headers: this.getHeaders(),
-          body,
-          ...fetchOptions,
-        });
-      } else if (typeof window !== 'undefined') {
-        // Refresh failed — purge stale auth so the next page load redirects to login
-        localStorage.removeItem('token');
-        localStorage.removeItem('refreshToken');
-        sessionStorage.removeItem('token');
-        sessionStorage.removeItem('refreshToken');
+    let response = await doFetch();
+    if (response.status === 401 && !opts.skipRefresh) {
+      // A parallel request may already have refreshed while this one was in
+      // flight — just replay with the newer token instead of refreshing again.
+      const current = this.getStoredToken();
+      if (current && current !== usedToken) {
+        response = await doFetch();
+        if (response.status !== 401) return response;
+      }
+      const result = await this.tryRefreshToken();
+      if (result.token !== null) {
+        response = await doFetch();
+      } else if ('reason' in result && result.reason === 'rejected') {
+        clearAuthTokens();
         this.token = null;
+      } else {
+        // Refresh couldn't reach the server (network / 5xx). The 401 is not
+        // definitive — surface it as a transient error so callers (notably
+        // AuthContext on page load) keep the stored tokens.
+        throw new ApiError(503, "Couldn't reach the server to renew your session. Check your connection and try again.");
       }
     }
+    return response;
+  }
+
+  /** authorizedFetch + JSON error handling for multipart uploads. */
+  private async uploadMultipart<T>(endpoint: string, file: File, fallbackError = 'Upload failed'): Promise<T> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await this.authorizedFetch(`${this.baseUrl}${endpoint}`, { method: 'POST', body: formData });
+    if (!res.ok) {
+      if (res.status === 403) await this.handleError(res);
+      const err = await res.json().catch(() => ({ message: fallbackError }));
+      const msg = Array.isArray(err?.message) ? err.message.join(', ') : err?.message;
+      throw new ApiError(res.status, msg || fallbackError);
+    }
+    return res.json();
+  }
+
+  /**
+   * Centralized JSON request wrapper. Delegates auth + refresh-on-401 to
+   * authorizedFetch. `/auth/me` and every other non-credential endpoint
+   * is eligible for refresh; only login/refresh/logout & friends skip it.
+   */
+  private async request<T>(method: string, endpoint: string, data?: unknown, options?: RequestOptions): Promise<T> {
+    const { params, headers: extraHeaders, ...fetchOptions } = options || {};
+    const url = this.buildUrl(endpoint, params);
+    const body = data !== undefined ? JSON.stringify(data) : undefined;
+    const headers = new Headers(extraHeaders);
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+
+    const response = await this.authorizedFetch(
+      url,
+      { method, body, ...fetchOptions, headers },
+      { skipRefresh: NO_REFRESH_ENDPOINTS.has(endpoint) },
+    );
 
     if (!response.ok) {
       await this.handleError(response);
     }
-    return response.json();
+    const text = await response.text();
+    return (text ? JSON.parse(text) : null) as T;
   }
 
   async get<T>(endpoint: string, options?: RequestOptions): Promise<T> {
@@ -186,6 +298,39 @@ class AdminApiClient {
 
   getProfile() {
     return this.get<any>('/auth/me');
+  }
+
+  /**
+   * Best-effort server-side logout (revokes tokens via token-version bump).
+   * Sends the refresh token too so revocation works even when the access
+   * token has already expired.
+   */
+  logout() {
+    const refreshToken = getRefreshToken();
+    return this.post<{ message: string }>('/auth/logout', refreshToken ? { refreshToken } : {});
+  }
+
+  /**
+   * Change own password. The API bumps tokenVersion (revoking every other
+   * session) and returns fresh tokens for THIS session — persist them into
+   * whichever storage currently holds the session, or the next request 401s.
+   */
+  async changePassword(currentPassword: string, newPassword: string) {
+    const res = await this.post<{ message: string; accessToken?: string; refreshToken?: string }>(
+      '/auth/change-password',
+      { currentPassword, newPassword },
+    );
+    if (res?.accessToken) {
+      const remember = !!safeStorage('local')?.getItem(ACCESS_TOKEN_KEY) || !!safeStorage('local')?.getItem(REFRESH_TOKEN_KEY);
+      storeAuthTokens(res.accessToken, res.refreshToken || getRefreshToken(), remember);
+      this.token = res.accessToken;
+    }
+    return res;
+  }
+
+  /** Toggle own 2FA. Enabling currently always 400s ("not available yet"); disabling needs the current password. */
+  toggle2FA(enabled: boolean, currentPassword?: string) {
+    return this.patch<any>('/auth/2fa', currentPassword ? { enabled, currentPassword } : { enabled });
   }
 
   updateProfile(data: { firstName?: string; lastName?: string; phone?: string }) {
@@ -270,50 +415,14 @@ class AdminApiClient {
   getProductById(id: string) {
     return this.get<any>(`/products/by-id/${id}`);
   }
-  async uploadImage(file: File): Promise<{ url: string; filename: string }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const res = await fetch(`${this.baseUrl}/upload/image`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
-      throw new Error(err.message || 'Upload failed');
-    }
-    return res.json();
+  uploadImage(file: File): Promise<{ url: string; filename: string }> {
+    return this.uploadMultipart('/upload/image', file);
   }
-  async upload3dModel(file: File): Promise<{ url: string; filename: string }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const res = await fetch(`${this.baseUrl}/upload/3d-model`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
-      throw new Error(err.message || 'Upload failed');
-    }
-    return res.json();
+  upload3dModel(file: File): Promise<{ url: string; filename: string }> {
+    return this.uploadMultipart('/upload/3d-model', file);
   }
-  async bulkImportProducts(file: File): Promise<{ created: number; failed: number; total: number; errors: { row: number; field?: string; message: string }[] }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const res = await fetch(`${this.baseUrl}/products/bulk-import`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Import failed' }));
-      throw new Error(err.message || 'Import failed');
-    }
-    return res.json();
+  bulkImportProducts(file: File): Promise<{ created: number; failed: number; total: number; errors: { row: number; field?: string; message: string }[] }> {
+    return this.uploadMultipart('/products/bulk-import', file, 'Import failed');
   }
   createProduct(data: any) {
     return this.post<any>('/products', data);
@@ -391,7 +500,9 @@ class AdminApiClient {
     return this.get<any>('/orders/stats');
   }
   getRecentOrders() {
-    return this.get<any>('/orders/admin', { params: { limit: '5', sort: 'newest' } });
+    // No `sort` param: AdminQueryOrdersDto doesn't declare one (forbidNonWhitelisted
+    // → 400) and the API already orders by createdAt desc.
+    return this.get<any>('/orders/admin', { params: { limit: '5', page: '1' } });
   }
 
   // ===== Rentals =====
@@ -422,17 +533,8 @@ class AdminApiClient {
   updateRental(id: string, data: any) {
     return this.patch<any>(`/rentals/${id}`, data);
   }
-  async uploadTransportReceipt(rentalId: string, file: File) {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const res = await fetch(`${this.baseUrl}/rentals/${rentalId}/transport-receipt`, {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      body: formData,
-    });
-    if (!res.ok) throw new Error('Upload failed');
-    return res.json();
+  uploadTransportReceipt(rentalId: string, file: File) {
+    return this.uploadMultipart<any>(`/rentals/${rentalId}/transport-receipt`, file);
   }
 
   // ===== Rental Checklists =====
@@ -499,10 +601,15 @@ class AdminApiClient {
     return this.get<any>('/reviews', { params });
   }
   approveReview(id: string) {
-    return this.patch<any>(`/reviews/${id}/approve`, {});
+    return this.patch<any>(`/reviews/${id}/approve`, {}); // requires `reviews:moderate`
   }
+  /** Moderation reject (requires `reviews:moderate`). `DELETE /reviews/:id` is author-only and 403s for admins. */
+  rejectReview(id: string) {
+    return this.patch<{ message: string }>(`/reviews/${id}/reject`, {});
+  }
+  /** @deprecated use rejectReview — kept so older call sites keep working. */
   deleteReview(id: string) {
-    return this.delete<any>(`/reviews/${id}`);
+    return this.rejectReview(id);
   }
 
   // ===== Flash Sales =====
@@ -544,15 +651,8 @@ class AdminApiClient {
   restorePaymentMethod(id: string) {
     return this.patch<any>(`/payment-methods/${id}/restore`, {});
   }
-  async uploadPaymentIcon(file: File) {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const res = await fetch(`${this.baseUrl}/upload/payment-icon`, { method: 'POST', headers, body: formData });
-    if (!res.ok) throw new Error('Upload failed');
-    return res.json() as Promise<{ url: string }>;
+  uploadPaymentIcon(file: File) {
+    return this.uploadMultipart<{ url: string }>('/upload/payment-icon', file);
   }
 
   // ===== Customers =====
@@ -561,6 +661,21 @@ class AdminApiClient {
   }
   getCustomer(id: string) {
     return this.get<any>(`/users/${id}`);
+  }
+
+  /**
+   * Fetch a privately-stored ID document (`private://id-documents/<tenantId>/<file>`)
+   * with the bearer token. A plain <img src> can't authenticate, so callers
+   * turn the Blob into an object URL. 404 → ApiError(404).
+   */
+  async fetchPrivateIdDocument(ref: string): Promise<Blob> {
+    const key = ref.replace(/^private:\/\/id-documents\//, '');
+    const res = await this.authorizedFetch(`${this.baseUrl}/upload/id-document/${encodeURIComponent(key)}`);
+    if (!res.ok) {
+      if (res.status === 403) await this.handleError(res);
+      throw new ApiError(res.status, res.status === 404 ? 'Document unavailable' : 'Failed to load document');
+    }
+    return res.blob();
   }
 
   // ===== ID Verification =====
@@ -637,20 +752,8 @@ class AdminApiClient {
   getBusinessProfile() {
     return this.get<any>('/cms/settings/business-profile');
   }
-  async uploadBranding(file: File): Promise<{ url: string; filename: string }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const res = await fetch(`${this.baseUrl}/upload/branding`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
-      throw new Error(err.message || 'Upload failed');
-    }
-    return res.json();
+  uploadBranding(file: File): Promise<{ url: string; filename: string }> {
+    return this.uploadMultipart('/upload/branding', file);
   }
 
   // ===== Hero Slides =====
@@ -695,95 +798,23 @@ class AdminApiClient {
   toggleParallaxSection(id: string) {
     return this.patch<any>(`/cms/parallax-sections/${id}/toggle-active`, {});
   }
-  async uploadDocument(file: File): Promise<{ url: string; filename: string; format: string }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const res = await fetch(`${this.baseUrl}/upload/document`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
-      throw new Error(err.message || 'Upload failed');
-    }
-    return res.json();
+  uploadDocument(file: File): Promise<{ url: string; filename: string; format: string }> {
+    return this.uploadMultipart('/upload/document', file);
   }
-  async uploadHeroSlide(file: File): Promise<{ url: string; filename: string }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const res = await fetch(`${this.baseUrl}/upload/hero-slide`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
-      throw new Error(err.message || 'Upload failed');
-    }
-    return res.json();
+  uploadHeroSlide(file: File): Promise<{ url: string; filename: string }> {
+    return this.uploadMultipart('/upload/hero-slide', file);
   }
-  async uploadCategoryImage(file: File): Promise<{ url: string; filename: string }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const res = await fetch(`${this.baseUrl}/upload/category`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
-      throw new Error(err.message || 'Upload failed');
-    }
-    return res.json();
+  uploadCategoryImage(file: File): Promise<{ url: string; filename: string }> {
+    return this.uploadMultipart('/upload/category', file);
   }
-  async uploadBanner(file: File): Promise<{ url: string; filename: string }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const res = await fetch(`${this.baseUrl}/upload/banner`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
-      throw new Error(err.message || 'Upload failed');
-    }
-    return res.json();
+  uploadBanner(file: File): Promise<{ url: string; filename: string }> {
+    return this.uploadMultipart('/upload/banner', file);
   }
-  async uploadInstagramPost(file: File): Promise<{ url: string; filename: string }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const res = await fetch(`${this.baseUrl}/upload/instagram-post`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
-      throw new Error(err.message || 'Upload failed');
-    }
-    return res.json();
+  uploadInstagramPost(file: File): Promise<{ url: string; filename: string }> {
+    return this.uploadMultipart('/upload/instagram-post', file);
   }
-  async uploadEventImage(file: File): Promise<{ url: string; filename: string }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
-    const res = await fetch(`${this.baseUrl}/upload/event`, {
-      method: 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Upload failed' }));
-      throw new Error(err.message || 'Upload failed');
-    }
-    return res.json();
+  uploadEventImage(file: File): Promise<{ url: string; filename: string }> {
+    return this.uploadMultipart('/upload/event', file);
   }
 
   // ===== Instagram Posts =====
@@ -946,8 +977,9 @@ class AdminApiClient {
   getFinancialPeriods() {
     return this.get<any[]>('/reports/financials/periods');
   }
-  createFinancialPeriod(data: any) {
-    return this.post<any>('/reports/financials/periods', data);
+  /** Only `periodKey` ('YYYY-MM') is accepted; the API derives the EAT month bounds. */
+  createFinancialPeriod(data: { periodKey: string }) {
+    return this.post<any>('/reports/financials/periods', { periodKey: data.periodKey });
   }
   closeFinancialPeriod(id: string) {
     return this.patch<any>(`/reports/financials/periods/${id}/close`, {});
@@ -1294,11 +1326,13 @@ class AdminApiClient {
   }
 
   async exportAuditLog(params?: Record<string, string>): Promise<Blob> {
-    const token = this.token || (typeof window !== 'undefined' ? (localStorage.getItem('token') || sessionStorage.getItem('token')) : null);
     const url = new URL(`${this.baseUrl}/audit/export`);
     if (params) Object.entries(params).forEach(([k, v]) => { if (v) url.searchParams.append(k, v); });
-    const res = await fetch(url.toString(), { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-    if (!res.ok) throw new Error('Export failed');
+    const res = await this.authorizedFetch(url.toString());
+    if (!res.ok) {
+      if (res.status === 403) await this.handleError(res);
+      throw new ApiError(res.status, 'Export failed');
+    }
     return res.blob();
   }
 

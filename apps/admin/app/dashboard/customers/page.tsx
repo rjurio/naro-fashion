@@ -8,6 +8,8 @@ import { Badge } from '@/components/ui/Badge';
 import adminApi from '@/lib/api';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
+import ServerPager from '@/components/ui/ServerPager';
+import { ADMIN_PAGE_SIZE, normalizePaginated } from '@/lib/pagination';
 
 interface Customer {
   id: string;
@@ -63,19 +65,54 @@ export default function CustomersPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [actionId, setActionId] = useState<string | null>(null);
+  // Pagination (server-side when GET /users paginates; client-side slice otherwise)
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [fetching, setFetching] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(searchQuery.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  const matchesStatus = useCallback((c: Customer) => (
+    statusFilter === 'all'
+    || (statusFilter === 'suspended' && !c.isActive)
+    || (statusFilter === 'active' && c.isActive && (c.status || 'active').toLowerCase() === 'active')
+    || (c.status || '').toLowerCase() === statusFilter
+  ), [statusFilter]);
 
   const fetchCustomers = useCallback(async () => {
+    setFetching(true);
     try {
-      setLoading(true);
-      const data = await adminApi.getCustomers();
-      setCustomers(Array.isArray(data) ? data : (data as any)?.data || (data as any)?.users || []);
-    } catch {
-      toast.error('Failed to load customers');
+      const params: Record<string, string> = { page: String(page), limit: String(ADMIN_PAGE_SIZE) };
+      if (debouncedSearch) params.search = debouncedSearch;
+      const data = await adminApi.getCustomers(params);
+      // Handle both a bare array (endpoint not paginated yet → filter + slice
+      // client-side) and a paginated `{ data, meta }` / `{ users, total }` shape.
+      const result = Array.isArray(data)
+        ? normalizePaginated<Customer>((data as Customer[]).filter(matchesStatus), page, ADMIN_PAGE_SIZE)
+        : normalizePaginated<Customer>(data, page, ADMIN_PAGE_SIZE, ['data', 'users', 'customers', 'items']);
+      // Status isn't an API filter — on a paginated response it narrows the current page only.
+      setCustomers(Array.isArray(data) ? result.items : result.items.filter(matchesStatus));
+      setTotal(result.total);
+      setTotalPages(result.totalPages);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to load customers');
       setCustomers([]);
+      setTotal(0);
+      setTotalPages(1);
     } finally {
       setLoading(false);
+      setFetching(false);
     }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, debouncedSearch, matchesStatus]);
 
   useEffect(() => { fetchCustomers(); }, [fetchCustomers]);
 
@@ -107,18 +144,6 @@ export default function CustomersPage() {
     }
   };
 
-  const filteredCustomers = customers.filter((c) => {
-    const name = c.name || `${c.firstName || ''} ${c.lastName || ''}`.trim();
-    const matchesSearch =
-      name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (c.email || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (c.phone || '').includes(searchQuery);
-    const matchesStatus = statusFilter === 'all'
-      || (statusFilter === 'suspended' && !c.isActive)
-      || (statusFilter === 'active' && c.isActive && c.status?.toLowerCase() === 'active')
-      || (c.status || '').toLowerCase() === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
 
   const allColumns = [
     ...columns,
@@ -158,7 +183,7 @@ export default function CustomersPage() {
         <div>
           <h1 className="text-2xl font-bold text-[hsl(var(--foreground))]">Customers</h1>
           <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">
-            {customers.length} registered customers
+            {total} registered customers
           </p>
         </div>
         <Button variant="outline">
@@ -181,7 +206,7 @@ export default function CustomersPage() {
         </div>
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
           className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold"
         >
           <option value="all">All Statuses</option>
@@ -199,7 +224,18 @@ export default function CustomersPage() {
           <Loader2 className="w-8 h-8 animate-spin text-brand-gold" />
         </div>
       ) : (
-        <DataTable columns={allColumns as any} data={filteredCustomers} pageSize={10} />
+        <>
+          <DataTable columns={allColumns as any} data={customers} pageSize={ADMIN_PAGE_SIZE} pageSizeOptions={[ADMIN_PAGE_SIZE]} />
+          <ServerPager
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            pageSize={ADMIN_PAGE_SIZE}
+            onPageChange={setPage}
+            loading={fetching}
+            itemLabel="customers"
+          />
+        </>
       )}
     </div>
   );

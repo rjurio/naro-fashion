@@ -74,9 +74,6 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
 
   const fetchNotifications = useCallback(async () => {
     try {
-      const token = localStorage.getItem('token');
-      if (token) adminApi.setToken(token);
-
       const [statsRes, overdueRes, pickupsRes] = await Promise.allSettled([
         adminApi.getDashboardStats(),
         adminApi.getOverdueRentals(),

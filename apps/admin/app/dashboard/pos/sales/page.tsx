@@ -21,11 +21,6 @@ export default function PosSalesHistoryPage() {
   const limit = 20;
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-  }, []);
-
-  useEffect(() => {
     loadSales();
   }, [page, search, startDate, endDate, paymentMethod]);
 

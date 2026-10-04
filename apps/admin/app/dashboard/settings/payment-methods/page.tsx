@@ -35,6 +35,13 @@ const emptyForm = {
   integrationKey: '', integrationParams: '{}',
 };
 
+/**
+ * The admin API masks secret values (e.g. '••••abcd'). Sending a masked
+ * value back on update means "keep the stored secret unchanged", so the
+ * form never forces the operator to re-enter credentials.
+ */
+const isMaskedSecret = (v: unknown): boolean =>typeof v === 'string' && /^[•*]{2,}/.test(v);
+
 export default function PaymentMethodsPage() {
   const { toast: showToast } = useToast();
   const confirm = useConfirm();
@@ -72,7 +79,8 @@ export default function PaymentMethodsPage() {
       iconUrl: m.iconUrl || '',
       isActive: m.isActive,
       sortOrder: m.sortOrder,
-      integrationKey: m.integrationKey || '',
+      // Masked key → empty input with the mask as placeholder; blank on save = unchanged.
+      integrationKey: isMaskedSecret(m.integrationKey) ? '' : (m.integrationKey || ''),
       integrationParams: m.integrationParams ? JSON.stringify(m.integrationParams, null, 2) : '{}',
     });
     setJsonError('');
@@ -96,7 +104,12 @@ export default function PaymentMethodsPage() {
         iconUrl: form.iconUrl || undefined,
         isActive: form.isActive,
         sortOrder: Number(form.sortOrder),
-        integrationKey: form.integrationKey || undefined,
+        // Blank while editing a masked key → send the mask back ("unchanged").
+        integrationKey:
+          form.integrationKey ||
+          (editing && isMaskedSecret(editing.integrationKey) ? editing.integrationKey : undefined),
+        // Masked values left in the JSON are passed through verbatim; the API
+        // treats them as "keep the stored secret".
         integrationParams: params,
       };
       if (editing) {
@@ -184,7 +197,7 @@ export default function PaymentMethodsPage() {
                   </td>
                   <td className="px-4 py-3 font-medium text-foreground">{m.name}</td>
                   <td className="px-4 py-3"><span className="font-mono text-xs bg-muted px-2 py-0.5 rounded">{m.code}</span></td>
-                  <td className="px-4 py-3 text-muted-foreground text-xs font-mono truncate max-w-[120px]">{m.integrationKey ? '••••' + m.integrationKey.slice(-4) : <span className="text-muted-foreground/40">—</span>}</td>
+                  <td className="px-4 py-3 text-muted-foreground text-xs font-mono truncate max-w-[120px]">{m.integrationKey ? (isMaskedSecret(m.integrationKey) ? m.integrationKey : '••••' + m.integrationKey.slice(-4)) :<span className="text-muted-foreground/40">—</span>}</td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${m.isActive ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
                       {m.isActive ? 'Active' : 'Inactive'}
@@ -242,7 +255,8 @@ export default function PaymentMethodsPage() {
             <FormField label="Integration Key" hint="Merchant ID, API key, or shortcode">
               <div className="relative">
                 <Key className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                <input value={form.integrationKey} onChange={(e) => setForm((f) => ({ ...f, integrationKey: e.target.value }))} className={inputClass + ' pl-8'} placeholder="e.g. 174379" />
+                <input value={form.integrationKey} onChange={(e) => setForm((f) => ({ ...f, integrationKey: e.target.value }))} className={inputClass + ' pl-8'}
+                  placeholder={editing && isMaskedSecret(editing.integrationKey) ? `${editing.integrationKey} (leave blank to keep)` : 'e.g. 174379'} />
               </div>
             </FormField>
             <FormField label="Sort Order" hint="Lower = shown first">
@@ -250,7 +264,13 @@ export default function PaymentMethodsPage() {
             </FormField>
           </div>
 
-          <FormField label="Integration Parameters (JSON)" hint={'Additional config e.g. {"consumerKey": "...", "passkey": "..."}'} error={jsonError}>
+          <FormField
+            label="Integration Parameters (JSON)"
+            hint={editing
+              ? 'Secret values are shown masked (••••abcd). Leave a masked value as-is to keep the stored secret; replace it to change.'
+              : 'Additional config e.g. {"consumerKey": "...", "passkey": "..."}'}
+            error={jsonError}
+          >
             <div className="relative">
               <Code className="absolute left-3 top-3 h-3.5 w-3.5 text-muted-foreground" />
               <textarea rows={4} value={form.integrationParams} onChange={(e) => { setForm((f) => ({ ...f, integrationParams: e.target.value })); setJsonError(''); }}

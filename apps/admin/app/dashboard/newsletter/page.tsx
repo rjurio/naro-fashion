@@ -47,9 +47,6 @@ export default function NewsletterDashboardPage() {
   const toast = useToast();
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     const fetchData = async () => {
       try {
         setLoading(true);

@@ -7,6 +7,7 @@ import Button from '@/components/ui/Button';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import { adminApi } from '@/lib/api';
+import IdVerificationQueue from '@/components/rental/IdVerificationQueue';
 
 interface RentalRequest {
   id: string;
@@ -43,9 +44,6 @@ export default function RentalRequestsPage() {
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     const fetchRequests = async () => {
       try {
         setLoading(true);
@@ -209,6 +207,9 @@ export default function RentalRequestsPage() {
           </p>
         </div>
       </div>
+
+      {/* Pending National-ID verifications (private documents, token-authenticated) */}
+      <IdVerificationQueue />
 
       {/* Filter Tabs */}
       <div className="flex flex-wrap gap-2">

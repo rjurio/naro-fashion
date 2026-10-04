@@ -18,9 +18,6 @@ export default function EditProductPage() {
   const productId = params.id as string;
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     adminApi.getProductById(productId)
       .then(setProduct)
       .catch(() => toast('Failed to load product', 'error'))

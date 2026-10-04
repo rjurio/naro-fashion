@@ -7,10 +7,12 @@ import {
   ChevronDown, ChevronUp, CheckCircle2, Circle, ClipboardList, Plus,
   MapPin, Truck, Calendar, Clock, Upload, FileText, Package,
   ShieldCheck, CreditCard, Wallet, PackageCheck, Send, RotateCcw, Eye, Lock,
-  ArrowRight,
+  ArrowRight, Ban,
 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { adminApi } from '@/lib/api';
+import { useToast } from '@/contexts/ToastContext';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -56,12 +58,13 @@ interface Template {
   items: { itemType: string }[];
 }
 
-type TabKey = 'active' | 'requests' | 'overdue';
+type TabKey = 'active' | 'requests' | 'overdue' | 'cancelled';
 
 const tabs: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: 'active', label: 'Active Rentals', icon: CalendarClock },
   { key: 'requests', label: 'Requests', icon: ClipboardCheck },
   { key: 'overdue', label: 'Overdue', icon: AlertTriangle },
+  { key: 'cancelled', label: 'Cancelled', icon: Ban },
 ];
 
 const TRANSPORT_MODES = ['AIR', 'BUS', 'TRAIN', 'COURIER', 'OTHER'];
@@ -408,20 +411,45 @@ const STATUS_META: Record<string, { icon: React.ElementType; color: string; bg: 
   RETURNED:                { icon: RotateCcw, color: 'text-slate-700 dark:text-slate-400', bg: 'bg-slate-100 dark:bg-slate-800/40', dot: 'bg-slate-500', label: 'Returned' },
   INSPECTION:              { icon: Eye, color: 'text-purple-700 dark:text-purple-400', bg: 'bg-purple-50 dark:bg-purple-900/20', dot: 'bg-purple-500', label: 'Inspection' },
   CLOSED:                  { icon: Lock, color: 'text-gray-500 dark:text-gray-500', bg: 'bg-gray-100 dark:bg-gray-800/40', dot: 'bg-gray-400', label: 'Closed' },
+  CANCELLED:               { icon: Ban, color: 'text-red-700 dark:text-red-400', bg: 'bg-red-50 dark:bg-red-900/20', dot: 'bg-red-500', label: 'Cancelled' },
 };
 
+// Mirrors apps/api/src/rentals/rental-rules.ts RENTAL_WORKFLOW.
 const STATUS_WORKFLOW_ORDER = [
   'PENDING_ID_VERIFICATION', 'ID_VERIFIED', 'DOWN_PAYMENT_PAID', 'FULLY_PAID',
   'READY_FOR_PICKUP', 'ITEM_DISPATCHED', 'ACTIVE', 'RETURNED', 'INSPECTION', 'CLOSED',
 ];
 
-function RentalStatusDropdown({ status, onStatusChange }: { status: string; onStatusChange: (s: string) => void }) {
+/** Pre-dispatch statuses an admin may cancel from (API: CANCELLABLE_FROM). */
+const CANCELLABLE_STATUSES = new Set([
+  'PENDING_ID_VERIFICATION', 'PENDING_PAYMENT', 'PENDING', 'ID_VERIFIED',
+  'DOWN_PAYMENT_PAID', 'FULLY_PAID', 'READY_FOR_PICKUP', 'CONFIRMED',
+]);
+
+/**
+ * Valid next statuses (forward-only). Before ACTIVE the API allows jumping
+ * ahead (e.g. ID_VERIFIED → READY_FOR_PICKUP) but never past ACTIVE; from
+ * ACTIVE on it's strictly one step at a time: ACTIVE → RETURNED (stamps the
+ * return date + late fee) → INSPECTION → CLOSED.
+ */
+function allowedNextStatuses(status: string): string[] {
+  if (status === 'CANCELLED' || status === 'CLOSED') return [];
+  const idx = STATUS_WORKFLOW_ORDER.indexOf(status);
+  const activeIdx = STATUS_WORKFLOW_ORDER.indexOf('ACTIVE');
+  if (idx < 0) return [];
+  if (idx >= activeIdx) return STATUS_WORKFLOW_ORDER.slice(idx + 1, idx + 2);
+  return STATUS_WORKFLOW_ORDER.slice(idx + 1, activeIdx + 1);
+}
+
+function RentalStatusDropdown({ status, onStatusChange }: { status: string; onStatusChange: (s: string) => void | Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [updating, setUpdating] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const current = STATUS_META[status] || STATUS_META.CLOSED;
   const CurrentIcon = current.icon;
   const currentIdx = STATUS_WORKFLOW_ORDER.indexOf(status);
+  const allowed = new Set(allowedNextStatuses(status));
+  const isTerminal = allowed.size === 0;
 
   // Close on outside click
   useEffect(() => {
@@ -447,13 +475,14 @@ function RentalStatusDropdown({ status, onStatusChange }: { status: string; onSt
     <div ref={dropdownRef} className="relative">
       <button
         type="button"
-        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
-        disabled={updating}
+        onClick={(e) => { e.stopPropagation(); if (!isTerminal) setOpen(!open); }}
+        disabled={updating || isTerminal}
+        title={isTerminal ? `Rental is ${current.label.toLowerCase()} — no further changes` : 'Change status'}
         className={`inline-flex items-center gap-1.5 pl-2.5 pr-2 py-1 rounded-full text-xs font-semibold border transition-all hover:shadow-md active:scale-[0.97] ${current.bg} ${current.color} border-current/20 disabled:opacity-60`}
       >
         {updating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CurrentIcon className="w-3.5 h-3.5" />}
         {current.label}
-        <ChevronDown className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />
+        {!isTerminal && <ChevronDown className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />}
       </button>
 
       {open && (
@@ -486,7 +515,8 @@ function RentalStatusDropdown({ status, onStatusChange }: { status: string; onSt
               const Icon = meta.icon;
               const isActive = s === status;
               const isPast = i < currentIdx;
-              const isDisabled = isPast || isActive;
+              // Forward-only: anything not in the allowed set is unavailable.
+              const isDisabled = isPast || isActive || !allowed.has(s);
               return (
                 <button
                   key={s}
@@ -496,7 +526,7 @@ function RentalStatusDropdown({ status, onStatusChange }: { status: string; onSt
                   className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors group
                     ${isActive
                       ? `${meta.bg} ${meta.color} font-semibold`
-                      : isPast
+                      : isPast || isDisabled
                         ? 'opacity-40 cursor-not-allowed text-[hsl(var(--muted-foreground))]'
                         : 'hover:bg-[hsl(var(--muted))] text-[hsl(var(--foreground))]'
                     }
@@ -528,6 +558,8 @@ function RentalStatusDropdown({ status, onStatusChange }: { status: string; onSt
 }
 
 export default function RentalsPage() {
+  const { toast } = useToast();
+  const confirm = useConfirm();
   const [rentals, setRentals] = useState<Rental[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('active');
@@ -558,8 +590,6 @@ export default function RentalsPage() {
   }, []);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
     fetchRentals();
   }, [fetchRentals]);
 
@@ -567,7 +597,33 @@ export default function RentalsPage() {
     try {
       await adminApi.updateRentalStatus(rentalId, newStatus);
       setRentals((prev) => prev.map((r) => (r.id === rentalId ? { ...r, status: newStatus } : r)));
-    } catch (err) { console.error('Failed to update rental status:', err); }
+      toast(`Rental marked ${(STATUS_META[newStatus]?.label || newStatus).toLowerCase()}`, 'success');
+    } catch (err: any) {
+      if (err?.status === 409) {
+        // Optimistic-concurrency guard: someone else changed it first.
+        toast('This rental was changed by someone else. Reloading the latest data…', 'warning');
+        fetchRentals();
+      } else {
+        toast(err?.message || 'Failed to update rental status', 'error');
+      }
+    }
+  };
+
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const handleCancelRental = async (rental: Rental) => {
+    const ok = await confirm({
+      title: 'Cancel rental',
+      message: `Cancel rental ${rental.rentalNumber || rental.id} for ${rental.customer}? The dates are released for other bookings. This can't be undone.`,
+      confirmLabel: 'Cancel rental',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setCancellingId(rental.id);
+    try {
+      await handleStatusUpdate(rental.id, 'CANCELLED');
+    } finally {
+      setCancellingId(null);
+    }
   };
 
   const handleRentalUpdate = (rentalId: string, updated: Partial<Rental>) => {
@@ -589,6 +645,7 @@ export default function RentalsPage() {
     if (activeTab === 'active') return matchesSearch && ACTIVE_STATUSES.includes(r.status) && !OVERDUE_CHECK(r);
     if (activeTab === 'requests') return matchesSearch && REQUEST_STATUSES.includes(r.status);
     if (activeTab === 'overdue') return matchesSearch && OVERDUE_CHECK(r);
+    if (activeTab === 'cancelled') return matchesSearch && r.status === 'CANCELLED';
     return matchesSearch;
   });
 
@@ -596,6 +653,7 @@ export default function RentalsPage() {
     active: rentals.filter((r) => ACTIVE_STATUSES.includes(r.status) && !OVERDUE_CHECK(r)).length,
     requests: rentals.filter((r) => REQUEST_STATUSES.includes(r.status)).length,
     overdue: rentals.filter((r) => OVERDUE_CHECK(r)).length,
+    cancelled: rentals.filter((r) => r.status === 'CANCELLED').length,
   };
 
 
@@ -676,6 +734,18 @@ export default function RentalsPage() {
                       status={rental.status}
                       onStatusChange={(newStatus) => handleStatusUpdate(rental.id, newStatus)}
                     />
+                    {CANCELLABLE_STATUSES.has(rental.status) && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleCancelRental(rental); }}
+                        disabled={cancellingId === rental.id}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-900/20 disabled:opacity-50"
+                        title="Cancel rental (only before dispatch)"
+                      >
+                        {cancellingId === rental.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Ban className="w-3 h-3" />}
+                        Cancel rental
+                      </button>
+                    )}
                   </div>
                   <div className="ml-4 flex-shrink-0">
                     {expandedRentalId === rental.id ? <ChevronUp className="w-5 h-5 text-[hsl(var(--muted-foreground))]" /> : <ChevronDown className="w-5 h-5 text-[hsl(var(--muted-foreground))]" />}

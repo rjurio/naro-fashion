@@ -10,6 +10,8 @@ import InfoLabel from '@/components/ui/InfoLabel';
 
 interface VariantRow {
   id?: string;
+  /** Only set for existing variants. false = soft-disabled (kept for order history). */
+  isActive?: boolean;
   name: string;
   sku: string;
   barcode: string;
@@ -151,6 +153,7 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
     if (initialData.variants?.length) {
       setVariants(initialData.variants.map((v: any) => ({
         id: v.id,
+        isActive: v.isActive === undefined ? undefined : v.isActive !== false,
         name: v.name || '',
         sku: v.sku || '',
         barcode: v.barcode || '',
@@ -204,7 +207,15 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
     if (!categoryId) { toast('Category is required', 'error'); return; }
     if (price <= 0) { toast('Price must be greater than 0', 'error'); return; }
 
-    const validVariants = variants.filter((v) => v.name.trim());
+    // The API upserts variants by id: existing rows MUST carry their `id`
+    // (otherwise they'd be recreated, orphaning stock/order history); new
+    // rows are sent without one (and without isActive). Existing rows carry
+    // their isActive so a re-enabled soft-disabled variant sends `true`.
+    const validVariants = variants
+      .filter((v) => v.name.trim())
+      .map(({ id, isActive, ...rest }) =>
+        id ? { id, ...rest, ...(isActive !== undefined ? { isActive } : {}) } : rest,
+      );
 
     setSubmitting(true);
     try {
@@ -403,15 +414,39 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
           </div>
         </div>
 
-        {showVariants && variants.map((v, i) => (
-          <div key={i} className="p-3 rounded-lg border border-[hsl(var(--border))] space-y-3">
+        {showVariants && variants.map((v, i) => {
+          // Soft-disabled: removed earlier but referenced by past orders, so the
+          // API keeps the row with isActive=false instead of deleting it.
+          const disabled = v.id && v.isActive === false;
+          return (
+          <div key={v.id ?? `new-${i}`} className={`p-3 rounded-lg border border-[hsl(var(--border))] space-y-3 ${disabled ? 'opacity-60 bg-[hsl(var(--muted))]' : ''}`}>
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-[hsl(var(--muted-foreground))]">Variant {i + 1}</span>
-              {variants.length > 1 && (
-                <button type="button" onClick={() => removeVariant(i)} className="text-red-500 hover:text-red-400">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              )}
+              <span className="flex items-center gap-2 text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                Variant {i + 1}
+                {disabled && (
+                  <span className="inline-flex items-center rounded-full bg-gray-200 dark:bg-gray-700 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">
+                    Disabled
+                  </span>
+                )}
+              </span>
+              <div className="flex items-center gap-3">
+                {v.id && v.isActive !== undefined && (
+                  <label className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))] cursor-pointer" title={disabled ? 'Re-enable this variant' : 'Variant is active'}>
+                    <input
+                      type="checkbox"
+                      checked={v.isActive !== false}
+                      onChange={(e) => updateVariant(i, 'isActive', e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-[hsl(var(--border))] accent-[#D4AF37]"
+                    />
+                    {disabled ? 'Re-enable' : 'Active'}
+                  </label>
+                )}
+                {variants.length > 1 && (
+                  <button type="button" onClick={() => removeVariant(i)} className="text-red-500 hover:text-red-400" title="Remove variant">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
@@ -469,7 +504,8 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </section>
 
       {/* Actions */}

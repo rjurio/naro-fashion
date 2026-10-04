@@ -90,9 +90,6 @@ export default function ReferralsPage() {
   });
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     const fetchReferrals = async () => {
       try {
         setLoading(true);

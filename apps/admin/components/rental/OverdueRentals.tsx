@@ -67,8 +67,6 @@ export default function OverdueRentals() {
 
   const fetchOverdue = useCallback(async () => {
     try {
-      const token = localStorage.getItem('token');
-      if (token) adminApi.setToken(token);
       const data = await adminApi.getOverdueRentals();
       const items = Array.isArray(data) ? data : (data as any)?.data || [];
       setOverdueItems(items.map(mapRentalToOverdue));

@@ -65,9 +65,6 @@ export default function PosPage() {
 
   // Load session on mount
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     const init = async () => {
       try {
         const [currentSession, cats, held] = await Promise.all([

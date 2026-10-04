@@ -16,19 +16,35 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, connectionError, retrySession } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
-    if (!isLoading && !user) {
+    // A transient API outage keeps the stored tokens — don't bounce to /login.
+    if (!isLoading && !user && !connectionError) {
       router.replace('/login');
     }
-  }, [isLoading, user, router]);
+  }, [isLoading, user, connectionError, router]);
 
   if (isLoading) {
     return (
       <div className="h-screen flex items-center justify-center bg-[hsl(var(--background))]">
         <RefreshCw className="w-8 h-8 animate-spin text-[hsl(var(--primary))]" />
+      </div>
+    );
+  }
+
+  if (!user && connectionError) {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center gap-4 px-6 text-center bg-[hsl(var(--background))]">
+        <p className="text-sm text-[hsl(var(--muted-foreground))] max-w-md">{connectionError}</p>
+        <button
+          type="button"
+          onClick={() => retrySession()}
+          className="inline-flex items-center gap-2 rounded-lg bg-brand-gold px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+        >
+          <RefreshCw className="w-4 h-4" /> Retry
+        </button>
       </div>
     );
   }

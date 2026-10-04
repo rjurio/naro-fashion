@@ -141,8 +141,9 @@ export default function FinancialsPage() {
       toast.success(`Expense ${expModal.expense ? 'updated' : 'recorded'}`);
       setExpModal({ open: false, expense: null });
       loadExpenses();
-    } catch {
-      toast.error('Failed to save expense');
+    } catch (e: any) {
+      // 403 when the expense's period is CLOSED/LOCKED — show the server's reason.
+      toast.error(e?.message || 'Failed to save expense');
     } finally {
       setExpSaving(false);
     }
@@ -155,8 +156,9 @@ export default function FinancialsPage() {
       await adminApi.deleteExpense(expense.id);
       toast.success('Expense deleted');
       loadExpenses();
-    } catch {
-      toast.error('Failed to delete expense');
+    } catch (e: any) {
+      // 403 when the expense's period is CLOSED/LOCKED — show the server's reason.
+      toast.error(e?.message || 'Failed to delete expense');
     }
   };
 
@@ -274,7 +276,13 @@ export default function FinancialsPage() {
                 {/* Revenue */}
                 <div className="border-l-4 border-brand-gold">
                   <div className="px-4 py-2 bg-brand-gold/5"><p className="text-xs font-semibold text-brand-gold uppercase tracking-wide">Revenue</p></div>
-                  <PLRow label="Sales Revenue" value={statement.salesRevenue} />
+                  {statement.grossSales !== undefined && (
+                    <>
+                      <PLRow label="Gross Sales" value={statement.grossSales} />
+                      <PLRow label="Refunds" value={statement.refunds ?? 0} negative />
+                    </>
+                  )}
+                  <PLRow label={statement.grossSales !== undefined ? 'Net Sales Revenue' : 'Sales Revenue'} value={statement.salesRevenue} />
                   <PLRow label="Rental Revenue" value={statement.rentalRevenue} />
                   <PLRow label="Total Revenue" value={statement.totalRevenue} bold />
                 </div>

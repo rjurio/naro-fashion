@@ -10,6 +10,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { adminApi } from '@/lib/api';
 import { SIZE_GUIDE_TEMPLATES } from './templates';
+import { sanitizeHtml } from '@/lib/sanitize-html';
 
 const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), { ssr: false });
 
@@ -263,7 +264,7 @@ export default function SizeGuideEditor({ id }: SizeGuideEditorProps) {
             <div className="min-h-[400px] rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-6 overflow-auto">
               {currentContent ? (
                 <div className="prose prose-sm max-w-none prose-headings:font-bold prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3 prose-table:w-full prose-table:border-collapse prose-th:border prose-th:border-[hsl(var(--border))] prose-th:px-3 prose-th:py-2 prose-th:text-xs prose-th:font-semibold prose-th:bg-[hsl(var(--muted))] prose-td:border prose-td:border-[hsl(var(--border))] prose-td:px-3 prose-td:py-2 prose-td:text-sm"
-                  dangerouslySetInnerHTML={{ __html: currentContent }} />
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(currentContent) }} />
               ) : (
                 <p className="text-[hsl(var(--muted-foreground))] text-sm">No content yet.</p>
               )}

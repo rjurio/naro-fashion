@@ -10,6 +10,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonTable } from '@/components/ui/Skeleton';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
+import { useAuth } from '@/contexts/AuthContext';
+import { validatePassword, PASSWORD_HINT, PASSWORD_MAX_LENGTH } from '@/lib/password-policy';
 
 export default function AdminUsersPage() {
   const toast = useToast();
@@ -24,16 +26,22 @@ export default function AdminUsersPage() {
     open: false,
     admin: null,
   });
-  const [createForm, setCreateForm] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    role: 'STAFF',
-    roleId: '',
-  });
-  const [editForm, setEditForm] = useState({ firstName: '', lastName: '', email: '' });
+  const { user, isPlatformAdmin } = useAuth();
+  // Only SUPER_ADMIN / platform callers may grant SUPER_ADMIN (API 403s otherwise).
+  const canGrantSuperAdmin = isPlatformAdmin || user?.role === 'SUPER_ADMIN';
+  const emptyCreateForm = { firstName: '', lastName: '', email: '', role: 'STAFF', roleIds: [] as string[], password: '' };
+  const [createForm, setCreateForm] = useState(emptyCreateForm);
+  const [editForm, setEditForm] = useState({ firstName: '', lastName: '', email: '', password: '' });
   const [saving, setSaving] = useState(false);
   const [newTempPassword, setNewTempPassword] = useState('');
+  const [createdWithPassword, setCreatedWithPassword] = useState(false);
+
+  const assignableRoles = roles.filter((r: any) => canGrantSuperAdmin || r.name !== 'SUPER_ADMIN');
+  const toggleCreateRole = (roleId: string) =>
+    setCreateForm((f) => ({
+      ...f,
+      roleIds: f.roleIds.includes(roleId) ? f.roleIds.filter((id) => id !== roleId) : [...f.roleIds, roleId],
+    }));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,20 +79,36 @@ export default function AdminUsersPage() {
 
   const createAdmin = async () => {
     if (!createForm.firstName || !createForm.lastName || !createForm.email) return;
+    if (createForm.password) {
+      const policyError = validatePassword(createForm.password);
+      if (policyError) {
+        toast.error(policyError);
+        return;
+      }
+    }
     setSaving(true);
     try {
       const result = await adminApi.createAdminUser({
-        ...createForm,
-        roleId: createForm.roleId || undefined,
+        firstName: createForm.firstName,
+        lastName: createForm.lastName,
+        email: createForm.email,
+        role: createForm.role,
+        password: createForm.password || undefined,
+        roleIds: createForm.roleIds.length > 0 ? createForm.roleIds : undefined,
       });
-      toast.success(`Admin user created. Temporary password: ${result.temporaryPassword}`);
-      setNewTempPassword(result.temporaryPassword);
+      if (result?.temporaryPassword) {
+        toast.success('Admin user created. Share the temporary password shown below.');
+        setNewTempPassword(result.temporaryPassword);
+      } else {
+        toast.success('Admin user created with the password you set.');
+        setCreatedWithPassword(true);
+      }
       load();
     } catch (e: any) {
+      // 403 (e.g. granting SUPER_ADMIN without being one) already carries a
+      // clear permission message; 409 = duplicate email.
       toast.error(
-        e.message?.includes('409') || e.message?.includes('Conflict')
-          ? 'Email already in use'
-          : 'Failed to create admin user'
+        e?.status === 409 ? 'Email already in use' : e?.message || 'Failed to create admin user'
       );
     } finally {
       setSaving(false);
@@ -93,14 +117,23 @@ export default function AdminUsersPage() {
 
   const saveEdit = async () => {
     if (!editModal.admin) return;
+    if (editForm.password) {
+      const policyError = validatePassword(editForm.password);
+      if (policyError) {
+        toast.error(policyError);
+        return;
+      }
+    }
     setSaving(true);
     try {
-      await adminApi.updateAdminUser(editModal.admin.id, editForm);
-      toast.success('Admin user updated');
+      const { password, ...rest } = editForm;
+      // Setting a password revokes the target admin's existing sessions server-side.
+      await adminApi.updateAdminUser(editModal.admin.id, password ? { ...rest, password } : rest);
+      toast.success(password ? 'Admin user updated — their other sessions were signed out' : 'Admin user updated');
       setEditModal({ open: false, admin: null });
       load();
-    } catch {
-      toast.error('Failed to update admin user');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to update admin user');
     } finally {
       setSaving(false);
     }
@@ -148,7 +181,7 @@ export default function AdminUsersPage() {
       load();
     } catch (e: any) {
       toast.error(
-        e.message?.includes('403') ? 'You cannot delete this account' : 'Failed to delete admin user'
+        e?.status === 403 ? e?.message || 'You cannot delete this account' : e?.message || 'Failed to delete admin user'
       );
     }
   };
@@ -171,6 +204,8 @@ export default function AdminUsersPage() {
             onClick={() => {
               setCreateModal(true);
               setNewTempPassword('');
+              setCreatedWithPassword(false);
+              setCreateForm(emptyCreateForm);
             }}
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors"
           >
@@ -314,6 +349,7 @@ export default function AdminUsersPage() {
                               firstName: a.firstName,
                               lastName: a.lastName,
                               email: a.email,
+                              password: '',
                             });
                             setEditModal({ open: true, admin: a });
                           }}
@@ -366,7 +402,7 @@ export default function AdminUsersPage() {
         title="Add Admin User"
         size="md"
         footer={
-          !newTempPassword ? (
+          !newTempPassword && !createdWithPassword ? (
             <>
               <button
                 onClick={() => setCreateModal(false)}
@@ -385,27 +421,36 @@ export default function AdminUsersPage() {
           ) : undefined
         }
       >
-        {newTempPassword ? (
+        {newTempPassword || createdWithPassword ? (
           <div className="space-y-4">
             <div className="bg-green-50 border border-green-200 dark:bg-green-950 dark:border-green-800 rounded-lg p-4">
               <p className="font-medium text-green-800 dark:text-green-300 mb-2">
                 Admin user created successfully!
               </p>
-              <p className="text-sm text-green-700 dark:text-green-400">
-                Temporary password:{' '}
-                <code className="font-mono bg-green-100 dark:bg-green-900 px-2 py-0.5 rounded">
-                  {newTempPassword}
-                </code>
-              </p>
-              <p className="text-xs text-green-600 dark:text-green-500 mt-1">
-                Share this with the user — they should change it on first login.
-              </p>
+              {newTempPassword ? (
+                <>
+                  <p className="text-sm text-green-700 dark:text-green-400">
+                    Temporary password:{' '}
+                    <code className="font-mono bg-green-100 dark:bg-green-900 px-2 py-0.5 rounded">
+                      {newTempPassword}
+                    </code>
+                  </p>
+                  <p className="text-xs text-green-600 dark:text-green-500 mt-1">
+                    Share this with the user — they should change it on first login. It won&apos;t be shown again.
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-green-700 dark:text-green-400">
+                  They can sign in with the password you set.
+                </p>
+              )}
             </div>
             <button
               onClick={() => {
                 setCreateModal(false);
-                setCreateForm({ firstName: '', lastName: '', email: '', role: 'STAFF', roleId: '' });
+                setCreateForm(emptyCreateForm);
                 setNewTempPassword('');
+                setCreatedWithPassword(false);
               }}
               className="w-full px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors"
             >
@@ -448,26 +493,38 @@ export default function AdminUsersPage() {
               >
                 <option value="STAFF">Staff</option>
                 <option value="MANAGER">Manager</option>
-                <option value="SUPER_ADMIN">Super Admin</option>
+                {canGrantSuperAdmin && <option value="SUPER_ADMIN">Super Admin</option>}
               </select>
             </FormField>
-            <FormField label="Assign Role" hint="Optional: assign a granular role">
-              <select
-                value={createForm.roleId}
-                onChange={(e) => setCreateForm((f) => ({ ...f, roleId: e.target.value }))}
+            <FormField label="Assign Roles" hint="Optional: assign one or more granular roles">
+              <div className="max-h-40 overflow-y-auto rounded-lg border border-border p-2 space-y-1">
+                {assignableRoles.length === 0 ? (
+                  <p className="text-xs text-muted-foreground px-1">No roles available</p>
+                ) : (
+                  assignableRoles.map((r: any) => (
+                    <label key={r.id} className="flex items-center gap-2 px-1 py-0.5 text-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={createForm.roleIds.includes(r.id)}
+                        onChange={() => toggleCreateRole(r.id)}
+                        className="rounded border-border"
+                      />
+                      {r.name}
+                    </label>
+                  ))
+                )}
+              </div>
+            </FormField>
+            <FormField label="Password" hint={`Optional. ${PASSWORD_HINT} Leave blank to generate a temporary password.`}>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={createForm.password}
+                maxLength={PASSWORD_MAX_LENGTH}
+                onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))}
                 className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-gold/50"
-              >
-                <option value="">None</option>
-                {roles.map((r: any) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
+              />
             </FormField>
-            <p className="text-xs text-muted-foreground">
-              A temporary password will be generated and displayed after creation.
-            </p>
           </div>
         )}
       </Modal>
@@ -520,6 +577,16 @@ export default function AdminUsersPage() {
               type="email"
               value={editForm.email}
               onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-gold/50"
+            />
+          </FormField>
+          <FormField label="New Password" hint={`Optional — leave blank to keep the current password. ${PASSWORD_HINT} Setting it signs the user out everywhere.`}>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={editForm.password}
+              maxLength={PASSWORD_MAX_LENGTH}
+              onChange={(e) => setEditForm((f) => ({ ...f, password: e.target.value }))}
               className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-gold/50"
             />
           </FormField>

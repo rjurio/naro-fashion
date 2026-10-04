@@ -5,6 +5,7 @@ import { useMemo, useState, useCallback, useRef } from 'react';
 import { Code, Eye, Upload, ImageIcon, Loader2 } from 'lucide-react';
 import { getImagePreset, formatAllowedMimesForToast } from '@naro/shared';
 import { useToast } from '@/contexts/ToastContext';
+import adminApi from '@/lib/api';
 import 'react-quill-new/dist/quill.snow.css';
 
 const ReactQuill = dynamic(() => import('react-quill-new'), { ssr: false });
@@ -112,16 +113,8 @@ export default function RichTextEditor({
       );
       const resizedFile = new File([blob], `newsletter-${Date.now()}.jpg`, { type: 'image/jpeg' });
 
-      const formData = new FormData();
-      formData.append('file', resizedFile);
-      const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-      const res = await fetch(`${API_BASE_URL}/upload/image`, {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: formData,
-      });
-      if (!res.ok) throw new Error('Upload failed');
-      const data = await res.json();
+      // Goes through the shared client so it gets refresh-on-401.
+      const data = await adminApi.uploadImage(resizedFile);
       const imageUrl = data.url?.startsWith('/uploads')
         ? `${API_BASE_URL.replace('/api/v1', '')}${data.url}`
         : data.url;

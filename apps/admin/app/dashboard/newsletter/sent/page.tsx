@@ -58,11 +58,6 @@ export default function SentNewslettersPage() {
   const limit = 10;
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-  }, []);
-
-  useEffect(() => {
     const fetchNewsletters = async () => {
       try {
         setLoading(true);

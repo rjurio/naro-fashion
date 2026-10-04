@@ -30,8 +30,6 @@ const SalesByChannelDonut = dynamic(() => import('./charts').then((m) => ({ defa
 const InventoryStatusBars = dynamic(() => import('./charts').then((m) => ({ default: m.InventoryStatusBars })), { ssr: false });
 
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
-
 interface RecentOrder {
   id: string;
   customer: string;
@@ -119,9 +117,6 @@ export default function DashboardPage() {
   const [revenuePeriod, setRevenuePeriod] = useState('monthly');
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     const fetchData = async () => {
       try {
         const [ordersRes, statsRes, revenueRes, salesRes, inventoryRes] = await Promise.allSettled([
@@ -183,11 +178,7 @@ export default function DashboardPage() {
             size="sm"
             onClick={async () => {
               try {
-                const token = localStorage.getItem('token');
-                const res = await fetch(`${API_BASE_URL}/analytics/dashboard`, {
-                  headers: { Authorization: `Bearer ${token}` },
-                });
-                const data = await res.json();
+                const data = (await adminApi.getDashboardStats()) || {};
                 const reportLines = [
                   `${settings.businessName} - Dashboard Report`,
                   `Generated: ${new Date().toLocaleString()}`,

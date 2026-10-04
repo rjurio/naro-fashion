@@ -1,5 +1,6 @@
 'use client';
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { API_FORBIDDEN_EVENT } from '@/lib/api';
 import { X, CheckCircle2, AlertCircle, AlertTriangle, Info } from 'lucide-react';
 
 type ToastVariant = 'success' | 'error' | 'warning' | 'info';
@@ -28,6 +29,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const addToast = useCallback((variant: ToastVariant, message: string) => {
     const id = Math.random().toString(36).slice(2);
     setToasts(prev => {
+      // De-dupe: the global 403 listener below and a page's own catch block
+      // often report the same message for the same failed call.
+      if (prev.some(t => t.variant === variant && t.message === message)) return prev;
       const next = [...prev, { id, variant, message }];
       return next.slice(-5);
     });
@@ -35,6 +39,17 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 4000);
   }, []);
+
+  // Any API call answering 403 (RBAC permission / module gate) surfaces a
+  // clear toast even when the calling page swallows the error.
+  useEffect(() => {
+    const onForbidden = (e: Event) => {
+      const msg = (e as CustomEvent<{ message?: string }>).detail?.message;
+      addToast('error', msg || "You don't have permission to perform this action.");
+    };
+    window.addEventListener(API_FORBIDDEN_EVENT, onForbidden);
+    return () => window.removeEventListener(API_FORBIDDEN_EVENT, onForbidden);
+  }, [addToast]);
 
   const dismiss = useCallback((id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));

@@ -19,6 +19,7 @@ import { adminApi } from '@/lib/api';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { formatDate } from '@/lib/utils';
+import { sanitizeHtml } from '@/lib/sanitize-html';
 
 interface Newsletter {
   id: string;
@@ -75,9 +76,6 @@ export default function NewsletterDetailPage() {
   const [failedDeliveries, setFailedDeliveries] = useState<FailedDelivery[]>([]);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     const fetchData = async () => {
       try {
         setLoading(true);
@@ -300,7 +298,7 @@ export default function NewsletterDetailPage() {
           {newsletter.body ? (
             <div
               className="prose prose-sm dark:prose-invert max-w-none"
-              dangerouslySetInnerHTML={{ __html: newsletter.body }}
+              dangerouslySetInnerHTML={{ __html: sanitizeHtml(newsletter.body) }}
             />
           ) : (
             <p className="text-sm text-[hsl(var(--muted-foreground))] italic">No body content</p>

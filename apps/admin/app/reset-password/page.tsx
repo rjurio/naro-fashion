@@ -7,6 +7,7 @@ import Image from 'next/image';
 import { Lock, ArrowLeft, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import adminApi from '@/lib/api';
+import { validatePassword, PASSWORD_HINT, PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH } from '@/lib/password-policy';
 import { useSiteSettings } from '@/contexts/SiteSettingsContext';
 
 export default function ResetPasswordPage() {
@@ -25,8 +26,9 @@ export default function ResetPasswordPage() {
     e.preventDefault();
     setError('');
 
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
+    const policyError = validatePassword(password);
+    if (policyError) {
+      setError(policyError);
       return;
     }
     if (password !== confirmPassword) {
@@ -42,8 +44,9 @@ export default function ResetPasswordPage() {
     try {
       await adminApi.resetPassword(token, password);
       setSuccess(true);
-    } catch {
-      setError('Invalid or expired reset token. Please request a new one.');
+    } catch (err: any) {
+      // 400 for policy violations carries a useful message; otherwise assume a bad token.
+      setError(err?.status === 400 && err?.message ? err.message : 'Invalid or expired reset token. Please request a new one.');
     } finally {
       setIsLoading(false);
     }
@@ -106,7 +109,7 @@ export default function ResetPasswordPage() {
                   Reset Password
                 </h2>
                 <p className="mt-2 text-[hsl(var(--muted-foreground))]">
-                  Enter your new password below.
+                  Enter your new password below. {PASSWORD_HINT}
                 </p>
               </div>
 
@@ -136,7 +139,8 @@ export default function ResetPasswordPage() {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       required
-                      minLength={6}
+                      minLength={PASSWORD_MIN_LENGTH}
+                      maxLength={PASSWORD_MAX_LENGTH}
                       placeholder="Enter new password"
                       className="w-full pl-11 pr-12 py-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none focus:ring-2 focus:ring-brand-gold/50 focus:border-brand-gold transition-colors"
                     />
@@ -162,7 +166,8 @@ export default function ResetPasswordPage() {
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       required
-                      minLength={6}
+                      minLength={PASSWORD_MIN_LENGTH}
+                      maxLength={PASSWORD_MAX_LENGTH}
                       placeholder="Confirm new password"
                       className="w-full pl-11 pr-4 py-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none focus:ring-2 focus:ring-brand-gold/50 focus:border-brand-gold transition-colors"
                     />

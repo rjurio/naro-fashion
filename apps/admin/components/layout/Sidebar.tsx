@@ -57,7 +57,9 @@ interface NavItem {
   href?: string;
   icon: React.ElementType;
   requiredModule?: string; // Module that must be enabled to show this item
-  children?: { label: string; href: string; icon: React.ElementType }[];
+  /** RBAC codes (OR) — hidden when /auth/me exposes permissions and none match. */
+  requiredPermission?: string[];
+  children?: { label: string; href: string; icon: React.ElementType; requiredPermission?: string[] }[];
 }
 
 // Platform admin navigation (shown when isPlatformAdmin)
@@ -154,9 +156,9 @@ const navItems: NavItem[] = [
     label: 'User Management',
     icon: Shield,
     children: [
-      { label: 'Admin Users', href: '/dashboard/users', icon: UserCog },
-      { label: 'Roles & Permissions', href: '/dashboard/users/roles', icon: Key },
-      { label: 'Audit Log', href: '/dashboard/audit-log', icon: ScrollText },
+      { label: 'Admin Users', href: '/dashboard/users', icon: UserCog, requiredPermission: ['admins:view'] },
+      { label: 'Roles & Permissions', href: '/dashboard/users/roles', icon: Key, requiredPermission: ['roles:view', 'roles:manage'] },
+      { label: 'Audit Log', href: '/dashboard/audit-log', icon: ScrollText, requiredPermission: ['audit:view'] },
     ],
   },
   {
@@ -198,17 +200,20 @@ interface SidebarProps {
 
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const { user, isPlatformAdmin, isModuleEnabled } = useAuth();
+  const { user, isPlatformAdmin, isModuleEnabled, hasPermission } = useAuth();
   const { settings } = useSiteSettings();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  // Filter nav items based on enabled modules
+  const permitted = (codes?: string[]) => !codes || codes.length === 0 || hasPermission(...codes);
+
+  // Filter nav items based on enabled modules + RBAC permissions (the latter
+  // only bites when /auth/me exposes `permissions`; the API enforces anyway).
   const currentNavItems = isPlatformAdmin
     ? platformNavItems
-    : navItems.filter((item) => {
-        if (!item.requiredModule) return true; // No module requirement — always show
-        return isModuleEnabled(item.requiredModule);
-      });
+    : navItems
+        .filter((item) => (!item.requiredModule || isModuleEnabled(item.requiredModule)) && permitted(item.requiredPermission))
+        .map((item) => (item.children ? { ...item, children: item.children.filter((c) => permitted(c.requiredPermission)) } : item))
+        .filter((item) => !item.children || item.children.length > 0);
 
   const toggleExpanded = (label: string) => {
     setExpanded((prev) => ({ ...prev, [label]: !prev[label] }));

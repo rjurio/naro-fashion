@@ -22,6 +22,7 @@ import { useToast } from '@/contexts/ToastContext';
 
 const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), { ssr: false });
 import { useConfirm } from '@/components/ui/ConfirmDialog';
+import { sanitizeHtml } from '@/lib/sanitize-html';
 
 type TemplateType = 'NEW_ARRIVALS' | 'NEW_DEALS' | 'TIPS' | 'CUSTOM';
 
@@ -81,9 +82,6 @@ export default function ComposeNewsletterPage() {
 
   // Load existing newsletter for editing
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     if (editId) {
       const fetchNewsletter = async () => {
         try {
@@ -398,7 +396,7 @@ export default function ComposeNewsletterPage() {
               {body ? (
                 <div
                   className="prose prose-sm dark:prose-invert max-w-none"
-                  dangerouslySetInnerHTML={{ __html: body }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(body) }}
                 />
               ) : (
                 <p className="text-sm text-[hsl(var(--muted-foreground))] italic">

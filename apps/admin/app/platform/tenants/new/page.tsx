@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import adminApi from '@/lib/api';
+import { validatePassword, PASSWORD_HINT, PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH } from '@/lib/password-policy';
 
 export default function NewTenantPage() {
   const router = useRouter();
@@ -41,6 +42,11 @@ export default function NewTenantPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    const policyError = validatePassword(form.adminPassword);
+    if (policyError) {
+      setError(policyError);
+      return;
+    }
     setLoading(true);
     try {
       const tenant = await adminApi.createTenant({
@@ -164,8 +170,10 @@ export default function NewTenantPage() {
               onChange={(e) => setForm({ ...form, adminPassword: e.target.value })}
               className="w-full px-3 py-2 bg-[hsl(var(--input-bg))] border border-[hsl(var(--input-border))] rounded text-[hsl(var(--foreground))]"
               required
-              minLength={6}
+              minLength={PASSWORD_MIN_LENGTH}
+              maxLength={PASSWORD_MAX_LENGTH}
             />
+            <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">{PASSWORD_HINT}</p>
           </div>
         </div>
 

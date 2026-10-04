@@ -61,9 +61,6 @@ export default function ChecklistsPage() {
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     const fetchChecklists = async () => {
       try {
         setLoading(true);

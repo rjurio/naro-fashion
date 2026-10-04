@@ -59,9 +59,6 @@ export default function AnalyticsPage() {
   // Fetch overview + revenue on mount
   useEffect(() => {
     if (!mounted) return;
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     const fetchOverview = async () => {
       setLoading(true);
       try {

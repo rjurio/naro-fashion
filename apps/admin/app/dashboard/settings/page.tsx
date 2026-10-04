@@ -6,6 +6,9 @@ import { User, Shield, Bell, Palette, Save, Eye, EyeOff, Monitor, Moon, Sun, Loa
 import Button from '@/components/ui/Button';
 import { useAuth } from '@/contexts/AuthContext';
 import adminApi from '@/lib/api';
+import { validatePassword, PASSWORD_HINT, PASSWORD_MAX_LENGTH } from '@/lib/password-policy';
+
+const TWO_FA_UNAVAILABLE_MSG = 'Two-factor authentication is not available yet.';
 
 export default function AdminSettingsPage() {
   const { user, refreshUser } = useAuth();
@@ -23,6 +26,12 @@ export default function AdminSettingsPage() {
   const [showPasswords, setShowPasswords] = useState(false);
 
   const [twoFA, setTwoFA] = useState(false);
+  const [twoFASaving, setTwoFASaving] = useState(false);
+  // Server message once the API reports 2FA as not available.
+  const [twoFAUnavailable, setTwoFAUnavailable] = useState<string | null>(null);
+  // Inline "confirm with current password" step for disabling 2FA.
+  const [twoFADisabling, setTwoFADisabling] = useState(false);
+  const [twoFADisablePassword, setTwoFADisablePassword] = useState('');
   const [selectedTheme, setSelectedTheme] = useState<string>('light');
 
   // Session timing — backed by SiteSetting keys auth_access_token_expires
@@ -105,34 +114,59 @@ export default function AdminSettingsPage() {
       showMsg('New passwords do not match.', 'error');
       return;
     }
-    if (passwords.newPassword.length < 6) {
-      showMsg('New password must be at least 6 characters.', 'error');
+    const policyError = validatePassword(passwords.newPassword);
+    if (policyError) {
+      showMsg(policyError, 'error');
       return;
     }
     setSaving(true);
     try {
-      await adminApi.post('/auth/change-password', {
-        currentPassword: passwords.current,
-        newPassword: passwords.newPassword,
-      });
+      // changePassword() persists the fresh token pair the API returns
+      // (tokenVersion is bumped, so the old tokens stop working).
+      await adminApi.changePassword(passwords.current, passwords.newPassword);
       setPasswords({ current: '', newPassword: '', confirm: '' });
-      showMsg('Password changed successfully.', 'success');
+      showMsg('Password changed successfully. Other sessions have been signed out.', 'success');
     } catch (err: any) {
-      const msg = err?.message?.includes('401') ? 'Current password is incorrect.' : 'Failed to change password.';
+      const msg = err?.status === 401
+        ? (err?.message || 'Current password is incorrect.')
+        : (err?.message || 'Failed to change password.');
       showMsg(msg, 'error');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleToggle2FA = async (enabled: boolean) => {
-    setTwoFA(enabled);
+  // Enabling 2FA always returns 400 "not available yet" until a real second
+  // factor ships, so the toggle is only actionable for turning it OFF (legacy
+  // rows with is2FAEnabled=true), which requires the current password.
+  const handleToggle2FA = (enabled: boolean) => {
+    if (twoFASaving) return;
+    if (enabled) {
+      showMsg(TWO_FA_UNAVAILABLE_MSG, 'error');
+      return;
+    }
+    setTwoFADisablePassword('');
+    setTwoFADisabling(true);
+  };
+
+  const confirmDisable2FA = async () => {
+    if (!twoFADisablePassword) {
+      showMsg('Enter your current password to disable two-factor authentication.', 'error');
+      return;
+    }
+    setTwoFASaving(true);
     try {
-      await adminApi.patch('/auth/2fa', { enabled });
-      showMsg('Two-factor authentication ' + (enabled ? 'enabled' : 'disabled') + '.', 'success');
-    } catch {
-      setTwoFA(!enabled);
-      showMsg('Failed to update 2FA setting.', 'error');
+      await adminApi.toggle2FA(false, twoFADisablePassword);
+      setTwoFA(false);
+      setTwoFADisabling(false);
+      setTwoFADisablePassword('');
+      showMsg('Two-factor authentication disabled.', 'success');
+    } catch (err: any) {
+      const msg: string = err?.message || '';
+      if (err?.status === 400 && /not available/i.test(msg)) setTwoFAUnavailable(msg);
+      showMsg(msg || 'Failed to update 2FA setting.', 'error');
+    } finally {
+      setTwoFASaving(false);
     }
   };
 
@@ -194,9 +228,9 @@ export default function AdminSettingsPage() {
     { device: 'Safari on iPhone', ip: '196.41.xx.xx', lastActive: '2 hours ago', current: false },
   ];
 
-  const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) => (
-    <label className="relative inline-flex items-center cursor-pointer">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="sr-only peer" />
+  const Toggle = ({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) => (
+    <label className={`relative inline-flex items-center ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} className="sr-only peer" />
       <div className="w-11 h-6 bg-[hsl(var(--muted))] peer-focus:ring-2 peer-focus:ring-brand-gold/50 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-gold"></div>
     </label>
   );
@@ -282,6 +316,7 @@ export default function AdminSettingsPage() {
                       onChange={(e) => setPasswords({ ...passwords, [field.key]: e.target.value })}
                       className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 pr-10 text-sm text-[hsl(var(--foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold"
                       placeholder="********"
+                      maxLength={PASSWORD_MAX_LENGTH}
                     />
                     {field.key === 'current' && (
                       <button
@@ -296,6 +331,7 @@ export default function AdminSettingsPage() {
                 </div>
               ))}
             </div>
+            <p className="text-xs text-[hsl(var(--muted-foreground))] mt-2">{PASSWORD_HINT} Changing it signs out your other sessions.</p>
             <div className="flex justify-end mt-4">
               <Button onClick={handleChangePassword} disabled={saving}>
                 <Shield className="w-4 h-4" />
@@ -316,10 +352,43 @@ export default function AdminSettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-[hsl(var(--foreground))]">Two-Factor Authentication</p>
-              <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Add an extra layer of security to your account</p>
+              <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">
+                {twoFA
+                  ? 'Enabled on this account. You can turn it off (requires your current password).'
+                  : (twoFAUnavailable || `${TWO_FA_UNAVAILABLE_MSG} It will appear here once supported.`)}
+              </p>
             </div>
-            <Toggle checked={twoFA} onChange={handleToggle2FA} />
+            <div className="flex items-center gap-2">
+              {twoFASaving && <Loader2 className="w-4 h-4 animate-spin text-brand-gold" />}
+              {/* Only actionable when ON (to disable) — enabling isn't offered by the API yet. */}
+              <Toggle checked={twoFA} onChange={handleToggle2FA} disabled={!twoFA || twoFASaving || twoFADisabling} />
+            </div>
           </div>
+          {twoFADisabling && (
+            <div className="flex flex-col sm:flex-row sm:items-end gap-2 rounded-lg border border-[hsl(var(--border))] p-3">
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-[hsl(var(--foreground))] mb-1">Current password</label>
+                <input
+                  type="password"
+                  autoFocus
+                  value={twoFADisablePassword}
+                  onChange={(e) => setTwoFADisablePassword(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') confirmDisable2FA(); }}
+                  maxLength={PASSWORD_MAX_LENGTH}
+                  className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold"
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => { setTwoFADisabling(false); setTwoFADisablePassword(''); }} disabled={twoFASaving}>
+                  Cancel
+                </Button>
+                <Button onClick={confirmDisable2FA} disabled={twoFASaving}>
+                  {twoFASaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Disable 2FA
+                </Button>
+              </div>
+            </div>
+          )}
 
           {/* Session Timing — adjustable JWT expiration */}
           <div className="pt-4 border-t border-[hsl(var(--border))] space-y-4">

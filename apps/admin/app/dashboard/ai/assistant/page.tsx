@@ -38,11 +38,15 @@ function saveHistory(messages: ChatMessage[]) {
 // Minimal markdown rendering: bold, italics, inline code, code blocks, links, headings.
 // Renders the assistant's markdown-formatted responses without pulling in a parser dep.
 function renderMarkdown(text: string): string {
-  // Escape HTML first
+  // Escape HTML first — every character that can open a tag or break out of
+  // an attribute. Everything below only ever inserts our own fixed markup
+  // around this already-escaped text.
   let html = text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 
   // Code blocks ``` ... ```
   html = html.replace(/```([a-z]*)\n([\s\S]*?)```/g, (_, lang, code) =>
@@ -67,8 +71,14 @@ function renderMarkdown(text: string): string {
   // and other schemes that would fire JS when clicked. The href value goes
   // through dangerouslySetInnerHTML so an LLM-emitted `[click](javascript:alert(1))`
   // would otherwise execute on click.
+  // `href` here is already HTML-escaped (see top of function); decode the
+  // entities before the scheme check so `&#106;avascript:`-style tricks
+  // can't slip past, and re-use the escaped form in the attribute.
+  const decodeEntities = (s: string) =>
+    s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
   const isSafeHref = (href: string): boolean => {
-    const trimmed = href.trim();
+    // eslint-disable-next-line no-control-regex
+    const trimmed = decodeEntities(href).replace(/[\u0000-\u001F\u007F\s]+/g, '');
     if (!trimmed) return false;
     if (trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../') || trimmed.startsWith('#')) return true;
     try {
@@ -78,11 +88,9 @@ function renderMarkdown(text: string): string {
       return false;
     }
   };
-  const escapeHtmlAttr = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, href) => {
     if (!isSafeHref(href)) return label; // strip the link, keep the label text
-    const safeHref = escapeHtmlAttr(href);
+    const safeHref = href; // already entity-escaped (no raw " < > & possible)
     return `<a href="${safeHref}" class="text-brand-gold underline hover:no-underline" target="_blank" rel="noopener noreferrer">${label}</a>`;
   });
 

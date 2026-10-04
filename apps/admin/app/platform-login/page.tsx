@@ -9,6 +9,7 @@ export default function PlatformLoginPage() {
   const { platformLogin } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -17,7 +18,7 @@ export default function PlatformLoginPage() {
     setError('');
     setLoading(true);
     try {
-      await platformLogin(email, password);
+      await platformLogin(email, password, rememberMe);
       router.push('/platform');
     } catch (err: any) {
       setError(err.message || 'Invalid credentials');
@@ -62,6 +63,16 @@ export default function PlatformLoginPage() {
               required
             />
           </div>
+
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-300">Remember me</span>
+          </label>
 
           <button
             type="submit"

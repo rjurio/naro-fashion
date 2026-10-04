@@ -99,8 +99,6 @@ export default function UpcomingPickups() {
 
   const fetchPickups = useCallback(async () => {
     try {
-      const token = localStorage.getItem('token');
-      if (token) adminApi.setToken(token);
       const data = await adminApi.getUpcomingPickups(8);
       const items = Array.isArray(data) ? data : (data as any)?.data || [];
       setPickups(items.map(mapRentalToPickup));

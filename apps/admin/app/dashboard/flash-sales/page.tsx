@@ -62,9 +62,6 @@ export default function FlashSalesPage() {
   ]);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) adminApi.setToken(token);
-
     const fetchFlashSales = async () => {
       try {
         setLoading(true);
