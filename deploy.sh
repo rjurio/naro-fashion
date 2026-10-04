@@ -217,28 +217,35 @@ HAS_MIGRATIONS_TABLE="$(echo "$HAS_MIGRATIONS_TABLE" | tr -d '[:space:]')"
 
 if [ "$HAS_MIGRATIONS_TABLE" = "f" ]; then
   log "🧱 No _prisma_migrations table — checking the live schema before baselining 0_init..."
-  # 0_init was generated from schema.prisma as of the commit that added it.
-  # Compare the live DB against THAT schema (not HEAD's), so a release that
-  # also ships its own new migrations can still be baselined.
+  # Compare the live DB against what the 0_init MIGRATION SQL produces (not a
+  # schema.prisma snapshot — a commit can carry 0_init AND later schema
+  # changes together, which made the old snapshot-based check report false
+  # drift). 0_init alone is replayed into a throwaway shadow database.
   INIT_FILE="prisma/migrations/0_init/migration.sql"
   [ -f "$INIT_FILE" ] || die "${INIT_FILE} not found — cannot baseline"
-  INIT_COMMIT="$(git log --diff-filter=A --format=%H -1 -- "$INIT_FILE")"
-  BASELINE_SCHEMA="$(mktemp -d)/schema.prisma"
-  if [ -n "$INIT_COMMIT" ]; then
-    git show "${INIT_COMMIT}:packages/database/prisma/schema.prisma" > "$BASELINE_SCHEMA"
-    log "Baseline schema = schema.prisma @ ${INIT_COMMIT:0:7} (commit that added 0_init)"
-  else
-    cp prisma/schema.prisma "$BASELINE_SCHEMA"
-    log "⚠ 0_init is not committed yet — using the working-tree schema.prisma as the baseline"
-  fi
+  BASELINE_DIR="$(mktemp -d)"
+  mkdir -p "$BASELINE_DIR/migrations/0_init"
+  cp "$INIT_FILE" "$BASELINE_DIR/migrations/0_init/"
+  cp prisma/migrations/migration_lock.toml "$BASELINE_DIR/migrations/"
+  DB_USER_NAME="${DB_USER:-naro_admin}"
+  DB_PW="$(awk -F: -v u="$DB_USER_NAME" '$4==u {print $5; exit}' "$PGPASSFILE")"
+  [ -n "$DB_PW" ] || die "no password for ${DB_USER_NAME} in ${PGPASSFILE} — cannot create a shadow DB for the baseline check"
+  DB_PW_ENC="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$DB_PW")"
+  SHADOW_DB="naro_baseline_shadow_$$"
+  sudo -u postgres createdb -O "$DB_USER_NAME" "$SHADOW_DB" || die "could not create shadow DB ${SHADOW_DB}"
+  SHADOW_URL="postgresql://${DB_USER_NAME}:${DB_PW_ENC}@${DB_HOST:-localhost}:5432/${SHADOW_DB}"
+  log "Baseline = prisma/migrations/0_init replayed into shadow DB ${SHADOW_DB}"
   echo "------------------------------------------------------------------------"
   set +e
   pnpm exec prisma migrate diff \
-    --from-schema-datasource prisma/schema.prisma \
-    --to-schema-datamodel "$BASELINE_SCHEMA" \
+    --from-migrations "$BASELINE_DIR/migrations" \
+    --to-schema-datasource prisma/schema.prisma \
+    --shadow-database-url "$SHADOW_URL" \
     --script --exit-code
   DRIFT_RC=$?
   set -e
+  sudo -u postgres dropdb --if-exists "$SHADOW_DB" || log "⚠ could not drop shadow DB ${SHADOW_DB} — drop it by hand"
+  rm -rf "$BASELINE_DIR"
   echo "------------------------------------------------------------------------"
   case "$DRIFT_RC" in
     0)
