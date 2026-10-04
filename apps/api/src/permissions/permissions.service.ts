@@ -87,6 +87,38 @@ const PERMISSIONS = [
   { code: 'orders:add-note', name: 'Add Order Notes', module: 'orders', action: 'add-note' },
   { code: 'size-guides:create', name: 'Create Size Guides', module: 'size-guides', action: 'create' },
   { code: 'product-sizes:create', name: 'Create Product Sizes', module: 'product-sizes', action: 'create' },
+  // Fine-grained gates for sensitive money / data-destruction actions
+  // (October 2026 review). Applied via @RequiresPermission on the matching
+  // controllers; SUPER_ADMIN + platform admins bypass in PermissionGuard.
+  { code: 'payments:manage', name: 'Manage Payments (manual confirm / refund)', module: 'payments', action: 'manage' },
+  { code: 'payment-methods:manage', name: 'Manage Payment Methods & Gateway Credentials', module: 'payment-methods', action: 'manage' },
+  { code: 'pos:refund', name: 'Issue POS Refunds', module: 'pos', action: 'refund' },
+  { code: 'finance:close', name: 'Close Financial Periods', module: 'finance', action: 'close' },
+  { code: 'recycle-bin:purge', name: 'Permanently Purge Recycle Bin Items', module: 'recycle-bin', action: 'purge' },
+  { code: 'newsletter:send', name: 'Send Newsletter Campaigns', module: 'newsletter', action: 'send' },
+];
+
+/**
+ * Default grants for the shared system MANAGER role (tenantId=null,
+ * isSystem=true), applied idempotently on every boot (createMany +
+ * skipDuplicates — existing grants are never removed, so operator edits that
+ * ADD permissions are preserved).
+ *
+ * Deliberately NOT granted to MANAGER (SUPER_ADMIN-only by default, since
+ * SUPER_ADMIN bypasses PermissionGuard): payment-methods:manage (gateway
+ * secrets), payments:manage (manual payment confirmation), recycle-bin:purge
+ * (irreversible deletion), settings:manage. Tenants that want a manager to
+ * hold those must create a custom role. RolesService.MANAGER_EXCLUDED keeps
+ * the same codes out of a freshly-seeded MANAGER role.
+ */
+export const MANAGER_DEFAULT_GRANTS = [
+  'pos:refund',
+  'expenses:manage',
+  'newsletter:send',
+  'customers:suspend',
+  'finance:close',
+  'reports:view',
+  'expense-categories:manage',
 ];
 
 @Injectable()
@@ -102,6 +134,25 @@ export class PermissionsService implements OnModuleInit {
         update: { name: p.name, module: p.module, action: p.action },
       });
     }
+    await this.seedManagerDefaults();
+  }
+
+  /** Idempotently grant MANAGER_DEFAULT_GRANTS to the system MANAGER role, if it exists. */
+  async seedManagerDefaults() {
+    const manager = await this.prisma.role.findFirst({
+      where: { name: 'MANAGER', isSystem: true, tenantId: null },
+      select: { id: true },
+    });
+    if (!manager) return; // RolesService seeds it on first boot (with these codes included)
+    const perms = await this.prisma.permission.findMany({
+      where: { code: { in: MANAGER_DEFAULT_GRANTS } },
+      select: { id: true },
+    });
+    if (perms.length === 0) return;
+    await this.prisma.rolePermission.createMany({
+      data: perms.map((p) => ({ roleId: manager.id, permissionId: p.id })),
+      skipDuplicates: true,
+    });
   }
 
   async findAll(module?: string) {

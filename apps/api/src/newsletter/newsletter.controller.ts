@@ -17,6 +17,8 @@ import {
 } from './newsletter.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
@@ -119,7 +121,9 @@ export class NewsletterController {
 
   // --- Admin: Sending ---
 
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  // Sending mass email is a high-impact action: gated by RBAC, not just isAdmin.
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('newsletter:send')
   @Post(':id/send')
   sendNewsletter(@Param('id') id: string) {
     return this.newsletterService.sendNewsletter(id);
@@ -137,7 +141,8 @@ export class NewsletterController {
     return this.newsletterService.getFailedDeliveries(id);
   }
 
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('newsletter:send')
   @Post(':id/resend-failed')
   resendFailed(@Param('id') id: string) {
     return this.newsletterService.resendFailed(id);

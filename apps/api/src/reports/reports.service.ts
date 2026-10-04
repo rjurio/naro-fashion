@@ -1,6 +1,25 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { eatMonthBounds } from './eat-time.util';
+import { CreateFinancialPeriodDto } from './dto/create-financial-period.dto';
+
+/** Order paymentStatus values that count as realised sales revenue. */
+export const REVENUE_PAYMENT_STATUSES = ['PAID', 'REFUNDED'] as const;
+
+/** Rental statuses that represent a paid (down payment onwards) rental. */
+export const RENTAL_REVENUE_STATUSES = [
+  'DOWN_PAYMENT_PAID',
+  'FULLY_PAID',
+  'READY_FOR_PICKUP',
+  'ITEM_DISPATCHED',
+  'ACTIVE',
+  'RETURNED',
+  'INSPECTION',
+  'CLOSED',
+  'CONFIRMED', // legacy value written by payment reconciliation
+  'COMPLETED',
+] as const;
 
 @Injectable()
 export class ReportsService {
@@ -78,33 +97,77 @@ export class ReportsService {
 
   async getIncomeStatement(period: string) {
     const tenantId = this.tenantContext.requireId;
-    // period = "YYYY-MM"
-    const [year, month] = period.split('-').map(Number);
-    const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0, 23, 59, 59);
+    // period = "YYYY-MM", bounded in Africa/Dar_es_Salaam time (server is UTC).
+    let startDate: Date;
+    let endDate: Date;
+    try {
+      ({ start: startDate, end: endDate } = eatMonthBounds(period));
+    } catch {
+      throw new BadRequestException('period must be YYYY-MM');
+    }
 
-    // Revenue
+    // Sales revenue. An order counts when it was paid: PAID, or REFUNDED
+    // (fully refunded — its refund payments are subtracted below, netting to
+    // 0), or for POS also PARTIAL (= partially refunded/exchanged; online
+    // PARTIAL means partially PAID and is excluded until settled). Previously
+    // only PAID counted, so a POS sale with one returned item vanished from
+    // revenue entirely.
+    const salesWhere = {
+      tenantId,
+      createdAt: { gte: startDate, lte: endDate },
+      OR: [
+        { paymentStatus: { in: [...REVENUE_PAYMENT_STATUSES] } },
+        { channel: 'POS', paymentStatus: 'PARTIAL' },
+      ],
+    };
     const ordersAgg = await this.prisma.order.aggregate({
-      where: { tenantId, createdAt: { gte: startDate, lte: endDate }, paymentStatus: 'PAID' },
+      where: salesWhere,
       _sum: { total: true },
     });
-    const rentalsAgg = await this.prisma.rentalOrder.aggregate({
-      where: { tenantId, createdAt: { gte: startDate, lte: endDate }, status: { in: ['RETURNED', 'ACTIVE'] } },
-      _sum: { totalRentalPrice: true },
+
+    // Refunds are booked in the month the money went back (keeps closed
+    // periods immutable), on any sales order of the tenant.
+    const refundsAgg = await this.prisma.payment.aggregate({
+      where: {
+        tenantId,
+        status: 'REFUNDED',
+        orderId: { not: null },
+        createdAt: { gte: startDate, lte: endDate },
+      },
+      _sum: { amount: true },
     });
 
-    const salesRevenue = Number(ordersAgg._sum.total ?? 0);
-    const rentalRevenue = Number(rentalsAgg._sum.totalRentalPrice ?? 0);
+    // Rental revenue: every rental that reached a paid state (down payment
+    // onwards — DOWN_PAYMENT_PAID … INSPECTION, RETURNED, CLOSED, plus legacy
+    // CONFIRMED/COMPLETED), never cancelled/unpaid holds. Previously only
+    // ACTIVE/RETURNED counted, so revenue disappeared once a rental moved to
+    // INSPECTION/CLOSED. Late fees are rental revenue too.
+    const rentalsAgg = await this.prisma.rentalOrder.aggregate({
+      where: {
+        tenantId,
+        createdAt: { gte: startDate, lte: endDate },
+        status: { in: [...RENTAL_REVENUE_STATUSES] },
+      },
+      _sum: { totalRentalPrice: true, lateFee: true },
+    });
+
+    const grossSales = Number(ordersAgg._sum.total ?? 0);
+    const refunds = Number(refundsAgg._sum.amount ?? 0);
+    const salesRevenue = grossSales - refunds;
+    const rentalRevenue =
+      Number(rentalsAgg._sum.totalRentalPrice ?? 0) + Number(rentalsAgg._sum.lateFee ?? 0);
     const totalRevenue = salesRevenue + rentalRevenue;
 
-    // COGS: SUM(orderItem.quantity * product.purchasePrice) for orders in period
+    // COGS: units actually kept by the customer (quantity − refunded/returned,
+    // which went back to stock) × purchase price, same order set as revenue.
     const orderItems = await this.prisma.orderItem.findMany({
-      where: { order: { tenantId, createdAt: { gte: startDate, lte: endDate }, paymentStatus: 'PAID' } },
+      where: { order: salesWhere },
       include: { product: { select: { purchasePrice: true } } },
     });
     const cogs = orderItems.reduce((sum, item) => {
       const cost = Number(item.product.purchasePrice ?? 0);
-      return sum + cost * item.quantity;
+      const kept = Math.max(0, item.quantity - (item.refundedQuantity ?? 0));
+      return sum + cost * kept;
     }, 0);
 
     const grossProfit = totalRevenue - cogs;
@@ -133,7 +196,7 @@ export class ReportsService {
     const financialPeriod = await this.prisma.financialPeriod.findFirst({ where: { periodKey: period, tenantId } });
 
     return {
-      period, salesRevenue, rentalRevenue, totalRevenue,
+      period, grossSales, refunds, salesRevenue, rentalRevenue, totalRevenue,
       cogs, grossProfit, grossMargin: `${grossMargin}%`,
       expenses: Object.values(expensesByCategory),
       totalExpenses, netProfit, netMargin: `${netMargin}%`,
@@ -148,7 +211,7 @@ export class ReportsService {
       const stmt = await this.getIncomeStatement(period);
       rows.push({
         month: period,
-        monthName: new Date(year, m - 1, 1).toLocaleString('en', { month: 'short' }),
+        monthName: new Date(Date.UTC(year, m - 1, 15)).toLocaleString('en', { month: 'short', timeZone: 'UTC' }),
         revenue: stmt.totalRevenue,
         cogs: stmt.cogs,
         grossProfit: stmt.grossProfit,
@@ -185,22 +248,34 @@ export class ReportsService {
     });
   }
 
-  async createFinancialPeriod(data: { periodKey: string; periodName: string; startDate: string; endDate: string }) {
+  async createFinancialPeriod(dto: CreateFinancialPeriodDto) {
+    // Bounds are derived from periodKey in EAT so the lock window used by
+    // ExpensesService always matches the period exactly (client-supplied
+    // start/end dates are ignored for MONTH periods).
+    const { start, end } = eatMonthBounds(dto.periodKey);
     return this.prisma.financialPeriod.create({
       data: {
-        ...data,
         tenantId: this.tenantContext.requireId,
-        startDate: new Date(data.startDate),
-        endDate: new Date(data.endDate),
+        periodKey: dto.periodKey,
+        periodName: dto.periodName,
+        periodType: 'MONTH',
+        startDate: start,
+        endDate: end,
+        notes: dto.notes,
+        status: 'OPEN',
       },
     });
   }
 
   async closePeriod(id: string, closedBy?: string) {
+    const tenantId = this.tenantContext.requireId;
     const period = await this.prisma.financialPeriod.findFirst({
-      where: { id, tenantId: this.tenantContext.requireId },
+      where: { id, tenantId },
     });
     if (!period) throw new NotFoundException('Financial period not found');
+    if (period.status !== 'OPEN') {
+      throw new ConflictException(`Financial period is already ${period.status}`);
+    }
     return this.prisma.financialPeriod.update({
       where: { id },
       data: { status: 'CLOSED', closedBy, closedAt: new Date() },

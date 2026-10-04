@@ -197,8 +197,10 @@ describe('Admin UI — AI Role Assignments page invariants', () => {
     });
 
     it('the link label is "Role Assignments"', () => {
-      const stripped = stripComments(sidebarSrc);
-      expect(stripped).toMatch(/label:\s*'Role Assignments'/);
+      // Line-based check: stripComments' block-comment regex is too greedy for
+      // Sidebar.tsx (a '/*' inside a string swallows real code), so assert on
+      // a non-comment source line instead.
+      expect(sidebarSrc).toMatch(/^\s*\{\s*label:\s*'Role Assignments'/m);
     });
   });
 

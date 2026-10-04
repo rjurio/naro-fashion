@@ -400,7 +400,32 @@ const TOOLS: ToolDef[] = [
   },
 ];
 
-const MAX_ITERATIONS = 10; // hard cap to prevent runaway tool-use loops
+const MAX_ITERATIONS = 10; // hard cap to prevent runaway tool-use loops (never raise above 10)
+
+/** Model id — override with env AI_ASSISTANT_MODEL; default unchanged. */
+export const DEFAULT_AI_ASSISTANT_MODEL = 'claude-opus-4-8';
+export function resolveAssistantModel(env: NodeJS.ProcessEnv = process.env): string {
+  const m = (env.AI_ASSISTANT_MODEL || '').trim();
+  return m || DEFAULT_AI_ASSISTANT_MODEL;
+}
+
+/**
+ * Convert client chat history into Anthropic messages. Defence in depth on
+ * top of the DTO: only `user` / `assistant` roles and plain-string content
+ * are accepted, so a client can never inject a `system` turn or forged
+ * tool_use / tool_result blocks.
+ */
+export function toApiMessages(messages: ChatMessage[]): Anthropic.MessageParam[] {
+  return messages.map((m) => {
+    if (m?.role !== 'user' && m?.role !== 'assistant') {
+      throw new BadRequestException('Invalid message role');
+    }
+    if (typeof m.content !== 'string') {
+      throw new BadRequestException('Message content must be a string');
+    }
+    return { role: m.role, content: m.content };
+  });
+}
 
 @Injectable()
 export class AiAssistantService {
@@ -450,16 +475,14 @@ export class AiAssistantService {
     }));
 
     // Convert chat history to Anthropic message format.
-    const apiMessages: Anthropic.MessageParam[] = messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    const apiMessages: Anthropic.MessageParam[] = toApiMessages(messages);
+    const model = resolveAssistantModel();
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
 
       const response = await this.client.messages.create({
-        model: 'claude-opus-4-8',
+        model,
         max_tokens: 4096,
         thinking: { type: 'adaptive' },
         output_config: { effort: 'high' } as any,

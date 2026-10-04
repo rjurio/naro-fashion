@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { assertSameTenant } from '../products/util/tenant-ownership';
 
 @Injectable()
 export class WishlistService {
@@ -43,6 +44,13 @@ export class WishlistService {
   }
 
   async addItem(userId: string, productId: string) {
+    // The product must belong to the caller's tenant and be live — otherwise
+    // the wishlist include would leak another tenant's product.
+    await assertSameTenant(this.prisma.product, productId, this.tenantContext.requireId, 'Product', {
+      isActive: true,
+      deletedAt: null,
+    });
+
     const existing = await this.prisma.wishlistItem.findFirst({
       where: {
         userId,

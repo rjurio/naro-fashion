@@ -23,7 +23,7 @@ describe('PermissionGuard', () => {
   it('allows routes with no @RequiresPermission', async () => {
     reflector.getAllAndOverride.mockReturnValue(undefined);
     await expect(
-      guard.canActivate(makeCtx({ id: 'x', role: 'STAFF' })),
+      guard.canActivate(makeCtx({ id: 'x', role: 'STAFF', isAdmin: true })),
     ).resolves.toBe(true);
     expect(prisma.adminUserRole.findMany).not.toHaveBeenCalled();
   });
@@ -49,7 +49,7 @@ describe('PermissionGuard', () => {
       { role: { permissions: [{ permission: { code: 'products:view' } }] } },
     ]);
     await expect(
-      guard.canActivate(makeCtx({ id: 'staff', role: 'STAFF' })),
+      guard.canActivate(makeCtx({ id: 'staff', role: 'STAFF', isAdmin: true })),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
@@ -59,7 +59,7 @@ describe('PermissionGuard', () => {
       { role: { permissions: [{ permission: { code: 'admins:create' } }] } },
     ]);
     await expect(
-      guard.canActivate(makeCtx({ id: 'mgr', role: 'MANAGER' })),
+      guard.canActivate(makeCtx({ id: 'mgr', role: 'MANAGER', isAdmin: true })),
     ).resolves.toBe(true);
   });
 
@@ -69,7 +69,7 @@ describe('PermissionGuard', () => {
       { role: { permissions: [{ permission: { code: 'admins:update' } }] } },
     ]);
     await expect(
-      guard.canActivate(makeCtx({ id: 'u', role: 'MANAGER' })),
+      guard.canActivate(makeCtx({ id: 'u', role: 'MANAGER', isAdmin: true })),
     ).resolves.toBe(true);
   });
 
@@ -78,9 +78,40 @@ describe('PermissionGuard', () => {
     prisma.adminUserRole.findMany.mockResolvedValue([
       { role: { permissions: [{ permission: { code: 'admins:view' } }] } },
     ]);
-    await guard.canActivate(makeCtx({ id: 'u1', role: 'STAFF' }));
-    await guard.canActivate(makeCtx({ id: 'u1', role: 'STAFF' }));
+    await guard.canActivate(makeCtx({ id: 'u1', role: 'STAFF', isAdmin: true }));
+    await guard.canActivate(makeCtx({ id: 'u1', role: 'STAFF', isAdmin: true }));
     expect(prisma.adminUserRole.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('scopes role resolution to own-tenant + system roles and excludes soft-deleted/inactive roles', async () => {
+    reflector.getAllAndOverride.mockReturnValue(['admins:view']);
+    prisma.adminUserRole.findMany.mockResolvedValue([]);
+    await expect(
+      guard.canActivate(makeCtx({ id: 'u2', role: 'STAFF', isAdmin: true, tenantId: 't1' })),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    const where = prisma.adminUserRole.findMany.mock.calls[0][0].where;
+    expect(where.adminUserId).toBe('u2');
+    expect(where.role.deletedAt).toBeNull();
+    expect(where.role.isActive).toBe(true);
+    expect(where.role.OR).toEqual([{ tenantId: 't1' }, { tenantId: null, isSystem: true }]);
+  });
+
+  it('an admin without a tenant only resolves shared system roles', async () => {
+    reflector.getAllAndOverride.mockReturnValue(['admins:view']);
+    prisma.adminUserRole.findMany.mockResolvedValue([]);
+    await expect(
+      guard.canActivate(makeCtx({ id: 'u3', role: 'STAFF', isAdmin: true, tenantId: null })),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    const where = prisma.adminUserRole.findMany.mock.calls[0][0].where;
+    expect(where.role.OR).toEqual([{ tenantId: null, isSystem: true }]);
+  });
+
+  it('rejects a customer principal (no isAdmin) without a DB lookup', async () => {
+    reflector.getAllAndOverride.mockReturnValue(['customers:suspend']);
+    await expect(
+      guard.canActivate(makeCtx({ id: 'cust', tenantId: 't1' })),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.adminUserRole.findMany).not.toHaveBeenCalled();
   });
 
   it('throws when the request is unauthenticated', async () => {

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentProviderRegistry } from './payment-provider.registry';
 import {
@@ -8,14 +9,21 @@ import {
   ProviderCode,
   ProviderCredentials,
 } from './payment-provider.types';
+import {
+  PaymentSettlementService,
+  mapGatewayStatus,
+} from './payment-settlement.service';
 
 /**
  * Runs every 30s to finalize PROCESSING ClickPesa payments that may be waiting
  * on a delayed webhook. For each candidate Payment:
  *   1. Load tenant credentials from PaymentMethod.integrationParams.
  *   2. Query ClickPesa for the current status.
- *   3. If terminal (COMPLETED/FAILED), update the Payment + parent order/rental.
- *   4. If still PROCESSING after CLICKPESA_RECONCILE_CUTOFF_MINUTES, mark FAILED.
+ *   3. If terminal (COMPLETED/FAILED), apply it through the shared
+ *      PaymentSettlementService (amount check, never-downgrade CAS, single
+ *      order/rental roll-up — the same code the webhook and poll paths use).
+ *   4. If still PROCESSING after CLICKPESA_RECONCILE_CUTOFF_MINUTES, mark FAILED
+ *      (conditionally — never over a payment a webhook completed meanwhile).
  *
  * Throttled per-payment via lastPolledAt to avoid hammering the gateway.
  */
@@ -30,6 +38,7 @@ export class PaymentsReconciliationService {
     private readonly prisma: PrismaService,
     private readonly registry: PaymentProviderRegistry,
     private readonly configService: ConfigService,
+    private readonly settlement: PaymentSettlementService,
   ) {
     this.pollIntervalSeconds = Number(
       this.configService.get<string>(
@@ -90,7 +99,7 @@ export class PaymentsReconciliationService {
     }
   }
 
-  private async reconcileOne(
+  async reconcileOne(
     payment: {
       id: string;
       tenantId: string | null;
@@ -99,10 +108,13 @@ export class PaymentsReconciliationService {
       rentalOrderId: string | null;
       createdAt: Date;
       providerCode: string | null;
+      status: string;
+      amount: Prisma.Decimal | number | string;
     },
     expiryCutoff: Date,
   ) {
     if (!payment.tenantId || !payment.transactionRef) return;
+    const tenantId = payment.tenantId;
 
     // Ask the gateway for a DEFINITIVE status FIRST — before any age-based
     // decision. The old code force-FAILED any payment past the cutoff before
@@ -111,7 +123,7 @@ export class PaymentsReconciliationService {
     // payment failed even though it later completed, and the money was lost
     // to reconciliation unless a webhook happened to arrive.
     const providerCode = (payment.providerCode as ProviderCode) ?? PROVIDER_CODES.CLICKPESA_MIXX;
-    const creds = await this.loadCreds(payment.tenantId, providerCode);
+    const creds = await this.loadCreds(tenantId, providerCode);
 
     let gatewayChecked = false;
     if (creds) {
@@ -120,33 +132,24 @@ export class PaymentsReconciliationService {
         payment.transactionRef,
         creds,
       );
-      await this.prisma.payment.update({
-        where: { id: payment.id },
+      await this.prisma.payment.updateMany({
+        where: { id: payment.id, tenantId },
         data: { lastPolledAt: new Date() },
       });
 
       if (status.success) {
         gatewayChecked = true;
-        // Terminal status from the gateway is authoritative — apply and stop.
+        // Terminal status from the gateway is authoritative — apply via the
+        // shared settlement path and stop.
         if (status.status !== 'PROCESSING' && status.status !== 'PENDING') {
-          await this.prisma.payment.update({
-            where: { id: payment.id },
-            data: {
-              status: status.status,
-              gatewayResponse: status.rawResponse ?? undefined,
-            },
+          await this.settlement.applyGatewayResult({
+            payment,
+            tenantId,
+            status: mapGatewayStatus(status.status),
+            reportedAmount: status.collectedAmount ?? null,
+            gatewayResponse: status.rawResponse ?? undefined,
+            source: 'reconcile',
           });
-          this.logger.log(
-            `Reconcile: payment ${payment.id} (${payment.transactionRef}) → ${status.status}`,
-          );
-          if (status.status === 'COMPLETED') {
-            if (payment.orderId) {
-              await this.updateOrderPaymentStatus(payment.orderId, payment.tenantId);
-            }
-            if (payment.rentalOrderId) {
-              await this.updateRentalPaymentStatus(payment.rentalOrderId, payment.tenantId);
-            }
-          }
           return;
         }
         // Gateway still says PROCESSING/PENDING — fall through to the age check.
@@ -156,19 +159,26 @@ export class PaymentsReconciliationService {
     // Only NOW consider the age cutoff: fail a payment on timeout ONLY when the
     // gateway did not confirm completion (still pending, or couldn't be polled
     // — e.g. Selcom, which reconciles via webhook). Never on age alone before a
-    // status check.
+    // status check. Conditional on PENDING/PROCESSING so a webhook that landed
+    // while we were polling is never downgraded.
     if (payment.createdAt < expiryCutoff) {
-      await this.prisma.payment.update({
-        where: { id: payment.id },
+      const res = await this.prisma.payment.updateMany({
+        where: {
+          id: payment.id,
+          tenantId,
+          status: { in: ['PENDING', 'PROCESSING'] },
+        },
         data: {
           status: 'FAILED',
           lastPolledAt: new Date(),
           gatewayResponse: { timeout: true, cutoff: expiryCutoff, gatewayChecked },
         },
       });
-      this.logger.log(
-        `Reconcile: payment ${payment.id} timed out after ${this.cutoffMinutes}m (gatewayChecked=${gatewayChecked}) → FAILED`,
-      );
+      if (res.count > 0) {
+        this.logger.log(
+          `Reconcile: payment ${payment.id} timed out after ${this.cutoffMinutes}m (gatewayChecked=${gatewayChecked}) → FAILED`,
+        );
+      }
     }
   }
 
@@ -186,68 +196,5 @@ export class PaymentsReconciliationService {
       },
     });
     return (pm?.integrationParams as ProviderCredentials) ?? undefined;
-  }
-
-  private async updateOrderPaymentStatus(
-    orderId: string,
-    tenantId: string,
-  ) {
-    const order = await this.prisma.order.findFirst({
-      where: { id: orderId, tenantId },
-    });
-    if (!order) return;
-
-    const completedPayments = await this.prisma.payment.findMany({
-      where: { orderId, tenantId, status: 'COMPLETED' },
-    });
-    const totalPaid = completedPayments.reduce(
-      (sum, p) => sum + Number(p.amount),
-      0,
-    );
-    const totalDue = Number(order.total);
-
-    let paymentStatus = 'PENDING';
-    if (totalPaid >= totalDue) paymentStatus = 'PAID';
-    else if (totalPaid > 0) paymentStatus = 'PARTIAL';
-
-    await this.prisma.order.update({
-      where: { id: orderId },
-      data: { paymentStatus },
-    });
-  }
-
-  private async updateRentalPaymentStatus(
-    rentalOrderId: string,
-    tenantId: string,
-  ) {
-    const rental = await this.prisma.rentalOrder.findFirst({
-      where: { id: rentalOrderId, tenantId },
-    });
-    if (!rental) return;
-
-    const completedPayments = await this.prisma.payment.findMany({
-      where: { rentalOrderId, tenantId, status: 'COMPLETED' },
-    });
-    const totalPaid = completedPayments.reduce(
-      (sum, p) => sum + Number(p.amount),
-      0,
-    );
-    const downPaymentDue = Number(rental.downPaymentAmount);
-
-    const pendingStatuses = [
-      'PENDING_ID_VERIFICATION',
-      'PENDING_PAYMENT',
-      'PENDING',
-    ];
-
-    if (
-      totalPaid >= downPaymentDue &&
-      pendingStatuses.includes(rental.status)
-    ) {
-      await this.prisma.rentalOrder.update({
-        where: { id: rentalOrderId },
-        data: { status: 'CONFIRMED' },
-      });
-    }
   }
 }

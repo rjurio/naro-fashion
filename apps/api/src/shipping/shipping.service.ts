@@ -9,6 +9,7 @@ import { CreateZoneDto } from './dto/create-zone.dto';
 import { UpdateZoneDto } from './dto/update-zone.dto';
 import { CreateShipmentDto } from './dto/create-shipment.dto';
 import { UpdateShipmentDto } from './dto/update-shipment.dto';
+import { assertSameTenant } from '../products/util/tenant-ownership';
 
 @Injectable()
 export class ShippingService {
@@ -169,6 +170,10 @@ export class ShippingService {
     if (existingShipment) {
       throw new ConflictException('Shipment already exists for this order');
     }
+
+    // Zone must be this tenant's — otherwise the shipment include leaks
+    // another tenant's zone name.
+    await assertSameTenant(this.prisma.shippingZone, dto.shippingZoneId, tenantId, 'Shipping zone');
 
     return this.prisma.shipment.create({
       data: {

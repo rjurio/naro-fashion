@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
-import { AdminUsersService } from './admin-users.service';
+import { AdminUsersService, AdminActor } from './admin-users.service';
 import { CreateAdminUserDto } from './dto/create-admin-user.dto';
 import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -44,14 +44,18 @@ export class AdminUsersController {
 
   @Post()
   @RequiresPermission('admins:create')
-  create(@Body() dto: CreateAdminUserDto, @CurrentUser('id') performedById: string) {
-    return this.adminUsersService.create(dto, performedById);
+  create(
+    @Body() dto: CreateAdminUserDto,
+    @CurrentUser('id') performedById: string,
+    @CurrentUser() actor: AdminActor,
+  ) {
+    return this.adminUsersService.create(dto, performedById, actor);
   }
 
   @Patch(':id')
   @RequiresPermission('admins:update')
-  update(@Param('id') id: string, @Body() dto: UpdateAdminUserDto) {
-    return this.adminUsersService.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: UpdateAdminUserDto, @CurrentUser() actor: AdminActor) {
+    return this.adminUsersService.update(id, dto, actor);
   }
 
   @Delete(':id')
@@ -62,8 +66,12 @@ export class AdminUsersController {
 
   @Patch(':id/toggle')
   @RequiresPermission('admins:update')
-  toggle(@Param('id') id: string, @CurrentUser('id') performedById: string) {
-    return this.adminUsersService.toggle(id, performedById);
+  toggle(
+    @Param('id') id: string,
+    @CurrentUser('id') performedById: string,
+    @CurrentUser() actor: AdminActor,
+  ) {
+    return this.adminUsersService.toggle(id, performedById, actor);
   }
 
   @Patch(':id/unlock')
@@ -78,8 +86,9 @@ export class AdminUsersController {
     @Param('id') id: string,
     @Body() body: { roleId: string },
     @CurrentUser('id') performedById: string,
+    @CurrentUser() actor: AdminActor,
   ) {
-    return this.adminUsersService.assignRole(id, body.roleId, performedById);
+    return this.adminUsersService.assignRole(id, body.roleId, performedById, actor);
   }
 
   @Delete(':id/roles/:roleId')

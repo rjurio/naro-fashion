@@ -17,6 +17,8 @@ import { ProductsService } from './products.service';
 import { CreateProductDto, UpdateProductDto, QueryProductsDto } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 
 @Controller('products')
@@ -97,7 +99,8 @@ export class ProductsController {
     return this.productsService.delete(id);
   }
 
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('recycle-bin:purge')
   @Delete(':id/permanent')
   permanentDelete(@Param('id') id: string) {
     return this.productsService.permanentDelete(id);

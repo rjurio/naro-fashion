@@ -14,6 +14,11 @@ import {
 import { Type } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
+import {
+  isMaskedValue,
+  maskPaymentMethod,
+  restoreMaskedSecrets,
+} from './secret-mask.util';
 
 export class CreatePaymentMethodDto {
   @IsString() name: string;
@@ -63,24 +68,30 @@ export class PaymentMethodsService {
     });
   }
 
-  findAllAdmin() {
-    return this.prisma.paymentMethod.findMany({
+  // Admin reads: gateway secrets inside integrationParams / integrationKey are
+  // masked ('••••' + last 4) — even a permitted admin never gets them back in
+  // clear over the API. Every admin response below goes through
+  // maskPaymentMethod for the same reason.
+  async findAllAdmin() {
+    const rows = await this.prisma.paymentMethod.findMany({
       where: { deletedAt: null, tenantId: this.tenantContext.id },
       orderBy: { sortOrder: 'asc' },
     });
+    return rows.map(maskPaymentMethod);
   }
 
-  findDeleted() {
-    return this.prisma.paymentMethod.findMany({
+  async findDeleted() {
+    const rows = await this.prisma.paymentMethod.findMany({
       where: { deletedAt: { not: null }, tenantId: this.tenantContext.id },
       orderBy: { sortOrder: 'asc' },
     });
+    return rows.map(maskPaymentMethod);
   }
 
   async create(dto: CreatePaymentMethodDto) {
     try {
       const { integrationParams, ...rest } = dto;
-      return await this.prisma.paymentMethod.create({
+      const created = await this.prisma.paymentMethod.create({
         data: {
           ...rest,
           integrationParams: integrationParams
@@ -89,6 +100,7 @@ export class PaymentMethodsService {
           tenantId: this.tenantContext.id,
         },
       });
+      return maskPaymentMethod(created);
     } catch (err: any) {
       if (err?.code === 'P2002') {
         throw new ConflictException(
@@ -100,18 +112,30 @@ export class PaymentMethodsService {
   }
 
   async update(id: string, dto: UpdatePaymentMethodDto) {
-    await this.findOneOrFail(id);
+    const existing = await this.findOneOrFail(id);
     try {
-      const { integrationParams, ...rest } = dto;
-      return await this.prisma.paymentMethod.update({
+      const { integrationParams, integrationKey, ...rest } = dto;
+      // The admin UI round-trips the masked values it was shown; a masked
+      // value means "keep the stored secret", never "store the mask".
+      const updated = await this.prisma.paymentMethod.update({
         where: { id },
         data: {
           ...rest,
+          ...(integrationKey !== undefined &&
+            !isMaskedValue(integrationKey) && { integrationKey }),
           ...(integrationParams !== undefined && {
-            integrationParams: JSON.parse(JSON.stringify(integrationParams)),
+            integrationParams: JSON.parse(
+              JSON.stringify(
+                restoreMaskedSecrets(
+                  integrationParams,
+                  existing.integrationParams,
+                ),
+              ),
+            ),
           }),
         },
       });
+      return maskPaymentMethod(updated);
     } catch (err: any) {
       if (err?.code === 'P2002') {
         throw new ConflictException(
@@ -124,18 +148,20 @@ export class PaymentMethodsService {
 
   async toggleActive(id: string) {
     const method = await this.findOneOrFail(id);
-    return this.prisma.paymentMethod.update({
+    const updated = await this.prisma.paymentMethod.update({
       where: { id },
       data: { isActive: !method.isActive },
     });
+    return maskPaymentMethod(updated);
   }
 
   async softDelete(id: string) {
     await this.findOneOrFail(id);
-    return this.prisma.paymentMethod.update({
+    const updated = await this.prisma.paymentMethod.update({
       where: { id },
       data: { deletedAt: new Date(), isActive: false },
     });
+    return maskPaymentMethod(updated);
   }
 
   async restore(id: string) {
@@ -144,10 +170,11 @@ export class PaymentMethodsService {
       where: { id, tenantId: this.tenantContext.id },
     });
     if (!method) throw new NotFoundException('Payment method not found');
-    return this.prisma.paymentMethod.update({
+    const updated = await this.prisma.paymentMethod.update({
       where: { id },
       data: { deletedAt: null, isActive: true },
     });
+    return maskPaymentMethod(updated);
   }
 
   // Tenant-scoped lookup used by update/toggleActive/softDelete. Without the

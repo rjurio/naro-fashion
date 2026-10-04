@@ -9,9 +9,9 @@ import {
   Query,
   UseGuards,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
-import { SchedulerRegistry } from '@nestjs/schedule';
-import { CronJob } from 'cron';
+import { Throttle } from '@nestjs/throttler';
 import {
   CmsService,
   CreateBannerDto,
@@ -29,20 +29,24 @@ import {
   UpdateContactStatusDto,
   ReplyContactDto,
 } from './cms.service';
-import { InstagramService } from './instagram.service';
+import { InstagramService, INSTAGRAM_SYNC_INTERVAL_MS } from './instagram.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
-import { INSTAGRAM_SYNC_INTERVALS } from '../scheduler/scheduler.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { PrismaService } from '../prisma/prisma.service';
+import { adminHasPermission, isPrivilegedSettingKey } from './settings-permissions';
 
 @Controller('cms')
 export class CmsController {
   constructor(
     private readonly cmsService: CmsService,
     private readonly instagramService: InstagramService,
-    private readonly schedulerRegistry: SchedulerRegistry,
     private readonly tenantContext: TenantContext,
+    private readonly prisma: PrismaService,
   ) {}
 
   // --- Banners ---
@@ -153,9 +157,25 @@ export class CmsController {
     return this.cmsService.getStorefrontStats();
   }
 
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  /**
+   * Site-setting writes are RBAC-gated (previously any admin, incl. STAFF):
+   *  - privileged keys (session lifetimes `auth_*`, secrets/tokens, Instagram
+   *    / Facebook integration config) require `settings:manage`
+   *  - ordinary content keys (homepage copy, feature toggles, business
+   *    profile) accept `settings:manage` OR `cms:manage`, so MANAGER (which
+   *    deliberately lacks settings:manage) can still edit homepage CMS text.
+   */
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('settings:manage', 'cms:manage')
   @Patch('settings/:key')
-  updateSetting(@Param('key') key: string, @Body() dto: UpdateSettingDto) {
+  async updateSetting(
+    @Param('key') key: string,
+    @Body() dto: UpdateSettingDto,
+    @CurrentUser() user: any,
+  ) {
+    if (isPrivilegedSettingKey(key) && !(await adminHasPermission(this.prisma, user, 'settings:manage'))) {
+      throw new ForbiddenException('Missing required permission: settings:manage');
+    }
     return this.cmsService.updateSetting(key, dto);
   }
 
@@ -303,47 +323,48 @@ export class CmsController {
     return this.cmsService.togglePinInstagramPost(id);
   }
 
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  // Manual sync of THIS tenant's feed only (requireId: never "some tenant").
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('cms:manage')
   @Post('instagram-posts/sync')
   syncInstagramPosts() {
-    return this.instagramService.syncFromInstagram(this.tenantContext.id ?? undefined);
+    return this.instagramService.syncTenant(this.tenantContext.requireId);
   }
 
   // --- Instagram Sync Config ---
 
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('cms:manage')
   @Get('instagram-sync-config')
   getInstagramSyncConfig() {
     return this.cmsService.getInstagramSyncConfig();
   }
 
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  /**
+   * Per-tenant interval. Stored in the tenant's SiteSetting only — the
+   * hourly InstagramService sweep honours it. This used to delete and
+   * re-register the single PLATFORM-WIDE cron job, so any tenant admin could
+   * reschedule (or switch OFF) every tenant's sync.
+   */
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('cms:manage')
   @Patch('instagram-sync-config')
   async updateInstagramSyncConfig(@Body() body: { interval: string }) {
-    const interval = body.interval;
-    if (!INSTAGRAM_SYNC_INTERVALS.hasOwnProperty(interval)) {
+    const interval = body?.interval;
+    if (typeof interval !== 'string' || !Object.prototype.hasOwnProperty.call(INSTAGRAM_SYNC_INTERVAL_MS, interval)) {
       throw new BadRequestException(
-        `Invalid interval. Valid options: ${Object.keys(INSTAGRAM_SYNC_INTERVALS).join(', ')}`,
+        `Invalid interval. Valid options: ${Object.keys(INSTAGRAM_SYNC_INTERVAL_MS).join(', ')}`,
       );
     }
-    const result = await this.cmsService.updateInstagramSyncConfig(interval);
-
-    // Re-register the dynamic cron job
-    const cronExpr = INSTAGRAM_SYNC_INTERVALS[interval];
-    const jobName = 'instagram-sync-dynamic';
-    try { this.schedulerRegistry.deleteCronJob(jobName); } catch { /* didn't exist */ }
-    if (cronExpr) {
-      const job = new CronJob(cronExpr, async () => { await this.instagramService.syncFromInstagram(); });
-      this.schedulerRegistry.addCronJob(jobName, job);
-      job.start();
-    }
-
-    return result;
+    return this.cmsService.updateInstagramSyncConfig(interval);
   }
 
   // --- Contact Submissions ---
 
   @Public()
+  // Public form that triggers an outbound acknowledgement email to an
+  // arbitrary address — keep it well below the global limit (spam relay).
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('contact')
   submitContact(@Body() dto: SubmitContactDto) {
     return this.cmsService.submitContact(dto);

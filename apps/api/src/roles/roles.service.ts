@@ -5,8 +5,23 @@ import { AuditService } from '../audit/audit.service';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 
-// permission codes excluded from MANAGER role
-const MANAGER_EXCLUDED = ['admins:create', 'admins:delete', 'roles:manage', 'settings:manage', 'audit:export'];
+// permission codes excluded from MANAGER role (SUPER_ADMIN-only by default).
+// Keep in sync with the "not granted" list next to MANAGER_DEFAULT_GRANTS in
+// permissions.service.ts.
+const MANAGER_EXCLUDED = [
+  'admins:create', 'admins:delete', 'roles:manage', 'settings:manage', 'audit:export',
+  'payments:manage', 'payment-methods:manage', 'recycle-bin:purge',
+];
+
+// Names reserved for the shared system roles. Tenants may not create or
+// rename a custom role to one of these (it would shadow the system role in
+// name-based checks such as "SUPER_ADMIN may only be assigned by SUPER_ADMIN").
+export const RESERVED_ROLE_NAMES = ['SUPER_ADMIN', 'MANAGER', 'STAFF', 'AI_AGENT_OPERATOR', 'AI_AGENT_APPROVER'];
+
+function isReservedRoleName(name?: string | null): boolean {
+  if (!name) return false;
+  return RESERVED_ROLE_NAMES.includes(name.trim().toUpperCase());
+}
 
 @Injectable()
 export class RolesService implements OnModuleInit {
@@ -39,7 +54,11 @@ export class RolesService implements OnModuleInit {
     ];
 
     for (const role of systemRoles) {
-      const existing = await this.prisma.role.findFirst({ where: { name: role.name } });
+      // Match ONLY the shared system row. A bare `{ name }` lookup could hit a
+      // tenant's custom role with the same name and skip seeding entirely.
+      const existing = await this.prisma.role.findFirst({
+        where: { name: role.name, isSystem: true, tenantId: null },
+      });
       if (!existing) {
         const created = await this.prisma.role.create({
           data: { name: role.name, description: role.description, isSystem: true },
@@ -76,6 +95,9 @@ export class RolesService implements OnModuleInit {
 
   async create(dto: CreateRoleDto) {
     const tenantId = this.tenantContext.requireId;
+    if (isReservedRoleName(dto.name)) {
+      throw new ForbiddenException('This role name is reserved for a system role');
+    }
     try {
       const role = await this.prisma.role.create({ data: { name: dto.name, description: dto.description, tenantId } });
       await this.auditService.log('CREATE', 'Role', role.id, { name: dto.name });
@@ -90,7 +112,15 @@ export class RolesService implements OnModuleInit {
     const tenantId = this.tenantContext.requireId;
     const role = await this.prisma.role.findFirst({ where: { id, OR: [{ tenantId }, { tenantId: null, isSystem: true }] } });
     if (!role) throw new NotFoundException('Role not found');
+    // System roles (tenantId=null) are SHARED by every tenant — a tenant admin
+    // editing one (even just the description) would change it platform-wide.
+    if (role.isSystem && !this.tenantContext.isPlatformAdmin) {
+      throw new ForbiddenException('Cannot modify system roles');
+    }
     if (role.isSystem && dto.name) throw new ForbiddenException('Cannot rename system roles');
+    if (dto.name && isReservedRoleName(dto.name)) {
+      throw new ForbiddenException('This role name is reserved for a system role');
+    }
     try {
       const updated = await this.prisma.role.update({
         where: { id },

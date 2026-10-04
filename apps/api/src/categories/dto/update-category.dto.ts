@@ -1,6 +1,7 @@
-import { IsString, IsOptional, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsInt, MaxLength, Min } from 'class-validator';
 
 export class UpdateCategoryDto {
+  /** Display name. `nameEn` (legacy admin form key) is accepted as an alias. */
   @IsOptional()
   @IsString()
   @MaxLength(100)
@@ -8,17 +9,48 @@ export class UpdateCategoryDto {
 
   @IsOptional()
   @IsString()
-  description?: string;
+  @MaxLength(100)
+  nameEn?: string;
+
+  /** Swahili name. `nameSw` (legacy admin form key) is accepted as an alias. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  nameSwahili?: string | null;
 
   @IsOptional()
   @IsString()
-  image?: string;
+  @MaxLength(100)
+  nameSw?: string | null;
 
   @IsOptional()
   @IsString()
-  parentId?: string;
+  @MaxLength(120)
+  slug?: string;
 
   @IsOptional()
   @IsString()
-  sizeGuideId?: string;
+  description?: string | null;
+
+  /** Image URL. Column is `imageUrl`; legacy `image` key accepted. */
+  @IsOptional()
+  @IsString()
+  imageUrl?: string | null;
+
+  @IsOptional()
+  @IsString()
+  image?: string | null;
+
+  @IsOptional()
+  @IsString()
+  parentId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  sizeGuideId?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  sortOrder?: number;
 }

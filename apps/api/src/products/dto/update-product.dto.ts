@@ -49,6 +49,11 @@ export class UpdateVariantDto {
   @Min(0)
   @Type(() => Number)
   stock?: number;
+
+  /** Optional re-enable/disable of an existing variant (omitted = unchanged). */
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 }
 
 export class UpdateProductDto {

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
@@ -45,12 +46,21 @@ import { AuditModule } from './audit/audit.module';
 import { ProductSizesModule } from './product-sizes/product-sizes.module';
 import { AiModule } from './ai/ai.module';
 import { AiAssistantModule } from './ai-assistant/ai-assistant.module';
+import { HealthModule } from './health/health.module';
+import { AppThrottlerGuard } from './health/app-throttler.guard';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // Default bucket: 100 req/min per client IP (req.ip — real client IP via
+    // trust proxy in main.ts). Enforced globally by AppThrottlerGuard below;
+    // tighter per-route limits via @Throttle, opt-outs via @SkipThrottle.
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
     ScheduleModule.forRoot(),
+    // ONLY the public uploads dir is served. Private evidence (ID documents)
+    // lives in PRIVATE_UPLOAD_DIR (default <cwd>/private-uploads), outside
+    // this root, and is streamed solely via the admin-only
+    // GET /upload/id-document/:key endpoint.
     ServeStaticModule.forRoot({
       rootPath: join(process.cwd(), 'uploads'),
       serveRoot: '/uploads',
@@ -97,6 +107,12 @@ import { AiAssistantModule } from './ai-assistant/ai-assistant.module';
     TenantsModule,
     AiModule,
     AiAssistantModule,
+    HealthModule,
+  ],
+  providers: [
+    // Global rate limiting. Was configured via ThrottlerModule.forRoot but
+    // never enforced because no ThrottlerGuard was registered.
+    { provide: APP_GUARD, useClass: AppThrottlerGuard },
   ],
 })
 export class AppModule {}

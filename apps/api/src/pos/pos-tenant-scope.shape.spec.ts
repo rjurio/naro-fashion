@@ -45,9 +45,53 @@ describe('pos.service tenant-scope + stock-safety invariants', () => {
   it('every productVariant.updateMany is tenant-scoped', () => {
     // Pull each updateMany(...) call and assert its where includes tenantId.
     const calls = code.match(/productVariant\.updateMany\(\{[\s\S]*?\}\)/g) ?? [];
-    expect(calls.length).toBeGreaterThanOrEqual(5);
+    // 3 guarded decrements (sale, layaway, exchange) + the shared\n    // restockVariant() helper used by refunds and exchange returns.\n    expect(calls.length).toBeGreaterThanOrEqual(4);
     for (const call of calls) {
       expect(call).toContain('tenantId');
     }
+  });
+
+  it('refundedQuantity only changes via an atomic guarded increment (never an absolute stale write)', () => {
+    // refundSale + createExchange claim units with
+    // updateMany({ where: { refundedQuantity: { lte: quantity - n } }, data: { refundedQuantity: { increment: n } } }).
+    expect(code).not.toMatch(/refundedQuantity:\s*orderItem\.refundedQuantity\s*\+/);
+    expect(code).not.toMatch(/data:\s*\{\s*refundedQuantity:\s*item\.quantity/);
+    const claims = code.match(/orderItem\.updateMany\(\{[\s\S]*?refundedQuantity:\s*\{\s*increment:/g) ?? [];
+    expect(claims.length).toBeGreaterThanOrEqual(2); // refundSale, createExchange
+    for (const c of claims) expect(c).toMatch(/refundedQuantity:\s*\{\s*lte:/);
+  });
+
+  it('refund/exchange value uses the net-price helper, not raw unitPrice × qty', () => {
+    expect(code).not.toMatch(/refundAmount\s*\+=\s*Number\([a-zA-Z]+\.unitPrice\)/);
+    expect(code).not.toMatch(/returnTotal\s*\+=\s*Number\(orderItem\.unitPrice\)/);
+    expect((code.match(/refundValueForUnits\(/g) ?? []).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('layaway state changes are conditional transitions (idempotent claims)', () => {
+    expect(code).toMatch(/layaway\.updateMany\(\{\s*where:\s*\{\s*id,\s*tenantId,\s*status:\s*'ACTIVE',\s*balanceDue:\s*\{\s*gte:/);
+    expect(code).toMatch(/layaway\.updateMany\(\{\s*where:\s*\{\s*id,\s*tenantId,\s*status:\s*'ACTIVE',\s*balanceDue:\s*\{\s*lte:\s*0/);
+    // No absolute balance write from a stale read.
+    expect(code).not.toMatch(/balanceDue:\s*newBalanceDue/);
+  });
+
+  it('every POS payment.create tags the drawer session for cash reconciliation', () => {
+    const creates = code.match(/payment\.create\(\{[\s\S]*?\n\s{6,10}\}\);/g) ?? [];
+    expect(creates.length).toBeGreaterThanOrEqual(6);
+    for (const c of creates) expect(c).toMatch(/gatewayResponse:/);
+    // Drawer math keys on the session tag, not order.posSessionId.
+    expect(code).toMatch(/path:\s*\['posSessionId'\]/);
+  });
+
+  it('customerId is tenant-validated on sale, layaway and held sale', () => {
+    expect((code.match(/assertCustomerInTenant\(dto\.customerId\)/g) ?? []).length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('pos.controller refund permission', () => {
+  const ctrl = readFileSync(join(__dirname, 'pos.controller.ts'), 'utf8');
+  it("refund and exchange routes require 'pos:refund' via PermissionGuard", () => {
+    expect(ctrl).toMatch(/PermissionGuard\)/);
+    expect(ctrl).toMatch(/@Post\('sales\/:id\/refund'\)\s*@RequiresPermission\('pos:refund'\)/);
+    expect(ctrl).toMatch(/@Post\('exchanges'\)\s*@RequiresPermission\('pos:refund'\)/);
   });
 });

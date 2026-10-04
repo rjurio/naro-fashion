@@ -1,0 +1,37 @@
+<h2 style="color: #1A1A1A; margin-top: 0;">You Left Something Behind</h2>
+
+<p>Dear {{customerName}},</p>
+
+<p>Your shopping bag at {{businessName}} is still waiting for you. The pieces you picked are popular, so complete your order before they're gone.</p>
+
+<div class="info-box">
+  {{#each items}}
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 10px;">
+    <tr>
+      {{#if imageUrl}}
+      <td width="64" style="vertical-align: top; padding-right: 12px;">
+        <img src="{{imageUrl}}" alt="{{name}}" width="64" height="85" style="display: block; border-radius: 4px; object-fit: cover;" />
+      </td>
+      {{/if}}
+      <td style="vertical-align: top;">
+        <p style="margin: 0;"><strong>{{name}}</strong></p>
+        <p style="margin: 4px 0 0;"><span class="label">Qty:</span> {{quantity}}{{#if price}} &nbsp;·&nbsp; <span class="label">Price:</span> TSh {{price}}{{/if}}</p>
+      </td>
+    </tr>
+  </table>
+  {{/each}}
+  {{#if moreCount}}
+  <p style="margin: 0;">…and {{moreCount}} more item(s) in your bag.</p>
+  {{/if}}
+</div>
+
+<p style="text-align: center;">
+  <a href="{{cartUrl}}" class="btn-primary">Complete My Order</a>
+</p>
+
+<p>Questions about sizing or delivery? Just reply to this email or reach us on WhatsApp — we're happy to help.</p>
+
+<p>
+  Best regards,<br />
+  <strong style="color: #D4AF37;">{{businessName}} Team</strong>
+</p>

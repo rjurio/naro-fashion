@@ -4,10 +4,27 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import { requestContextMiddleware } from './tenant/request-context';
+import { isSwaggerEnabled } from './health/swagger.util';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: true keeps the unparsed body on `req.rawBody` — payment webhook
+  // signature verification (Selcom HMAC / ClickPesa checksum) depends on it.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
+
+  // Exactly one trusted proxy hop (nginx on the same box). Makes `req.ip`
+  // the real client IP from X-Forwarded-For instead of 127.0.0.1 — required
+  // for per-client rate limiting and audit IPs. Do NOT raise this above the
+  // real number of proxies or clients can spoof their IP via the header.
+  app.set('trust proxy', 1);
+
+  // Must be first: binds the request to an AsyncLocalStorage so singleton
+  // services (EmailService etc.) can read the current request's tenant.
+  app.use(requestContextMiddleware);
 
   app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
@@ -48,7 +65,9 @@ async function bootstrap() {
     }),
   );
 
-  // Swagger API Documentation
+  // Swagger API Documentation (disabled in production unless ENABLE_SWAGGER=true)
+  const swaggerEnabled = isSwaggerEnabled();
+  if (swaggerEnabled) {
   const config = new DocumentBuilder()
     .setTitle('Naro Fashion API')
     .setDescription('REST API for Naro Fashion e-commerce platform — products, orders, rentals, payments, auth, and more.')
@@ -75,10 +94,13 @@ async function bootstrap() {
     customSiteTitle: 'Naro Fashion API Docs',
     customfavIcon: '/favicon.jpg',
   });
+  }
 
   const port = process.env.PORT || 4000;
   await app.listen(port);
   console.log(`Naro Fashion API running on http://localhost:${port}`);
-  console.log(`Swagger docs available at http://localhost:${port}/api/docs`);
+  if (swaggerEnabled) {
+    console.log(`Swagger docs available at http://localhost:${port}/api/docs`);
+  }
 }
 bootstrap();

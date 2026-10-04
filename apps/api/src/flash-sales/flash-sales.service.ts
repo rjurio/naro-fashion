@@ -11,6 +11,7 @@ import { Type } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
+import { assertAllSameTenant } from '../products/util/tenant-ownership';
 
 export class CreateFlashSaleDto {
   @IsString() title: string;
@@ -45,6 +46,7 @@ export class FlashSalesService {
         tenantId: this.tenantContext.requireId,
         startDate: { lte: now },
         endDate: { gte: now },
+        isActive: true,
         deletedAt: null,
       },
       include: {
@@ -92,10 +94,15 @@ export class FlashSalesService {
 
   async create(dto: CreateFlashSaleDto) {
     const { productIds, startDate, endDate, salePrice, ...rest } = dto;
+    const tenantId = this.tenantContext.requireId;
+
+    // Every product must belong to this tenant — otherwise tenant A could put
+    // tenant B's products on sale (and the include leaks them back).
+    await assertAllSameTenant(this.prisma.product, productIds, tenantId, 'products', { deletedAt: null });
 
     const sale = await this.prisma.flashSale.create({
       data: {
-        tenantId: this.tenantContext.requireId,
+        tenantId,
         ...rest,
         startDate: new Date(startDate),
         endDate: new Date(endDate),
@@ -123,6 +130,7 @@ export class FlashSalesService {
     if (endDate) data.endDate = new Date(endDate);
 
     if (productIds) {
+      await assertAllSameTenant(this.prisma.product, productIds, this.tenantContext.requireId, 'products', { deletedAt: null });
       // Replace all items
       await this.prisma.flashSaleItem.deleteMany({ where: { flashSaleId: id } });
       data.items = {

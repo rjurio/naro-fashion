@@ -739,6 +739,7 @@ export class CmsService {
         to: dto.email,
         subject: `We received your message — ${submission.subject}`,
         template: 'contact-acknowledgement',
+        tenantId: submission.tenantId,
         context: {
           customerName: dto.name,
           subject: submission.subject,
@@ -795,6 +796,7 @@ export class CmsService {
         to: sub.email,
         subject: `Re: ${sub.subject || 'Your inquiry'} — Reply from our team`,
         template: 'contact-reply',
+        tenantId: sub.tenantId,
         context: {
           customerName: sub.name,
           subject: sub.subject,

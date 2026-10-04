@@ -12,11 +12,47 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  IsUrl,
+  Matches,
   Min,
+  ValidateIf,
+  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
+import { assertSameTenant } from '../products/util/tenant-ownership';
+
+/**
+ * Social links rendered as <a href> on the public event page. Whitelisted
+ * keys only (the global ValidationPipe has forbidNonWhitelisted, so an
+ * unknown key is a 400) and every value must be an absolute https URL —
+ * blocks `javascript:` / `data:` hrefs (stored XSS) and http downgrade.
+ */
+const HTTPS_URL = { protocols: ['https'], require_protocol: true };
+// Empty strings are allowed (form fields left blank) and dropped on write.
+const notBlank = (_o: unknown, v: unknown) => v !== undefined && v !== null && v !== '';
+export class SocialLinksDto {
+  @ValidateIf(notBlank) @IsUrl(HTTPS_URL, { message: 'instagram must be an https URL' }) instagram?: string;
+  @ValidateIf(notBlank) @IsUrl(HTTPS_URL, { message: 'facebook must be an https URL' }) facebook?: string;
+  @ValidateIf(notBlank) @IsUrl(HTTPS_URL, { message: 'tiktok must be an https URL' }) tiktok?: string;
+  @ValidateIf(notBlank) @IsUrl(HTTPS_URL, { message: 'youtube must be an https URL' }) youtube?: string;
+}
+
+/** Image/media URLs: absolute https, or a relative `/uploads/...` path. */
+export const MEDIA_URL_PATTERN = /^(https:\/\/[^\s"'<>]+|\/uploads\/[^\s"'<>]+)$/;
+const MEDIA_URL_MESSAGE = 'must be an https URL or a /uploads/ path';
+
+/** Strip class-transformer prototypes so Prisma gets a plain JSON object. */
+function plainSocialLinks(links?: SocialLinksDto | null): Record<string, string> | undefined {
+  if (!links) return undefined;
+  const out: Record<string, string> = {};
+  for (const key of ['instagram', 'facebook', 'tiktok', 'youtube'] as const) {
+    const v = links[key];
+    if (typeof v === 'string' && v.trim()) out[key] = v.trim();
+  }
+  return out;
+}
 
 export class CreateEventDto {
   @IsString() title: string;
@@ -26,8 +62,8 @@ export class CreateEventDto {
   @IsDateString() eventDate: string;
   @IsOptional() @IsString() location?: string;
   @IsOptional() @IsString() customerName?: string;
-  @IsOptional() @IsObject() socialLinks?: Record<string, string>;
-  @IsOptional() @IsString() coverImageUrl?: string;
+  @IsOptional() @IsObject() @ValidateNested() @Type(() => SocialLinksDto) socialLinks?: SocialLinksDto;
+  @IsOptional() @IsString() @Matches(MEDIA_URL_PATTERN, { message: `coverImageUrl ${MEDIA_URL_MESSAGE}` }) coverImageUrl?: string;
   @IsOptional() @IsString() productId?: string;
   @IsOptional() @IsBoolean() isFeatured?: boolean;
 }
@@ -40,8 +76,8 @@ export class UpdateEventDto {
   @IsOptional() @IsDateString() eventDate?: string;
   @IsOptional() @IsString() location?: string;
   @IsOptional() @IsString() customerName?: string;
-  @IsOptional() @IsObject() socialLinks?: Record<string, string>;
-  @IsOptional() @IsString() coverImageUrl?: string;
+  @IsOptional() @IsObject() @ValidateNested() @Type(() => SocialLinksDto) socialLinks?: SocialLinksDto;
+  @IsOptional() @IsString() @Matches(MEDIA_URL_PATTERN, { message: `coverImageUrl ${MEDIA_URL_MESSAGE}` }) coverImageUrl?: string;
   @IsOptional() @IsString() productId?: string;
   @IsOptional() @IsBoolean() isFeatured?: boolean;
   @IsOptional() @IsString() status?: string;
@@ -52,13 +88,13 @@ export class CustomerSubmitEventDto {
   @IsOptional() @IsString() description?: string;
   @IsDateString() eventDate: string;
   @IsOptional() @IsString() location?: string;
-  @IsOptional() @IsObject() socialLinks?: Record<string, string>;
+  @IsOptional() @IsObject() @ValidateNested() @Type(() => SocialLinksDto) socialLinks?: SocialLinksDto;
   @IsString() productId: string;
 }
 
 export class AddMediaDto {
-  @IsString() url: string;
-  @IsOptional() @IsString() thumbnailUrl?: string;
+  @IsString() @Matches(MEDIA_URL_PATTERN, { message: `url ${MEDIA_URL_MESSAGE}` }) url: string;
+  @IsOptional() @IsString() @Matches(MEDIA_URL_PATTERN, { message: `thumbnailUrl ${MEDIA_URL_MESSAGE}` }) thumbnailUrl?: string;
   @IsOptional() @IsString() mediaType?: string;
   @IsOptional() @IsString() altText?: string;
   @IsOptional() @IsInt() @Min(0) @Type(() => Number) sortOrder?: number;
@@ -105,7 +141,9 @@ export class EventsService {
         include: {
           media: { orderBy: { sortOrder: 'asc' }, take: 4 },
           product: { select: { id: true, name: true, slug: true } },
-          user: { select: { id: true, firstName: true, lastName: true } },
+          // No user include on public responses: user ids are PII-adjacent
+          // identifiers and the storefront never renders them (customerName
+          // is the display field).
         },
         orderBy: { eventDate: 'desc' },
         skip,
@@ -127,7 +165,6 @@ export class EventsService {
       include: {
         media: { orderBy: { sortOrder: 'asc' } },
         product: { select: { id: true, name: true, slug: true, images: { take: 1 } } },
-        user: { select: { id: true, firstName: true, lastName: true } },
       },
     });
     if (!event || event.deletedAt || event.status !== 'APPROVED') {
@@ -196,6 +233,7 @@ export class EventsService {
   }
 
   async createByAdmin(dto: CreateEventDto, adminId: string) {
+    await assertSameTenant(this.prisma.product, dto.productId, this.tenantContext.requireId, 'Product', { deletedAt: null });
     const slug = await this.ensureUniqueSlug(this.generateSlug(dto.title));
     return this.prisma.customerEvent.create({
       data: {
@@ -208,7 +246,7 @@ export class EventsService {
         eventDate: new Date(dto.eventDate),
         location: dto.location,
         customerName: dto.customerName,
-        socialLinks: dto.socialLinks || undefined,
+        socialLinks: plainSocialLinks(dto.socialLinks),
         coverImageUrl: dto.coverImageUrl,
         productId: dto.productId || undefined,
         createdByAdminId: adminId,
@@ -230,10 +268,18 @@ export class EventsService {
     }
 
     // Verify product exists and user has ordered/rented it
-    const product = await this.prisma.product.findUnique({ where: { id: dto.productId } });
+    // Tenant-scoped: pre-fix this was findUnique({ id }) so a customer could
+    // attach (and, once approved, publicly surface) another tenant's product.
+    const product = await this.prisma.product.findFirst({
+      where: { id: dto.productId, tenantId, deletedAt: null },
+      select: { id: true },
+    });
     if (!product) throw new BadRequestException('Product not found');
 
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, tenantId },
+      select: { firstName: true, lastName: true },
+    });
 
     const slug = await this.ensureUniqueSlug(this.generateSlug(dto.title));
     return this.prisma.customerEvent.create({
@@ -244,7 +290,7 @@ export class EventsService {
         description: dto.description,
         eventDate: new Date(dto.eventDate),
         location: dto.location,
-        socialLinks: dto.socialLinks || undefined,
+        socialLinks: plainSocialLinks(dto.socialLinks),
         coverImageUrl: undefined,
         userId,
         productId: dto.productId,
@@ -259,9 +305,12 @@ export class EventsService {
     const event = await this.prisma.customerEvent.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!event || event.deletedAt) throw new NotFoundException('Event not found');
 
+    await assertSameTenant(this.prisma.product, dto.productId, this.tenantContext.requireId, 'Product', { deletedAt: null });
+
     const data: any = { ...dto };
     if (dto.eventDate) data.eventDate = new Date(dto.eventDate);
-    if (dto.socialLinks) data.socialLinks = dto.socialLinks;
+    if (dto.socialLinks) data.socialLinks = plainSocialLinks(dto.socialLinks);
+    if (dto.productId === '') data.productId = null;
 
     // If title changed, regenerate slug
     if (dto.title && dto.title !== event.title) {

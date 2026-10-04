@@ -6,6 +6,12 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
+import { addMonthsClamped } from './billing-date.util';
+import { TenantGuard } from '../auth/guards/tenant.guard';
+
+// Subscription statuses that are still "live" and must be closed when a new
+// plan is subscribed (EXPIRED/CANCELLED are terminal).
+export const NON_TERMINAL_SUBSCRIPTION_STATUSES = ['ACTIVE', 'GRACE', 'TRIAL', 'PENDING'] as const;
 
 // Core modules that cannot be disabled — every tenant gets these
 const CORE_MODULES = [
@@ -293,10 +299,13 @@ export class TenantsService {
     const tenant = await this.prisma.tenant.findUnique({ where: { id } });
     if (!tenant) throw new NotFoundException('Tenant not found');
 
-    return this.prisma.tenant.update({
+    const updated = await this.prisma.tenant.update({
       where: { id },
       data: { status },
     });
+    // Suspension takes effect immediately instead of after the 60s status cache.
+    TenantGuard.invalidate(id);
+    return updated;
   }
 
   /**
@@ -368,70 +377,87 @@ export class TenantsService {
    * Subscribe a tenant to a plan.
    */
   async subscribeTenant(tenantId: string, planId: string, billingCycle = 'MONTHLY') {
+    if (billingCycle !== 'MONTHLY' && billingCycle !== 'YEARLY') {
+      throw new BadRequestException('billingCycle must be MONTHLY or YEARLY');
+    }
     const plan = await this.prisma.subscriptionPlan.findUnique({ where: { id: planId } });
     if (!plan) throw new BadRequestException('Plan not found');
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!tenant) throw new NotFoundException('Tenant not found');
 
-    const endDate = new Date();
-    if (billingCycle === 'YEARLY') {
-      endDate.setFullYear(endDate.getFullYear() + 1);
-    } else {
-      endDate.setMonth(endDate.getMonth() + 1);
-    }
+    // Calendar-month arithmetic with end-of-month clamping (Jan 31 + 1 month
+    // = Feb 28/29, not Mar 3).
+    const startDate = new Date();
+    const endDate = addMonthsClamped(startDate, billingCycle === 'YEARLY' ? 12 : 1);
 
-    // Expire any existing active subscription
-    await this.prisma.tenantSubscription.updateMany({
-      where: { tenantId, status: 'ACTIVE' },
-      data: { status: 'CANCELLED' },
-    });
+    // All-or-nothing: subscription swap, tenant reactivation and module
+    // entitlements commit together (a crash mid-way used to leave a tenant
+    // with two live subscriptions or a new plan but the old modules).
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Close out EVERY non-terminal subscription, not just ACTIVE. A GRACE
+      // row left behind kept its graceEndDate and the lifecycle cron later
+      // suspended a tenant who had just paid for a new plan.
+      await tx.tenantSubscription.updateMany({
+        where: { tenantId, status: { in: [...NON_TERMINAL_SUBSCRIPTION_STATUSES] } },
+        data: { status: 'CANCELLED' },
+      });
 
-    // Create new subscription
-    const subscription = await this.prisma.tenantSubscription.create({
-      data: {
-        tenantId,
-        planId,
-        status: 'ACTIVE',
-        billingCycle,
-        startDate: new Date(),
-        endDate,
-      },
-    });
+      const subscription = await tx.tenantSubscription.create({
+        data: {
+          tenantId,
+          planId,
+          status: 'ACTIVE',
+          billingCycle,
+          startDate,
+          endDate,
+        },
+      });
 
-    // Update tenant modules based on new plan
-    const existingModules = await this.prisma.tenantModule.findMany({ where: { tenantId } });
-    const existingModuleCodes = existingModules.map((m) => m.moduleCode);
-
-    for (const moduleCode of plan.enabledModules) {
-      if (!existingModuleCodes.includes(moduleCode)) {
-        await this.prisma.tenantModule.create({
-          data: { tenantId, moduleCode, isEnabled: true },
-        });
-      } else {
-        await this.prisma.tenantModule.update({
-          where: { tenantId_moduleCode: { tenantId, moduleCode } },
-          data: { isEnabled: true },
-        });
+      // Subscribing reactivates a TRIAL / SUSPENDED tenant. DEACTIVATED is a
+      // deliberate platform decision and is left alone.
+      if (tenant.status === 'TRIAL' || tenant.status === 'SUSPENDED') {
+        await tx.tenant.update({ where: { id: tenantId }, data: { status: 'ACTIVE' } });
       }
-    }
 
-    // Downgrade: disable any OPTIONAL module the tenant currently has that the
-    // NEW plan doesn't include. Without this, switching Enterprise → Starter
-    // left POS/analytics/reports/etc. enabled — the tenant kept paid features
-    // for free. Core modules are never disabled.
-    const newPlanModules = new Set(plan.enabledModules);
-    for (const existing of existingModules) {
-      if (
-        existing.isEnabled &&
-        !newPlanModules.has(existing.moduleCode) &&
-        !(CORE_MODULES as readonly string[]).includes(existing.moduleCode)
-      ) {
-        await this.prisma.tenantModule.update({
-          where: { tenantId_moduleCode: { tenantId, moduleCode: existing.moduleCode } },
-          data: { isEnabled: false },
-        });
+      // Update tenant modules based on new plan
+      const existingModules = await tx.tenantModule.findMany({ where: { tenantId } });
+      const existingModuleCodes = existingModules.map((m) => m.moduleCode);
+
+      for (const moduleCode of plan.enabledModules) {
+        if (!existingModuleCodes.includes(moduleCode)) {
+          await tx.tenantModule.create({
+            data: { tenantId, moduleCode, isEnabled: true },
+          });
+        } else {
+          await tx.tenantModule.update({
+            where: { tenantId_moduleCode: { tenantId, moduleCode } },
+            data: { isEnabled: true },
+          });
+        }
       }
-    }
 
-    return subscription;
+      // Downgrade: disable any OPTIONAL module the tenant currently has that the
+      // NEW plan doesn't include. Without this, switching Enterprise → Starter
+      // left POS/analytics/reports/etc. enabled — the tenant kept paid features
+      // for free. Core modules are never disabled.
+      const newPlanModules = new Set(plan.enabledModules);
+      for (const existing of existingModules) {
+        if (
+          existing.isEnabled &&
+          !newPlanModules.has(existing.moduleCode) &&
+          !(CORE_MODULES as readonly string[]).includes(existing.moduleCode)
+        ) {
+          await tx.tenantModule.update({
+            where: { tenantId_moduleCode: { tenantId, moduleCode: existing.moduleCode } },
+            data: { isEnabled: false },
+          });
+        }
+      }
+
+      return subscription;
+    });
+    TenantGuard.invalidate(tenantId);
+    return result;
   }
 
   /**
@@ -476,6 +502,7 @@ export class TenantsService {
         where: { id: tenantId },
         data: { status: 'ACTIVE' },
       });
+      TenantGuard.invalidate(tenantId);
     } else if (sub) {
       // Extend the active subscription end date
       await this.prisma.tenantSubscription.update({

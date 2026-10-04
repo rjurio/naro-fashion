@@ -12,6 +12,11 @@ import { UpdateRentalDto } from './dto/update-rental.dto';
 import { QueryRentalsDto } from './dto/query-rentals.dto';
 import { ownerScope } from '../auth/util/ownership';
 import { Decimal } from '@prisma/client/runtime/library';
+import {
+  NON_BLOCKING_RENTAL_STATUSES,
+  assertRentalTransition,
+  computeLateFee,
+} from './rental-rules';
 
 @Injectable()
 export class RentalsService {
@@ -162,7 +167,7 @@ export class RentalsService {
         where: {
           tenantId,
           productId: dto.productId,
-          status: { notIn: ['CLOSED', 'RETURNED', 'INSPECTION'] },
+          status: { notIn: NON_BLOCKING_RENTAL_STATUSES },
           startDate: { lt: bufferedEnd },
           returnDate: { gt: bufferedStart },
         },
@@ -296,59 +301,48 @@ export class RentalsService {
       throw new NotFoundException('Rental order not found');
     }
 
-    const workflow = [
-      'PENDING_ID_VERIFICATION',
-      'ID_VERIFIED',
-      'DOWN_PAYMENT_PAID',
-      'FULLY_PAID',
-      'READY_FOR_PICKUP',
-      'ITEM_DISPATCHED',
-      'ACTIVE',
-      'RETURNED',
-      'INSPECTION',
-      'CLOSED',
-    ];
-
-    const currentIndex = workflow.indexOf(rental.status);
-    const targetIndex = workflow.indexOf(status);
-
-    if (targetIndex <= currentIndex) {
-      throw new BadRequestException(
-        `Cannot move from ${rental.status} to ${status}. Status can only advance forward.`,
-      );
-    }
+    // Forward-only, no jumping over RETURNED (the only step that records
+    // actualReturnDate + late fee), CANCELLED only before dispatch.
+    assertRentalTransition(rental.status, status);
 
     const data: any = { status };
     if (status === 'RETURNED') {
       const returnedAt = new Date();
       data.actualReturnDate = returnedAt;
 
-      // Calculate late fee if returned after maxRentalDays.
-      // Late fee per day = latePenaltyPercent% of flat rental price.
-      const product = await this.prisma.product.findUnique({
-        where: { id: rental.productId },
-        select: {
-          rentalPricePerDay: true,
-          maxRentalDays: true,
-          latePenaltyPercent: true,
-        },
+      // Late fee from the BOOKED return date (rental.returnDate), in whole
+      // EAT days — see computeLateFee.
+      const tenantId = this.tenantContext.requireId;
+      const [product, policy] = await Promise.all([
+        this.prisma.product.findFirst({
+          where: { id: rental.productId, tenantId },
+          select: { latePenaltyPercent: true },
+        }),
+        this.prisma.rentalPolicy.findFirst({ where: { tenantId } }),
+      ]);
+      const { lateFee } = computeLateFee({
+        bookedReturnDate: rental.returnDate,
+        actualReturnDate: returnedAt,
+        flatRentalPrice: Number(rental.totalRentalPrice),
+        latePenaltyPercent:
+          product?.latePenaltyPercent != null ? Number(product.latePenaltyPercent) : null,
+        policyLateFeePerDay: policy ? Number(policy.lateFeePerDay) : null,
       });
-      if (product?.maxRentalDays && product.rentalPricePerDay) {
-        const startMs = new Date(rental.startDate).getTime();
-        const returnMs = returnedAt.getTime();
-        const daysUsed = Math.ceil((returnMs - startMs) / (1000 * 60 * 60 * 24));
-        const daysLate = Math.max(0, daysUsed - product.maxRentalDays);
-        if (daysLate > 0) {
-          const pct = Number(product.latePenaltyPercent ?? 10);
-          const flatPrice = Number(product.rentalPricePerDay);
-          data.lateFee = (flatPrice * (pct / 100)) * daysLate;
-        }
-      }
+      data.lateFee = lateFee;
     }
 
-    const updated = await this.prisma.rentalOrder.update({
-      where: { id },
+    // Compare-and-swap on the status we validated against, so two admins
+    // can't both apply transitions computed from the same stale read.
+    const claim = await this.prisma.rentalOrder.updateMany({
+      where: { id, tenantId: this.tenantContext.requireId, status: rental.status },
       data,
+    });
+    if (claim.count === 0) {
+      throw new ConflictException('Rental status changed concurrently. Reload and try again.');
+    }
+
+    const updated = await this.prisma.rentalOrder.findFirst({
+      where: { id, tenantId: this.tenantContext.requireId },
       include: {
         product: { select: { id: true, name: true } },
         variant: { select: { id: true, name: true } },
@@ -445,13 +439,70 @@ export class RentalsService {
     if (dto.transportReceiptUrl !== undefined) data.transportReceiptUrl = dto.transportReceiptUrl;
     if (dto.notes !== undefined) data.notes = dto.notes;
 
-    return this.prisma.rentalOrder.update({
-      where: { id },
-      data,
-      include: {
-        product: { select: { id: true, name: true, slug: true } },
-        variant: { select: { id: true, name: true } },
-      },
+    const include = {
+      product: { select: { id: true, name: true, slug: true } },
+      variant: { select: { id: true, name: true } },
+    };
+
+    const datesChanged = data.returnDate !== undefined || data.pickupDate !== undefined;
+    if (!datesChanged) {
+      return this.prisma.rentalOrder.update({ where: { id }, data, include });
+    }
+
+    // Date edits go through the SAME authoritative availability check as
+    // create(): validated, then re-checked inside a transaction serialized by
+    // the per-product advisory lock, excluding this rental itself. Without it
+    // an admin could extend a booking straight over another customer's dates
+    // (or their 7-day buffer).
+    const tenantId = this.tenantContext.requireId;
+    if (NON_BLOCKING_RENTAL_STATUSES.includes(rental.status)) {
+      throw new BadRequestException(`Cannot change dates on a ${rental.status} rental.`);
+    }
+    const startDate = rental.startDate;
+    const returnDate: Date = data.returnDate ?? rental.returnDate;
+    const pickupDate: Date = data.pickupDate ?? rental.pickupDate;
+    if (startDate >= returnDate) {
+      throw new BadRequestException('Return date must be after start date');
+    }
+    if (pickupDate > startDate) {
+      throw new BadRequestException('Pickup date must be on or before start date');
+    }
+
+    const [product, policy] = await Promise.all([
+      this.prisma.product.findFirst({
+        where: { id: rental.productId, tenantId },
+        select: { bufferDaysOverride: true },
+      }),
+      this.prisma.rentalPolicy.findFirst({ where: { tenantId } }),
+    ]);
+    const bufferDays = product?.bufferDaysOverride ?? policy?.bufferDaysBetweenRentals ?? 7;
+    const maxDuration = policy?.maxRentalDurationDays ?? 30;
+    const rentalDays = Math.ceil(
+      (returnDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    if (rentalDays > maxDuration) {
+      throw new BadRequestException(`Rental duration exceeds maximum of ${maxDuration} days`);
+    }
+    const bufferMs = bufferDays * 24 * 60 * 60 * 1000;
+    const bufferedStart = new Date(startDate.getTime() - bufferMs);
+    const bufferedEnd = new Date(returnDate.getTime() + bufferMs);
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${rental.productId}))`;
+      const overlapping = await tx.rentalOrder.count({
+        where: {
+          tenantId,
+          productId: rental.productId,
+          id: { not: id },
+          status: { notIn: NON_BLOCKING_RENTAL_STATUSES },
+          startDate: { lt: bufferedEnd },
+          returnDate: { gt: bufferedStart },
+        },
+      });
+      if (overlapping > 0) {
+        throw new ConflictException('Product is not available for the selected dates');
+      }
+      return tx.rentalOrder.update({ where: { id }, data, include });
     });
   }
 
@@ -506,9 +557,7 @@ export class RentalsService {
       where: {
         tenantId: this.tenantContext.requireId,
         productId,
-        status: {
-          notIn: ['CLOSED', 'RETURNED', 'INSPECTION'],
-        },
+        status: { notIn: NON_BLOCKING_RENTAL_STATUSES },
         startDate: { lt: bufferedEnd },
         returnDate: { gt: bufferedStart },
       },

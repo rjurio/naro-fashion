@@ -13,7 +13,10 @@ import { UsersService } from './users.service';
 import { UpdateProfileDto, CreateAddressDto, UpdateAddressDto } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { DeleteAccountDto } from '../auth/dto/auth-requests.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('users')
@@ -28,16 +31,39 @@ export class UsersController {
     return this.usersService.findAllForAdmin(search);
   }
 
-  @UseGuards(AdminGuard)
+  @UseGuards(AdminGuard, PermissionGuard)
+  @RequiresPermission('customers:suspend')
   @Patch(':id/suspend')
   suspend(@Param('id') id: string) {
     return this.usersService.suspendUser(id);
   }
 
-  @UseGuards(AdminGuard)
+  @UseGuards(AdminGuard, PermissionGuard)
+  @RequiresPermission('customers:suspend')
   @Patch(':id/activate')
   activate(@Param('id') id: string) {
     return this.usersService.activateUser(id);
+  }
+
+  // ---- Customer data-subject rights (PDPA) ----
+
+  /** Export everything we hold about the calling customer (own data only). */
+  @Get('me/export')
+  exportMyData(@CurrentUser() user: { id: string; isAdmin?: boolean; isPlatformAdmin?: boolean }) {
+    return this.usersService.exportMyData(user);
+  }
+
+  /**
+   * Erase (anonymise) the calling customer's account. Requires the current
+   * password. Orders/rentals are retained (anonymised via the user row) for
+   * accounting; all sessions are revoked.
+   */
+  @Delete('me')
+  deleteMyAccount(
+    @CurrentUser() user: { id: string; isAdmin?: boolean; isPlatformAdmin?: boolean },
+    @Body() dto: DeleteAccountDto,
+  ) {
+    return this.usersService.deleteMyAccount(user, dto.currentPassword);
   }
 
   // ---- Customer-facing endpoints ----

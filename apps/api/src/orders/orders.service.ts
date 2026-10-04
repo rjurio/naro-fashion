@@ -3,11 +3,21 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
-import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateOrderDto, DeliveryMethod, PaymentMethod } from './dto/create-order.dto';
+import { PromoCodesService } from '../promo-codes/promo-codes.service';
+import {
+  CANCELLABLE_STATUSES,
+  MONEY_COLLECTED_PAYMENT_STATUSES,
+  OPEN_ORDER_STATUSES,
+  releasePromoUsage,
+  resolveDeliveryFee,
+  restockOrderItems,
+} from './order-lifecycle.util';
 import { QueryOrdersDto, AdminQueryOrdersDto } from './dto/query-orders.dto';
 import { ownerScope, isAdminUser } from '../auth/util/ownership';
 import { Prisma } from '@prisma/client';
@@ -18,6 +28,7 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
     private readonly auditService: AuditService,
+    private readonly promoCodesService: PromoCodesService,
   ) {}
 
   private generateOrderNumber(): string {
@@ -25,76 +36,177 @@ export class OrdersService {
     return `NARO-${Date.now()}-${random}`;
   }
 
+  /** Expose `shippingFee` (contract name) alongside the `shippingCost` column. */
+  private withShippingFee<T extends { shippingCost?: any }>(order: T): T & { shippingFee: number } {
+    return { ...order, shippingFee: Number(order?.shippingCost ?? 0) };
+  }
+
+  private maxOpenCodOrders(): number {
+    const n = Number(process.env.MAX_OPEN_COD_ORDERS);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
+  }
+
+  /**
+   * Checkout. Everything that reads or mutates shared state happens inside
+   * ONE transaction, serialized per customer with a transaction-scoped
+   * advisory lock:
+   *   lock(user) → read cart → validate lines → price (flash sale) →
+   *   promo → reserve stock (guarded decrement) → create order →
+   *   record promo usage (guarded increment) → clear cart.
+   * A double-submit therefore can't create two orders: the second request
+   * waits on the lock and then finds an empty cart.
+   */
   async create(userId: string, dto: CreateOrderDto) {
     const tenantId = this.tenantContext.requireId;
-    // Get user's cart items with product/variant details
-    const cartItems = await this.prisma.cartItem.findMany({
-      where: { userId },
-      include: {
-        product: true,
-        variant: true,
-      },
-    });
+    const deliveryMethod = dto.deliveryMethod ?? DeliveryMethod.STANDARD;
 
-    if (cartItems.length === 0) {
-      throw new BadRequestException('Cart is empty');
-    }
-
-    // Address is optional — when omitted, shipping details are captured in
-    // notes (current storefront checkout flow). If an addressId is supplied,
-    // it must belong to the user.
+    // Address is optional. An addressId must belong to the user; an inline
+    // shippingAddress is persisted as a new Address row inside the tx.
     if (dto.addressId) {
       const address = await this.prisma.address.findFirst({
-        where: { id: dto.addressId, userId },
+        where: { id: dto.addressId, userId, user: { tenantId } },
+        select: { id: true },
       });
       if (!address) {
         throw new NotFoundException('Address not found');
       }
     }
 
-    // Calculate totals
-    const subtotal = cartItems.reduce((sum, item) => {
-      const price = Number(item.variant.price);
-      return sum + price * item.quantity;
-    }, 0);
-
-    // Trust the client's quoted shipping fee for now — it's derived from the
-    // storefront's delivery-method selector. Once zone-based rates are live,
-    // recompute server-side and reject mismatches.
-    const shippingCost = Number(dto.shippingFee ?? 0);
-    const discount = 0;
-    const total = subtotal + shippingCost - discount;
-
-    // Create order with items in a transaction
     const order = await this.prisma.$transaction(async (tx) => {
-      // Reserve stock: atomically decrement each variant (guarded so it can't
-      // go negative). If any item is short, the whole transaction rolls back
-      // and no order is created. Stock is restored if the order is cancelled
-      // (see updateStatus). Online orders previously never touched stock, so a
-      // customer could order arbitrary quantities and inventory never moved.
+      // Per-customer serialization (namespace key + user key).
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('naro:order-create'), hashtext(${userId}::text))`;
+
+      const cartItems = await tx.cartItem.findMany({
+        where: { userId },
+        include: { variant: { include: { product: true } } },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (cartItems.length === 0) {
+        throw new BadRequestException('Cart is empty');
+      }
+
+      // Cap open unpaid cash-on-delivery orders per customer (abuse guard:
+      // COD orders reserve stock without any payment).
+      if (dto.paymentMethod === PaymentMethod.CASH_ON_DELIVERY) {
+        const openCod = await tx.order.count({
+          where: {
+            tenantId,
+            userId,
+            paymentMethod: PaymentMethod.CASH_ON_DELIVERY,
+            status: { in: OPEN_ORDER_STATUSES },
+            paymentStatus: { notIn: MONEY_COLLECTED_PAYMENT_STATUSES },
+          },
+        });
+        const cap = this.maxOpenCodOrders();
+        if (openCod >= cap) {
+          throw new BadRequestException(
+            `You already have ${openCod} open cash-on-delivery orders. Please complete or cancel one before placing another.`,
+          );
+        }
+      }
+
+      // Validate every line. productId is ALWAYS derived from the variant —
+      // never trust CartItem.productId.
       for (const item of cartItems) {
+        const v = item.variant;
+        const p = v?.product;
+        if (!v || v.tenantId !== tenantId || !p || p.tenantId !== tenantId) {
+          throw new BadRequestException('An item in your cart is no longer available. Please review your cart.');
+        }
+        if (!v.isActive || !p.isActive || p.deletedAt || p.archivedAt) {
+          throw new BadRequestException(`${p.name} is no longer available. Please remove it from your cart.`);
+        }
+        if (p.availabilityMode === 'RENTAL_ONLY') {
+          throw new BadRequestException(`${p.name} is available for rental only.`);
+        }
+        if (item.quantity < 1) {
+          throw new BadRequestException('Invalid quantity in cart');
+        }
+      }
+
+      // Active flash-sale prices (lowest active salePrice per product). The
+      // FlashSaleItem model has no per-item stock limit, so there is nothing
+      // to decrement beyond the normal variant stock.
+      const productIds = Array.from(new Set(cartItems.map((i) => i.variant.productId)));
+      const now = new Date();
+      const saleItems = await tx.flashSaleItem.findMany({
+        where: {
+          productId: { in: productIds },
+          flashSale: { tenantId, isActive: true, deletedAt: null, startDate: { lte: now }, endDate: { gte: now } },
+        },
+        select: { productId: true, salePrice: true },
+      });
+      const salePriceByProduct = new Map<string, number>();
+      for (const s of saleItems) {
+        const price = Number(s.salePrice);
+        const prev = salePriceByProduct.get(s.productId);
+        if (prev === undefined || price < prev) salePriceByProduct.set(s.productId, price);
+      }
+
+      const lines = cartItems.map((item) => {
+        const variantPrice = Number(item.variant.price);
+        const sale = salePriceByProduct.get(item.variant.productId);
+        const unitPrice = sale !== undefined && sale >= 0 && sale < variantPrice ? sale : variantPrice;
+        return {
+          productId: item.variant.productId,
+          productName: item.variant.product.name,
+          variantId: item.variantId,
+          quantity: item.quantity,
+          unitPrice,
+          total: unitPrice * item.quantity,
+        };
+      });
+      const subtotal = lines.reduce((sum, l) => sum + l.total, 0);
+
+      // Promo code — validated against the same transaction snapshot; an
+      // invalid code is a 400 (never silently dropped, so the customer is
+      // never charged a price they didn't see).
+      let discount = 0;
+      let promoCodeId: string | null = null;
+      if (dto.promoCode && dto.promoCode.trim()) {
+        const moduleOn = await tx.tenantModule.findFirst({
+          where: { tenantId, moduleCode: 'promo-codes', isEnabled: true },
+          select: { id: true },
+        });
+        if (!moduleOn) {
+          throw new BadRequestException('Promo codes are not available for this shop');
+        }
+        const evaluation = await this.promoCodesService.evaluate(tx, tenantId, dto.promoCode, subtotal, userId);
+        if (!evaluation.valid || !evaluation.promo) {
+          throw new BadRequestException(evaluation.message);
+        }
+        discount = Math.min(evaluation.discount, subtotal);
+        promoCodeId = evaluation.promo.id;
+      }
+
+      const shippingCost = await resolveDeliveryFee(tx, tenantId, deliveryMethod);
+      const total = Math.max(0, subtotal - discount) + shippingCost;
+
+      // Reserve stock: atomic guarded decrement per line. Any shortfall
+      // rolls back the whole transaction — no order, cart untouched.
+      for (const line of lines) {
         const dec = await tx.productVariant.updateMany({
-          where: { id: item.variantId, tenantId, stock: { gte: item.quantity } },
-          data: { stock: { decrement: item.quantity } },
+          where: { id: line.variantId, tenantId, isActive: true, stock: { gte: line.quantity } },
+          data: { stock: { decrement: line.quantity } },
         });
         if (dec.count === 0) {
           throw new BadRequestException(
-            `Insufficient stock for ${item.product.name}. Only limited quantity is available.`,
+            `Insufficient stock for ${line.productName}. Only limited quantity is available.`,
           );
         }
         const after = await tx.productVariant.findFirst({
-          where: { id: item.variantId, tenantId },
+          where: { id: line.variantId, tenantId },
           select: { stock: true },
         });
         const quantityAfter = after?.stock ?? 0;
         await tx.inventoryTransaction.create({
           data: {
             tenantId,
-            productId: item.productId,
-            variantId: item.variantId,
+            productId: line.productId,
+            variantId: line.variantId,
             type: 'SALE',
-            quantityBefore: quantityAfter + item.quantity,
-            quantityChange: -item.quantity,
+            quantityBefore: quantityAfter + line.quantity,
+            quantityChange: -line.quantity,
             quantityAfter,
             note: 'Online order',
             performedBy: null,
@@ -102,12 +214,38 @@ export class OrdersService {
         });
       }
 
+      let addressId: string | null = dto.addressId || null;
+      let notes = dto.notes;
+      if (!addressId && dto.shippingAddress && deliveryMethod !== DeliveryMethod.PICKUP) {
+        const a = dto.shippingAddress;
+        const created = await tx.address.create({
+          data: {
+            userId,
+            label: 'Checkout',
+            fullName: a.name.trim(),
+            phone: a.phone.trim(),
+            street: a.street.trim(),
+            city: a.city.trim(),
+            region: a.region.trim(),
+          },
+          select: { id: true },
+        });
+        addressId = created.id;
+        if (!notes || !notes.trim()) {
+          notes = `Ship to: ${a.name}, ${a.phone}, ${a.street}, ${a.city}, ${a.region}`;
+        }
+      }
+      if (deliveryMethod !== DeliveryMethod.STANDARD) {
+        const tag = `Delivery: ${deliveryMethod}`;
+        notes = notes && notes.trim() ? `${tag}\n${notes}` : tag;
+      }
+
       const newOrder = await tx.order.create({
         data: {
           tenantId,
           orderNumber: this.generateOrderNumber(),
           userId,
-          addressId: dto.addressId || null,
+          addressId,
           status: 'PENDING',
           subtotal,
           shippingCost,
@@ -115,16 +253,15 @@ export class OrdersService {
           total,
           paymentMethod: dto.paymentMethod,
           paymentStatus: 'PENDING',
-          notes: dto.notes,
+          promoCodeId,
+          notes,
           items: {
-            create: cartItems.map((item) => ({
-              productId: item.productId,
-              variantId: item.variantId,
-              quantity: item.quantity,
-              unitPrice: item.variant.price,
-              total: new Prisma.Decimal(
-                Number(item.variant.price) * item.quantity,
-              ),
+            create: lines.map((l) => ({
+              productId: l.productId,
+              variantId: l.variantId,
+              quantity: l.quantity,
+              unitPrice: new Prisma.Decimal(l.unitPrice),
+              total: new Prisma.Decimal(l.total),
             })),
           },
         },
@@ -141,15 +278,18 @@ export class OrdersService {
         },
       });
 
-      // Clear cart
+      if (promoCodeId) {
+        // Guarded increment (usedCount < maxUses) + usage row, same tx.
+        await this.promoCodesService.recordUsage(promoCodeId, userId, newOrder.id, tx);
+      }
+
       await tx.cartItem.deleteMany({ where: { userId } });
 
       return newOrder;
-    });
+    }, { maxWait: 10000, timeout: 20000 });
 
-    return order;
+    return this.withShippingFee(order);
   }
-
   async findAll(userId: string, query: QueryOrdersDto) {
     const { status, page = 1, limit = 20 } = query;
 
@@ -183,7 +323,7 @@ export class OrdersService {
     ]);
 
     return {
-      data: orders,
+      data: orders.map((o) => this.withShippingFee(o)),
       meta: {
         total,
         page,
@@ -253,7 +393,7 @@ export class OrdersService {
     ]);
 
     return {
-      data: orders,
+      data: orders.map((o) => this.withShippingFee(o)),
       meta: {
         total,
         page,
@@ -302,21 +442,24 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    return order;
+    return this.withShippingFee(order);
   }
 
   async updateStatus(id: string, status: string, user: any) {
+    const tenantId = this.tenantContext.requireId;
     const order = await this.prisma.order.findFirst({
-      where: { id, tenantId: this.tenantContext.requireId, ...ownerScope(user) },
+      where: { id, tenantId, ...ownerScope(user) },
     });
 
     if (!order) {
       throw new NotFoundException('Order not found');
     }
 
-    // Customers can only cancel their own pending orders. Any other transition
+    const admin = isAdminUser(user);
+
+    // Customers can only cancel their own orders. Any other transition
     // requires admin privileges.
-    if (!isAdminUser(user) && status !== 'CANCELLED') {
+    if (!admin && status !== 'CANCELLED') {
       throw new ForbiddenException(
         'Only admins can change order status to anything other than CANCELLED',
       );
@@ -339,66 +482,68 @@ export class OrdersService {
       );
     }
 
-    const data: any = { status };
-
-    // If cancelled, also update payment status
     if (status === 'CANCELLED') {
-      data.paymentStatus = 'CANCELLED';
-    }
+      const moneyCollected = MONEY_COLLECTED_PAYMENT_STATUSES.includes(order.paymentStatus);
+      if (!admin && moneyCollected) {
+        throw new BadRequestException('Paid orders must be cancelled by the shop');
+      }
 
-    // Cancelling releases the stock reserved at order creation. POS orders
-    // manage stock via their own sale/refund flow (and are created DELIVERED,
-    // so they never reach this transition), hence restock only non-POS orders.
-    if (status === 'CANCELLED' && order.channel !== 'POS') {
-      const tenantId = this.tenantContext.requireId;
       const updated = await this.prisma.$transaction(async (tx) => {
-        const items = await tx.orderItem.findMany({ where: { orderId: id } });
-        for (const item of items) {
-          await tx.productVariant.updateMany({
-            where: { id: item.variantId, tenantId },
-            data: { stock: { increment: item.quantity } },
-          });
-          const after = await tx.productVariant.findFirst({
-            where: { id: item.variantId, tenantId },
-            select: { stock: true },
-          });
-          const quantityAfter = after?.stock ?? 0;
-          await tx.inventoryTransaction.create({
-            data: {
-              tenantId,
-              productId: item.productId,
-              variantId: item.variantId,
-              type: 'ADJUSTMENT',
-              quantityBefore: quantityAfter - item.quantity,
-              quantityChange: item.quantity,
-              quantityAfter,
-              note: 'Order cancelled — reserved stock restored',
-              performedBy: null,
-            },
-          });
+        // Conditional flip: only the request that actually moves the row out
+        // of a cancellable status restocks. Guarding on the paymentStatus we
+        // read also stops a customer cancel racing a payment completion.
+        const flipped = await tx.order.updateMany({
+          where: {
+            id,
+            tenantId,
+            ...ownerScope(user),
+            status: { in: CANCELLABLE_STATUSES },
+            paymentStatus: order.paymentStatus,
+          },
+          data: {
+            status: 'CANCELLED',
+            // Admin cancelling a paid order → money must go back.
+            paymentStatus: moneyCollected ? 'REFUND_PENDING' : 'CANCELLED',
+          },
+        });
+        if (flipped.count !== 1) {
+          throw new ConflictException('Order was updated by someone else. Please refresh and try again.');
         }
-        return tx.order.update({
-          where: { id },
-          data,
+
+        // POS orders manage stock via their own sale/refund flow (and are
+        // created DELIVERED, so they never reach this transition).
+        if (order.channel !== 'POS') {
+          await restockOrderItems(tx, id, tenantId, 'Order cancelled — reserved stock restored');
+        }
+        await releasePromoUsage(tx, order, tenantId);
+
+        return tx.order.findFirst({
+          where: { id, tenantId },
           include: { items: true, payments: true },
         });
       });
       await this.auditService.log('UPDATE_STATUS', 'Order', id, { from: order.status, to: status });
-      return updated;
+      return updated ? this.withShippingFee(updated) : updated;
     }
 
-    const updated = await this.prisma.order.update({
-      where: { id },
-      data,
+    // Non-cancel transitions: compare-and-swap on the status we validated.
+    const flipped = await this.prisma.order.updateMany({
+      where: { id, tenantId, status: order.status },
+      data: { status },
+    });
+    if (flipped.count !== 1) {
+      throw new ConflictException('Order was updated by someone else. Please refresh and try again.');
+    }
+    const updated = await this.prisma.order.findFirst({
+      where: { id, tenantId },
       include: {
         items: true,
         payments: true,
       },
     });
     await this.auditService.log('UPDATE_STATUS', 'Order', id, { from: order.status, to: status });
-    return updated;
+    return updated ? this.withShippingFee(updated) : updated;
   }
-
   /**
    * Append a timestamped, admin-attributed note to Order.notes. Reversible
    * (admin can edit the field manually), so the AI agent does not require

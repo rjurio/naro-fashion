@@ -12,6 +12,8 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { PosService } from './pos.service';
@@ -28,7 +30,9 @@ import {
 } from './dto';
 
 @Controller('pos')
-@UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
+// PermissionGuard is a no-op on routes without @RequiresPermission; refunds and
+// exchanges (which can pay cash out of the drawer) require 'pos:refund'.
+@UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard, PermissionGuard)
 @RequiresModule('pos')
 export class PosController {
   constructor(private readonly posService: PosService) {}
@@ -147,6 +151,7 @@ export class PosController {
   // ============================================================
 
   @Post('sales/:id/refund')
+  @RequiresPermission('pos:refund')
   refundSale(
     @Param('id') id: string,
     @Body() dto: PosRefundDto,
@@ -202,6 +207,7 @@ export class PosController {
   // ============================================================
 
   @Post('exchanges')
+  @RequiresPermission('pos:refund')
   createExchange(@Body() dto: CreateExchangeDto, @CurrentUser('id') cashierId: string) {
     return this.posService.createExchange(dto, cashierId);
   }

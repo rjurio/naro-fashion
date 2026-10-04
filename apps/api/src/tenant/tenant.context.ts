@@ -63,7 +63,9 @@ export class TenantContext {
         const payload = this.jwtService.verify(token, {
           secret: requireJwtSecret('JWT_SECRET', this.configService),
         });
-        if (payload?.tenantId) {
+        // Refresh tokens are never accepted as Bearer credentials (defence
+        // in depth; legacy tokens without `typ` remain accepted).
+        if (payload?.tenantId && payload?.typ !== 'refresh') {
           if (headerTenantId && headerTenantId !== payload.tenantId) {
             throw new ForbiddenException(
               'X-Tenant-Id does not match authenticated tenant',

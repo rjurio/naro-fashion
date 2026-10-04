@@ -3,6 +3,20 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from './email.service';
 import { SmsService } from './sms.service';
 
+/**
+ * Email clients need absolute image URLs. Product images are stored as
+ * `/uploads/...` paths served by the API; prefix them with env
+ * API_PUBLIC_URL (e.g. https://api.narofashion.co.tz). Without it, relative
+ * images are dropped rather than rendered broken.
+ */
+function absoluteImageUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  if (/^https:\/\//i.test(url)) return url;
+  const base = (process.env.API_PUBLIC_URL || '').replace(/\/+$/, '');
+  if (base && url.startsWith('/')) return `${base}${url}`;
+  return null;
+}
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -13,33 +27,18 @@ export class NotificationsService {
     private readonly smsService: SmsService,
   ) {}
 
-  // Scope branding lookups to a tenant when the caller knows it. This service
-  // is a singleton (no request-scoped TenantContext), so cron paths that
-  // iterate rentals/orders across tenants MUST pass the row's tenantId — else
-  // an unscoped findFirst returns whichever tenant's row Postgres yields first
-  // and tenant B's customer gets tenant A's business name / domain in their
-  // SMS + email. Request-path callers on the current single-tenant deployment
-  // omit it and get the (correct) sole tenant via fallback.
-  private async getBusinessName(tenantId?: string): Promise<string> {
-    try {
-      const setting = await this.prisma.siteSetting.findFirst({
-        where: { key: 'site_name', ...(tenantId ? { tenantId } : {}) },
-      });
-      return setting?.value || 'Naro Fashion';
-    } catch {
-      return 'Naro Fashion';
-    }
+  // Branding (business name / domain) for SMS bodies + email layout is ALWAYS
+  // tenant-scoped via EmailService.getBranding(): explicit tenantId → the
+  // in-flight request's tenant (AsyncLocalStorage) → the deployment default
+  // tenant. Never an unscoped findFirst (that handed tenant B's customers
+  // tenant A's name). Cron/background callers iterating rows across tenants
+  // MUST pass the row's tenantId in `extra.tenantId`.
+  private async getBusinessName(tenantId?: string | null): Promise<string> {
+    return (await this.emailService.getBranding(tenantId)).businessName;
   }
 
-  private async getDomain(tenantId?: string): Promise<string> {
-    try {
-      const setting = await this.prisma.siteSetting.findFirst({
-        where: { key: 'business_domain', ...(tenantId ? { tenantId } : {}) },
-      });
-      return setting?.value || 'narofashion.co.tz';
-    } catch {
-      return 'narofashion.co.tz';
-    }
+  private async getDomain(tenantId?: string | null): Promise<string> {
+    return (await this.emailService.getBranding(tenantId)).domain;
   }
 
   /**
@@ -65,6 +64,7 @@ export class NotificationsService {
         to: customerEmail,
         subject: `Order Confirmed — #${orderNumber}`,
         template: 'order-confirmation',
+        tenantId: extra?.tenantId,
         context: {
           customerName,
           orderId,
@@ -130,6 +130,7 @@ export class NotificationsService {
         to: customerEmail,
         subject: `Rental Pickup Reminder — ${formattedDate}`,
         template: 'rental-reminder',
+        tenantId: extra?.tenantId,
         context: {
           customerName,
           rentalId,
@@ -171,6 +172,7 @@ export class NotificationsService {
       productName?: string;
       daysUntilPickup?: number;
       adminEmail?: string;
+      tenantId?: string | null;
     },
   ) {
     this.logger.log(
@@ -194,6 +196,7 @@ export class NotificationsService {
           to: adminEmail,
           subject: `${isUrgent ? '[URGENT] ' : ''}Rental Prep Reminder — ${customerName} on ${formattedDate}`,
           template: 'admin-prep-reminder',
+          tenantId: extra?.tenantId,
           context: {
             rentalId,
             rentalNumber: extra?.rentalNumber,
@@ -226,6 +229,7 @@ export class NotificationsService {
       productName?: string;
       adminEmail?: string;
       adminPhone?: string;
+      tenantId?: string | null;
     },
   ) {
     this.logger.warn(
@@ -250,6 +254,7 @@ export class NotificationsService {
           to: adminEmail,
           subject: `[OVERDUE] Rental ${extra?.rentalNumber || rentalId} — ${customerName} (${daysOverdue} days overdue)`,
           template: 'overdue-rental',
+          tenantId: extra?.tenantId,
           context: {
             rentalId,
             rentalNumber: extra?.rentalNumber,
@@ -290,6 +295,7 @@ export class NotificationsService {
     reason?: string,
     extra?: {
       customerPhone?: string;
+      tenantId?: string | null;
     },
   ) {
     this.logger.log(
@@ -298,14 +304,15 @@ export class NotificationsService {
 
     const isApproved = status === 'APPROVED';
 
-    const bizName3 = await this.getBusinessName();
-    const domain3 = await this.getDomain();
+    const bizName3 = await this.getBusinessName(extra?.tenantId);
+    const domain3 = await this.getDomain(extra?.tenantId);
 
     this.emailService
       .send({
         to: customerEmail,
         subject: `ID Verification ${isApproved ? 'Approved' : 'Update'} — ${bizName3}`,
         template: 'id-verification',
+        tenantId: extra?.tenantId,
         context: {
           isApproved,
           reason,
@@ -332,18 +339,64 @@ export class NotificationsService {
   }
 
   /**
+   * Abandoned-cart reminder (tenant-branded `abandoned-cart` template).
+   * Called by the scheduler's abandoned-cart cron, which iterates carts
+   * across tenants — `tenantId` is therefore REQUIRED here. Shows up to 5
+   * items; the rest are summarised as "…and N more".
+   */
+  async sendAbandonedCartReminder(params: {
+    tenantId: string;
+    to: string;
+    customerName?: string;
+    items: Array<{ name: string; quantity: number; price?: number | string | null; imageUrl?: string | null }>;
+    cartUrl: string;
+  }) {
+    const { tenantId, to, cartUrl } = params;
+    const items = (params.items || []).filter((i) => i && i.name);
+    if (!tenantId || !to || items.length === 0) {
+      return { sent: false, channel: 'skipped' };
+    }
+    const shown = items.slice(0, 5).map((i) => ({
+      name: i.name,
+      quantity: i.quantity,
+      price:
+        i.price === null || i.price === undefined || i.price === ''
+          ? null
+          : Number(i.price).toLocaleString('en-US', { maximumFractionDigits: 0 }),
+      imageUrl: absoluteImageUrl(i.imageUrl),
+    }));
+    const bizName = await this.getBusinessName(tenantId);
+
+    this.logger.log(`[ABANDONED CART] Reminder to ${to} (${items.length} items, tenant ${tenantId})`);
+    const result = await this.emailService.send({
+      to,
+      subject: `Your bag is waiting — ${bizName}`,
+      template: 'abandoned-cart',
+      tenantId,
+      context: {
+        customerName: params.customerName || 'Valued Customer',
+        items: shown,
+        moreCount: items.length > shown.length ? items.length - shown.length : 0,
+        cartUrl,
+      },
+    });
+    return result;
+  }
+
+  /**
    * Send password reset email.
    */
-  async sendPasswordResetEmail(email: string, resetUrl: string) {
+  async sendPasswordResetEmail(email: string, resetUrl: string, tenantId?: string | null) {
     this.logger.log(`[PASSWORD RESET] Sending reset link to ${email}`);
 
-    const bizName4 = await this.getBusinessName();
+    const bizName4 = await this.getBusinessName(tenantId);
 
     this.emailService
       .send({
         to: email,
         subject: `Password Reset — ${bizName4}`,
         template: 'password-reset',
+        tenantId,
         context: { resetUrl },
       })
       .catch((err) =>

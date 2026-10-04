@@ -52,7 +52,15 @@ export class PermissionGuard implements CanActivate {
     if (user.isPlatformAdmin) return true;
     if (user.role === 'SUPER_ADMIN') return true;
 
-    const codes = await this.resolvePermissions(user.id);
+    // Customers never hold RBAC permissions (AdminGuard should already have
+    // stopped them; this is defence in depth if the guard order changes).
+    if (!user.isAdmin) {
+      throw new ForbiddenException(
+        `Missing required permission: ${required.join(' or ')}`,
+      );
+    }
+
+    const codes = await this.resolvePermissions(user.id, user.tenantId ?? null);
     const allowed = required.some((code) => codes.has(code));
     if (!allowed) {
       throw new ForbiddenException(
@@ -62,12 +70,28 @@ export class PermissionGuard implements CanActivate {
     return true;
   }
 
-  private async resolvePermissions(adminUserId: string): Promise<Set<string>> {
-    const cached = this.cache.get(adminUserId);
+  /**
+   * Effective permission codes for an admin. Only roles that are
+   *  - owned by the admin's OWN tenant, or shared system roles
+   *    (tenantId=null, isSystem=true) — a stray AdminUserRole row pointing at
+   *    another tenant's custom role grants nothing, and
+   *  - not soft-deleted (`deletedAt: null`) and still active
+   * contribute codes.
+   */
+  private async resolvePermissions(adminUserId: string, tenantId: string | null): Promise<Set<string>> {
+    const cacheKey = `${adminUserId}:${tenantId ?? ''}`;
+    const cached = this.cache.get(cacheKey);
     if (cached && cached.expires > Date.now()) return cached.codes;
 
+    const tenantScope = tenantId
+      ? [{ tenantId }, { tenantId: null, isSystem: true }]
+      : [{ tenantId: null, isSystem: true }];
+
     const rows = await this.prisma.adminUserRole.findMany({
-      where: { adminUserId },
+      where: {
+        adminUserId,
+        role: { deletedAt: null, isActive: true, OR: tenantScope },
+      },
       select: {
         role: {
           select: {
@@ -85,7 +109,7 @@ export class PermissionGuard implements CanActivate {
         codes.add(rp.permission.code);
       }
     }
-    this.cache.set(adminUserId, { codes, expires: Date.now() + this.ttlMs });
+    this.cache.set(cacheKey, { codes, expires: Date.now() + this.ttlMs });
     return codes;
   }
 }

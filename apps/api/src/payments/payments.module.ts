@@ -5,11 +5,13 @@ import { SelcomProvider } from './selcom.provider';
 import { ClickPesaProvider } from './clickpesa.provider';
 import { PaymentProviderRegistry } from './payment-provider.registry';
 import { PaymentsReconciliationService } from './payments.reconciliation';
+import { PaymentSettlementService } from './payment-settlement.service';
 
 @Module({
   controllers: [PaymentsController],
   providers: [
     PaymentsService,
+    PaymentSettlementService,
     SelcomProvider,
     ClickPesaProvider,
     PaymentProviderRegistry,

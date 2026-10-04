@@ -109,9 +109,10 @@ export class ReviewsService {
     };
   }
 
+  /** PUBLIC (@Public GET /reviews/:id) — moderated reviews only. */
   async findOne(id: string) {
     const review = await this.prisma.review.findFirst({
-      where: { id, tenantId: this.tenantContext.requireId },
+      where: { id, tenantId: this.tenantContext.requireId, isApproved: true },
       include: {
         user: {
           select: { firstName: true, lastName: true, avatarUrl: true },

@@ -1,10 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 import { CreateProductDto } from './dto/create-product.dto';
-import { UpdateProductDto } from './dto/update-product.dto';
+import { UpdateProductDto, UpdateVariantDto } from './dto/update-product.dto';
 import { QueryProductsDto, SortOrder } from './dto/query-products.dto';
+import { assertSameTenant } from './util/tenant-ownership';
 
 const sizeGuideSelect = { id: true, name: true, nameSwahili: true, slug: true, content: true, contentSwahili: true, pdfUrl: true, pdfUrlSwahili: true };
 
@@ -108,6 +110,10 @@ const publicProductDetailSelect = {
   images: { orderBy: { sortOrder: 'asc' as const }, select: { id: true, url: true, altText: true, sortOrder: true, isPrimary: true } },
   sizeGuideRef: { select: sizeGuideSelect },
   reviews: {
+    // Public route: only moderated reviews. Pre-fix this include returned
+    // unapproved (pending/spam) reviews on every product page even though
+    // ReviewsService.findByProduct already filtered on isApproved.
+    where: { isApproved: true },
     take: 10,
     orderBy: { createdAt: 'desc' as const },
     select: {
@@ -277,11 +283,32 @@ export class ProductsService {
     return product;
   }
 
+  /**
+   * Verify client-supplied foreign ids (categoryId / sizeGuideId) belong to
+   * the caller's tenant. 404 otherwise — see util/tenant-ownership.ts.
+   */
+  private async assertProductRefs(tenantId: string, refs: { categoryId?: string | null; sizeGuideId?: string | null }) {
+    await assertSameTenant(this.prisma.category, refs.categoryId, tenantId, 'Category', { deletedAt: null });
+    await assertSameTenant(this.prisma.sizeGuide, refs.sizeGuideId, tenantId, 'Size guide', { deletedAt: null });
+  }
+
+  /** Map a Prisma unique-constraint violation to a 409 instead of a 500. */
+  private rethrowUnique(err: unknown): never {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      const target = (err.meta?.target as string[] | string | undefined) ?? 'field';
+      throw new ConflictException(`A product or variant with this ${Array.isArray(target) ? target.join(', ') : target} already exists`);
+    }
+    throw err;
+  }
+
   async create(dto: CreateProductDto) {
+    const tenantId = this.tenantContext.requireId;
     const slug = dto.slug || this.generateSlug(dto.name);
 
+    await this.assertProductRefs(tenantId, { categoryId: dto.categoryId, sizeGuideId: dto.sizeGuideId });
+
     const data: any = {
-      tenantId: this.tenantContext.requireId,
+      tenantId,
       name: dto.name,
       nameSwahili: dto.nameSwahili,
       slug,
@@ -305,7 +332,13 @@ export class ProductsService {
 
     if (dto.variants?.length) {
       data.variants = {
+        // tenantId MUST be set on every variant. Nested creates do NOT
+        // inherit the parent's tenantId; pre-fix every admin-/CSV-/AI-
+        // created variant landed with tenantId NULL, making it invisible
+        // to every tenant-scoped variant lookup (POS barcode scan, online
+        // order stock reservation, inventory adjust).
         create: dto.variants.map((v, i) => ({
+          tenantId,
           name: v.name,
           sku: v.sku || `${slug}-v${i + 1}`,
           barcode: v.barcode || undefined,
@@ -328,10 +361,12 @@ export class ProductsService {
       };
     }
 
-    const product = await this.prisma.product.create({
-      data,
-      include: productIncludes,
-    });
+    const product = await this.prisma.product
+      .create({
+        data,
+        include: productIncludes,
+      })
+      .catch((err) => this.rethrowUnique(err));
     await this.auditService.log('CREATE', 'Product', product.id, { name: dto.name });
     return product;
   }
@@ -514,10 +549,13 @@ export class ProductsService {
   }
 
   async update(id: string, dto: UpdateProductDto) {
-    const product = await this.prisma.product.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
+    const tenantId = this.tenantContext.requireId;
+    const product = await this.prisma.product.findFirst({ where: { id, tenantId } });
     if (!product || product.deletedAt) {
       throw new NotFoundException('Product not found');
     }
+
+    await this.assertProductRefs(tenantId, { categoryId: dto.categoryId, sizeGuideId: dto.sizeGuideId });
 
     const data: any = {};
     if (dto.name !== undefined) {
@@ -546,48 +584,144 @@ export class ProductsService {
     if (dto.supplierName !== undefined) data.supplierName = dto.supplierName;
     if (dto.supplierContact !== undefined) data.supplierContact = dto.supplierContact;
 
-    // Handle variants: delete all existing, re-create from dto
-    if (dto.variants !== undefined) {
-      await this.prisma.productVariant.deleteMany({ where: { productId: id } });
-      if (dto.variants.length > 0) {
-        await this.prisma.productVariant.createMany({
-          data: dto.variants.map((v, i) => ({
-            productId: id,
+    const updated = await this.prisma
+      .$transaction(async (tx) => {
+        // Variants: diff/upsert — NEVER delete-all-and-recreate. OrderItem /
+        // RentalOrder reference variants with onDelete: Restrict (so the old
+        // deleteMany threw on any product that had ever sold) and CartItem
+        // cascades (so it silently emptied every customer's cart and changed
+        // the variant ids under them).
+        if (dto.variants !== undefined) {
+          await this.syncVariants(tx, { id, slug: product.slug }, tenantId, dto.variants);
+        }
+
+        // Handle images: delete all existing, re-create from dto (nothing
+        // references ProductImage rows, so replace-all is safe here).
+        if (dto.images !== undefined) {
+          await tx.productImage.deleteMany({ where: { productId: id } });
+          if (dto.images.length > 0) {
+            await tx.productImage.createMany({
+              data: dto.images.map((url, i) => ({
+                productId: id,
+                url,
+                sortOrder: i,
+                isPrimary: i === 0,
+              })),
+            });
+          }
+        }
+
+        return tx.product.update({
+          where: { id },
+          data,
+          include: productIncludes,
+        });
+      })
+      .catch((err) => this.rethrowUnique(err));
+    await this.auditService.log('UPDATE', 'Product', id, { name: dto.name });
+    return updated;
+  }
+
+  /**
+   * Reconcile a product's variants against the admin payload.
+   *
+   *  - payload row WITH an id that belongs to this product → update in place
+   *    (id preserved, so carts / orders / rentals keep pointing at it).
+   *  - payload row WITHOUT an id (or with an id that isn't this product's)
+   *    → create, with tenantId.
+   *  - existing variant absent from the payload → hard-delete only when no
+   *    OrderItem / RentalOrder references it; otherwise soft-disable
+   *    (`isActive: false`) so history stays intact. Cart lines pointing at
+   *    a removed/disabled variant are dropped either way.
+   *
+   * Exposed (not private) for the regression spec.
+   */
+  async syncVariants(
+    tx: Prisma.TransactionClient,
+    product: { id: string; slug: string },
+    tenantId: string,
+    variants: UpdateVariantDto[],
+  ) {
+    const existing = await tx.productVariant.findMany({
+      where: { productId: product.id },
+      select: { id: true, sku: true },
+    });
+    const existingById = new Map(existing.map((v) => [v.id, v]));
+    const keep = new Set<string>();
+    const summary = { updated: 0, created: 0, deleted: 0, disabled: 0 };
+    const stamp = Date.now().toString(36);
+
+    for (let i = 0; i < variants.length; i++) {
+      const v = variants[i];
+      const current = v.id ? existingById.get(v.id) : undefined;
+      if (current) {
+        keep.add(current.id);
+        await tx.productVariant.update({
+          where: { id: current.id },
+          data: {
+            // Heal legacy NULL-tenant rows as they're touched.
+            tenantId,
             name: v.name,
-            sku: v.sku || `${product.slug}-v${i + 1}-${Date.now().toString(36)}`,
+            sku: v.sku || current.sku,
+            barcode: v.barcode || null,
+            size: v.size,
+            color: v.color,
+            colorHex: v.colorHex,
+            price: v.price,
+            ...(v.stock !== undefined ? { stock: v.stock } : {}),
+            ...(v.isActive !== undefined ? { isActive: v.isActive } : {}),
+          },
+        });
+        summary.updated++;
+      } else {
+        await tx.productVariant.create({
+          data: {
+            tenantId,
+            productId: product.id,
+            name: v.name,
+            sku: v.sku || `${product.slug}-v${i + 1}-${stamp}`,
             barcode: v.barcode || undefined,
             size: v.size,
             color: v.color,
             colorHex: v.colorHex,
             price: v.price,
             stock: v.stock ?? 0,
-          })),
+          },
         });
+        summary.created++;
       }
     }
 
-    // Handle images: delete all existing, re-create from dto
-    if (dto.images !== undefined) {
-      await this.prisma.productImage.deleteMany({ where: { productId: id } });
-      if (dto.images.length > 0) {
-        await this.prisma.productImage.createMany({
-          data: dto.images.map((url, i) => ({
-            productId: id,
-            url,
-            sortOrder: i,
-            isPrimary: i === 0,
-          })),
+    const removed = existing.filter((v) => !keep.has(v.id)).map((v) => v.id);
+    if (removed.length > 0) {
+      const [orderRefs, rentalRefs] = await Promise.all([
+        tx.orderItem.findMany({ where: { variantId: { in: removed } }, select: { variantId: true }, distinct: ['variantId'] }),
+        tx.rentalOrder.findMany({ where: { variantId: { in: removed } }, select: { variantId: true }, distinct: ['variantId'] }),
+      ]);
+      const referenced = new Set<string>([
+        ...orderRefs.map((r) => r.variantId),
+        ...rentalRefs.map((r) => r.variantId),
+      ]);
+      const toDisable = removed.filter((vid) => referenced.has(vid));
+      const toDelete = removed.filter((vid) => !referenced.has(vid));
+
+      await tx.cartItem.deleteMany({ where: { variantId: { in: removed } } });
+      if (toDisable.length > 0) {
+        await tx.productVariant.updateMany({
+          where: { id: { in: toDisable }, productId: product.id },
+          data: { isActive: false, tenantId },
         });
+        summary.disabled = toDisable.length;
+      }
+      if (toDelete.length > 0) {
+        await tx.productVariant.deleteMany({
+          where: { id: { in: toDelete }, productId: product.id },
+        });
+        summary.deleted = toDelete.length;
       }
     }
 
-    const updated = await this.prisma.product.update({
-      where: { id },
-      data,
-      include: productIncludes,
-    });
-    await this.auditService.log('UPDATE', 'Product', id, { name: dto.name });
-    return updated;
+    return summary;
   }
 
   /**

@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsEnum, IsDateString, IsBoolean, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsEnum, IsDateString, IsBoolean, Min, Max, ValidateIf } from 'class-validator';
 
 export class CreatePromoCodeDto {
   @IsString()
@@ -52,7 +52,15 @@ export class ValidatePromoCodeDto {
   @IsString()
   code: string;
 
+  /** Legacy name for the cart subtotal (existing storefront cart page). */
+  @ValidateIf((o) => o.subtotal === undefined)
   @IsNumber()
   @Min(0)
-  orderAmount: number;
+  orderAmount?: number;
+
+  /** Cart subtotal in TZS (order contract name). Either this or orderAmount. */
+  @ValidateIf((o) => o.orderAmount === undefined)
+  @IsNumber()
+  @Min(0)
+  subtotal?: number;
 }

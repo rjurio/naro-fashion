@@ -11,12 +11,68 @@ import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 
+/** The authenticated caller (req.user from JwtStrategy). */
+export interface AdminActor {
+  id: string;
+  role?: string | null;
+  isPlatformAdmin?: boolean;
+}
+
+const SUPER_ADMIN = 'SUPER_ADMIN';
+
 @Injectable()
 export class AdminUsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
   ) {}
+
+  /**
+   * True when the caller may grant / modify SUPER_ADMIN: platform admins, or
+   * an in-tenant AdminUser whose CURRENT (DB) role string is SUPER_ADMIN.
+   * The DB is re-read rather than trusting a JWT claim.
+   */
+  private async isSuperActor(actor: AdminActor | undefined, tenantId: string): Promise<boolean> {
+    if (!actor?.id) return false;
+    if (actor.isPlatformAdmin) return true;
+    const performer = await this.prisma.adminUser.findFirst({
+      where: { id: actor.id, tenantId, deletedAt: null, isActive: true },
+      select: { role: true },
+    });
+    return performer?.role === SUPER_ADMIN;
+  }
+
+  /**
+   * Resolve a role the caller may assign in this tenant: the tenant's own
+   * (non-deleted) role, or a shared system role. Another tenant's role id →
+   * 404. The SUPER_ADMIN system role (or any role named SUPER_ADMIN) requires
+   * a super actor.
+   */
+  private async resolveAssignableRole(
+    roleId: string,
+    tenantId: string,
+    actor: AdminActor | undefined,
+    superCache: { value?: boolean },
+  ) {
+    // assignRole's body is an inline type (no ValidationPipe) — never let a
+    // non-string (e.g. a Prisma operator object) reach the where-clause.
+    if (typeof roleId !== 'string' || !roleId) throw new NotFoundException('Role not found');
+    const role = await this.prisma.role.findFirst({
+      where: {
+        id: roleId,
+        deletedAt: null,
+        OR: [{ tenantId }, { tenantId: null, isSystem: true }],
+      },
+    });
+    if (!role) throw new NotFoundException('Role not found');
+    if (role.name === SUPER_ADMIN) {
+      if (superCache.value === undefined) superCache.value = await this.isSuperActor(actor, tenantId);
+      if (!superCache.value) {
+        throw new ForbiddenException('Only SUPER_ADMIN can assign the SUPER_ADMIN role');
+      }
+    }
+    return role;
+  }
 
   async findAll(params: { isActive?: boolean; role?: string; includeDeleted?: boolean }) {
     return this.prisma.adminUser.findMany({
@@ -51,13 +107,33 @@ export class AdminUsersService {
     return admin;
   }
 
-  async create(dto: CreateAdminUserDto, createdById: string) {
+  async create(dto: CreateAdminUserDto, createdById: string, actor?: AdminActor) {
     const tenantId = this.tenantContext.requireId;
+    const actorRef: AdminActor = actor ?? { id: createdById };
+    const superCache: { value?: boolean } = {};
+
+    const roleString = dto.role || 'STAFF';
+    if (roleString === SUPER_ADMIN) {
+      superCache.value = await this.isSuperActor(actorRef, tenantId);
+      if (!superCache.value) {
+        throw new ForbiddenException('Only SUPER_ADMIN can create a SUPER_ADMIN account');
+      }
+    }
+
+    // Every requested role must be this tenant's own or a shared system role
+    // (never another tenant's), and SUPER_ADMIN needs a super actor.
+    const roleIds = Array.from(
+      new Set([...(dto.roleIds ?? []), ...(dto.roleId ? [dto.roleId] : [])].filter(Boolean)),
+    );
+    for (const rid of roleIds) {
+      await this.resolveAssignableRole(rid, tenantId, actorRef, superCache);
+    }
+
     const existing = await this.prisma.adminUser.findFirst({ where: { email: dto.email, tenantId } });
     if (existing) throw new ConflictException('Email already in use');
 
-    const tempPassword = crypto.randomBytes(8).toString('hex');
-    const passwordHash = await bcrypt.hash(tempPassword, 12);
+    const generated = dto.password ? null : crypto.randomBytes(8).toString('hex');
+    const passwordHash = await bcrypt.hash(dto.password ?? (generated as string), 12);
 
     try {
       const admin = await this.prisma.adminUser.create({
@@ -67,29 +143,51 @@ export class AdminUsersService {
           firstName: dto.firstName,
           lastName: dto.lastName,
           passwordHash,
-          role: dto.role || 'STAFF',
+          role: roleString,
           createdBy: createdById,
-          ...(dto.roleId ? {
-            roles: { create: { roleId: dto.roleId, assignedBy: createdById } },
-          } : {}),
+          ...(roleIds.length > 0
+            ? { roles: { create: roleIds.map((roleId) => ({ roleId, assignedBy: createdById })) } }
+            : {}),
         },
         select: { id: true, email: true, firstName: true, lastName: true, role: true },
       });
-      // In production: send welcome email with tempPassword
-      return { ...admin, temporaryPassword: tempPassword };
+      // In production: send welcome email with the temporary password
+      return generated ? { ...admin, temporaryPassword: generated } : admin;
     } catch (e: any) {
       if (e.code === 'P2002') throw new ConflictException('Email already in use');
       throw e;
     }
   }
 
-  async update(id: string, dto: UpdateAdminUserDto) {
-    const admin = await this.prisma.adminUser.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
+  async update(id: string, dto: UpdateAdminUserDto, actor?: AdminActor) {
+    const tenantId = this.tenantContext.requireId;
+    const admin = await this.prisma.adminUser.findUnique({ where: { id, tenantId } });
     if (!admin) throw new NotFoundException('Admin user not found');
+
+    // Touching a SUPER_ADMIN account (email/password takeover) or granting
+    // SUPER_ADMIN requires a super actor.
+    if (admin.role === SUPER_ADMIN || dto.role === SUPER_ADMIN) {
+      if (!(await this.isSuperActor(actor, tenantId))) {
+        throw new ForbiddenException('Only SUPER_ADMIN can modify SUPER_ADMIN accounts or grant SUPER_ADMIN');
+      }
+    }
+
+    // Explicit whitelist — never spread the DTO straight into Prisma.
+    const data: Record<string, any> = {};
+    if (dto.firstName !== undefined) data.firstName = dto.firstName;
+    if (dto.lastName !== undefined) data.lastName = dto.lastName;
+    if (dto.email !== undefined) data.email = dto.email;
+    if (dto.avatarUrl !== undefined) data.avatarUrl = dto.avatarUrl;
+    if (dto.role !== undefined) data.role = dto.role;
+    if (dto.password) {
+      data.passwordHash = await bcrypt.hash(dto.password, 12);
+      data.tokenVersion = { increment: 1 }; // revoke the target's sessions
+    }
+
     try {
       return await this.prisma.adminUser.update({
         where: { id },
-        data: dto,
+        data,
         select: { id: true, email: true, firstName: true, lastName: true, role: true, avatarUrl: true },
       });
     } catch (e: any) {
@@ -109,10 +207,14 @@ export class AdminUsersService {
     });
   }
 
-  async toggle(id: string, performedById: string) {
+  async toggle(id: string, performedById: string, actor?: AdminActor) {
     if (id === performedById) throw new ForbiddenException('Cannot disable your own account');
-    const admin = await this.prisma.adminUser.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
+    const tenantId = this.tenantContext.requireId;
+    const admin = await this.prisma.adminUser.findUnique({ where: { id, tenantId } });
     if (!admin) throw new NotFoundException('Admin user not found');
+    if (admin.role === SUPER_ADMIN && !(await this.isSuperActor(actor ?? { id: performedById }, tenantId))) {
+      throw new ForbiddenException('Only SUPER_ADMIN can enable/disable SUPER_ADMIN accounts');
+    }
     return this.prisma.adminUser.update({
       where: { id },
       data: { isActive: !admin.isActive },
@@ -130,7 +232,7 @@ export class AdminUsersService {
     });
   }
 
-  async assignRole(adminUserId: string, roleId: string, performedById: string) {
+  async assignRole(adminUserId: string, roleId: string, performedById: string, actor?: AdminActor) {
     const tenantId = this.tenantContext.requireId;
     if (adminUserId === performedById) throw new ForbiddenException('Cannot change your own roles');
     // The TARGET admin must belong to the caller's tenant. Without this a
@@ -144,17 +246,8 @@ export class AdminUsersService {
     // RolesService.findAll() when surfacing roles in the admin UI.
     // Without this the AI role-assignment workflow can't find the
     // seeded roles by id.
-    const role = await this.prisma.role.findFirst({
-      where: {
-        id: roleId,
-        OR: [{ tenantId }, { tenantId: null, isSystem: true }],
-      },
-    });
-    if (!role) throw new NotFoundException('Role not found');
-    if (role.name === 'SUPER_ADMIN') {
-      const performer = await this.prisma.adminUser.findUnique({ where: { id: performedById, tenantId } });
-      if (performer?.role !== 'SUPER_ADMIN') throw new ForbiddenException('Only SUPER_ADMIN can assign the SUPER_ADMIN role');
-    }
+    // Soft-deleted roles are not assignable; SUPER_ADMIN requires a super actor.
+    await this.resolveAssignableRole(roleId, tenantId, actor ?? { id: performedById }, {});
     try {
       return await this.prisma.adminUserRole.create({ data: { adminUserId, roleId, assignedBy: performedById } });
     } catch (e: any) {

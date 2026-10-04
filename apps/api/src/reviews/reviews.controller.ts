@@ -15,6 +15,8 @@ import { UpdateReviewDto } from './dto/update-review.dto';
 import { QueryReviewsDto } from './dto/query-reviews.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 
@@ -72,9 +74,20 @@ export class ReviewsController {
     return this.reviewsService.delete(userId, id);
   }
 
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('reviews:moderate')
   @Patch(':id/approve')
   approve(@Param('id') id: string) {
     return this.reviewsService.approve(id);
+  }
+
+  // Admin moderation: reject = remove the review (Review has no deletedAt;
+  // matches ReviewsService.reject, tenant-scoped, recalculates product rating).
+  // Customer-facing DELETE /reviews/:id stays author-only.
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('reviews:moderate')
+  @Patch(':id/reject')
+  reject(@Param('id') id: string) {
+    return this.reviewsService.reject(id);
   }
 }

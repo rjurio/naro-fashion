@@ -5,6 +5,10 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { InstagramService } from '../cms/instagram.service';
+import {
+  DEFAULT_RENTAL_HOLD_TTL_HOURS,
+  UNPAID_HOLD_STATUSES,
+} from '../rentals/rental-rules';
 
 /** Mapping from admin-friendly interval keys to cron expressions */
 export const INSTAGRAM_SYNC_INTERVALS: Record<string, string> = {
@@ -18,6 +22,14 @@ export const INSTAGRAM_SYNC_INTERVALS: Record<string, string> = {
 };
 
 const IG_SYNC_JOB_NAME = 'instagram-sync-dynamic';
+
+/**
+ * Abandoned-cart emails (tenant-branded `abandoned-cart` template via
+ * NotificationsService.sendAbandonedCartReminder). Opt-in: set env
+ * ABANDONED_CART_EMAIL_ENABLED=true. Read at call time so a .env change +
+ * restart is all that's needed.
+ */
+const isAbandonedCartEmailEnabled = () => process.env.ABANDONED_CART_EMAIL_ENABLED === 'true';
 
 @Injectable()
 export class SchedulerService implements OnModuleInit {
@@ -66,30 +78,42 @@ export class SchedulerService implements OnModuleInit {
   }
 
   /**
-   * Admin notification contact — env override, else the tenant's SUPER_ADMIN.
-   * MUST be scoped to the rental's tenant: without `tenantId` the DB fallback
-   * returned whatever SUPER_ADMIN sorts first GLOBALLY, so on a multi-tenant
-   * platform tenant A's rental/customer details were emailed to tenant B's (or
-   * the platform's) admin.
+   * Admin notification contact for a tenant: the tenant's own active
+   * SUPER_ADMIN first; the global ADMIN_NOTIFICATION_EMAIL/PHONE env override
+   * is ONLY a fallback for a tenant with no admin contact (or a row with no
+   * tenant). Previously the env value won unconditionally, so on a
+   * multi-tenant platform every tenant's rental/customer details were emailed
+   * to one operator address.
    */
-  private async getAdminContact(tenantId?: string | null): Promise<{ email: string; phone: string }> {
-    const envEmail = this.configService.get<string>('ADMIN_NOTIFICATION_EMAIL', '');
-    const envPhone = this.configService.get<string>('ADMIN_NOTIFICATION_PHONE', '');
+  async getAdminContact(tenantId?: string | null): Promise<{ email: string; phone: string }> {
+    const envEmail = this.configService.get<string>('ADMIN_NOTIFICATION_EMAIL', '') ?? '';
+    const envPhone = this.configService.get<string>('ADMIN_NOTIFICATION_PHONE', '') ?? '';
 
-    if (envEmail) {
-      return { email: envEmail, phone: envPhone };
+    if (tenantId) {
+      const superAdmin = await this.prisma.adminUser.findFirst({
+        where: { role: 'SUPER_ADMIN', tenantId, isActive: true, deletedAt: null },
+        orderBy: { createdAt: 'asc' },
+        select: { email: true, phone: true },
+      });
+      if (superAdmin?.email) {
+        return { email: superAdmin.email, phone: superAdmin.phone || envPhone };
+      }
     }
 
-    // Fallback: the SUPER_ADMIN of THIS tenant.
-    const superAdmin = await this.prisma.adminUser.findFirst({
-      where: { role: 'SUPER_ADMIN', ...(tenantId ? { tenantId } : {}) },
-      select: { email: true, phone: true },
-    });
+    return { email: envEmail, phone: envPhone };
+  }
 
-    return {
-      email: superAdmin?.email || '',
-      phone: superAdmin?.phone || '',
-    };
+  /** tenantId → RentalPolicy (each tenant's own policy, never a global first row). */
+  private async loadRentalPolicies() {
+    const policies = await this.prisma.rentalPolicy.findMany({
+      orderBy: { updatedAt: 'desc' },
+    });
+    const byTenant = new Map<string, (typeof policies)[number]>();
+    for (const p of policies) {
+      const key = p.tenantId ?? '__none__';
+      if (!byTenant.has(key)) byTenant.set(key, p); // newest wins
+    }
+    return byTenant;
   }
 
   /**
@@ -101,19 +125,26 @@ export class SchedulerService implements OnModuleInit {
     this.logger.log('Running daily rental preparation reminder check...');
 
     try {
-      // Get the reminder window from policy (default 8 days)
-      const policy = await this.prisma.rentalPolicy.findFirst();
-      const reminderDays = policy?.advancePreparationReminderDays ?? 8;
+      // Reminder window is PER TENANT (RentalPolicy.advancePreparationReminderDays,
+      // default 8). The old unscoped findFirst() applied one arbitrary tenant's
+      // policy to every tenant. Query with the widest window, then filter each
+      // rental by its own tenant's window.
+      const policies = await this.loadRentalPolicies();
+      const reminderDaysFor = (tid: string | null) =>
+        policies.get(tid ?? '__none__')?.advancePreparationReminderDays ?? 8;
+      const maxReminderDays = Math.max(
+        8,
+        ...[...policies.values()].map((p) => p.advancePreparationReminderDays ?? 8),
+      );
 
       const now = new Date();
-      const cutoffDate = new Date();
-      cutoffDate.setDate(now.getDate() + reminderDays);
+      const cutoffDate = new Date(now.getTime() + maxReminderDays * 24 * 60 * 60 * 1000);
 
       // Find all rentals needing preparation that admin hasn't marked as ready.
       // Lower bound `gte: now` is REQUIRED — without it, an overdue-but-unready
       // rental matches every day forever, daysUntilPickup goes negative, and a
       // fresh reminder row + email is generated daily with no dedup.
-      const upcomingRentals = await this.prisma.rentalOrder.findMany({
+      const candidateRentals = await this.prisma.rentalOrder.findMany({
         where: {
           pickupDate: { gte: now, lte: cutoffDate },
           isReadyForPickup: false,
@@ -125,6 +156,12 @@ export class SchedulerService implements OnModuleInit {
           variant: { select: { name: true, size: true, color: true } },
         },
       });
+
+      const upcomingRentals = candidateRentals.filter(
+        (r) =>
+          r.pickupDate.getTime() <=
+          now.getTime() + reminderDaysFor(r.tenantId) * 24 * 60 * 60 * 1000,
+      );
 
       // Resolve the admin recipient per tenant (cached) so cross-tenant rentals
       // don't all notify one global admin.
@@ -170,6 +207,7 @@ export class SchedulerService implements OnModuleInit {
             productName: `${rental.product.name}${rental.variant ? ` (${rental.variant.size}/${rental.variant.color})` : ''}`,
             daysUntilPickup,
             adminEmail: adminContact.email,
+            tenantId: rental.tenantId,
           })
           .catch((err) =>
             this.logger.error(`Admin prep reminder notification failed: ${err?.message}`),
@@ -247,6 +285,7 @@ export class SchedulerService implements OnModuleInit {
             productName: rental.product.name,
             adminEmail: adminContact.email,
             adminPhone: adminContact.phone,
+            tenantId: rental.tenantId,
           })
           .catch((err) =>
             this.logger.error(`Overdue rental notification failed: ${err?.message}`),
@@ -324,6 +363,15 @@ export class SchedulerService implements OnModuleInit {
    */
   @Cron('0 * * * *', { name: 'abandoned-cart-recovery' })
   async handleAbandonedCartRecovery() {
+    // History (2026-10 review): this cron used to call
+    // notifications.sendOrderConfirmation(`abandoned-cart-<userId>`, email) —
+    // i.e. it emailed customers an ORDER CONFIRMATION for a fake order id —
+    // and wrote AbandonedCartReminder rows with no tenantId. It now uses the
+    // dedicated tenant-branded abandoned-cart template, and is opt-in.
+    if (!isAbandonedCartEmailEnabled()) {
+      this.logger.debug('Abandoned cart recovery disabled (set ABANDONED_CART_EMAIL_ENABLED=true to enable).');
+      return;
+    }
     this.logger.log('Running abandoned cart recovery check...');
 
     try {
@@ -377,13 +425,32 @@ export class SchedulerService implements OnModuleInit {
           // Get user info
           const user = await this.prisma.user.findUnique({
             where: { id: cartGroup.userId },
-            select: { email: true, firstName: true, phone: true },
+            select: { email: true, firstName: true, phone: true, tenantId: true },
           });
-          if (!user?.email) continue;
+          if (!user?.email || !user.tenantId) continue;
 
-          // Record the reminder
+          // Cart contents for the email (same tenant as the user).
+          const cartItems = await this.prisma.cartItem.findMany({
+            where: { userId: cartGroup.userId, product: { tenantId: user.tenantId, deletedAt: null } },
+            select: {
+              quantity: true,
+              variant: { select: { price: true } },
+              product: {
+                select: {
+                  name: true,
+                  basePrice: true,
+                  images: { select: { url: true }, orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }], take: 1 },
+                },
+              },
+            },
+            take: 20,
+          });
+          if (cartItems.length === 0) continue;
+
+          // Record the reminder — tenant-scoped like every other row.
           await this.prisma.abandonedCartReminder.create({
             data: {
+              tenantId: user.tenantId,
               userId: cartGroup.userId,
               itemCount,
               sequence: window.sequence,
@@ -392,22 +459,97 @@ export class SchedulerService implements OnModuleInit {
           });
 
           this.logger.log(
-            `[ABANDONED CART] Sequence ${window.sequence} reminder for ${user.email} (${itemCount} items)`,
+            `[ABANDONED CART] Sequence ${window.sequence} reminder for user ${cartGroup.userId} (${itemCount} items)`,
           );
 
-          // Send notification (the notification service handles this)
-          this.notifications
-            .sendOrderConfirmation(
-              `abandoned-cart-${cartGroup.userId}`,
-              user.email,
-            )
-            .catch((err) =>
-              this.logger.error(`Abandoned cart notification failed: ${err?.message}`),
-            );
+          // Tenant storefront: custom domain when set, else the first
+          // STOREFRONT_URL origin. NEVER reuse sendOrderConfirmation here.
+          const tenant = await this.prisma.tenant.findUnique({
+            where: { id: user.tenantId },
+            select: { domain: true },
+          });
+          const storefront = tenant?.domain
+            ? `https://${tenant.domain}`
+            : (process.env.STOREFRONT_URL || 'http://localhost:3000').split(',')[0].trim();
+          await this.notifications
+            .sendAbandonedCartReminder({
+              tenantId: user.tenantId,
+              to: user.email,
+              customerName: user.firstName || undefined,
+              cartUrl: `${storefront.replace(/\/+$/, '')}/cart`,
+              items: cartItems.map((ci) => ({
+                name: ci.product.name,
+                quantity: ci.quantity,
+                price: (ci.variant?.price ?? ci.product.basePrice)?.toString() ?? null,
+                imageUrl: ci.product.images[0]?.url ?? null,
+              })),
+            })
+            .catch((err) => this.logger.error(`[ABANDONED CART] Email failed: ${err?.message}`));
         }
       }
     } catch (error) {
       this.logger.error('Error in abandoned cart recovery cron:', error);
+    }
+  }
+
+  // ============================================================
+  // RENTAL HOLD EXPIRY
+  // ============================================================
+
+  /**
+   * Every 30 minutes — cancel abandoned unpaid rental bookings.
+   *
+   * A rental is created in PENDING_ID_VERIFICATION / ID_VERIFIED (or legacy
+   * PENDING_PAYMENT/PENDING) and immediately counts against availability. If
+   * the customer never pays, the gown was blocked forever. Any rental still in
+   * an unpaid hold status with NO COMPLETED payment after
+   * RENTAL_HOLD_TTL_HOURS (default 48) is moved to CANCELLED, which
+   * NON_BLOCKING_RENTAL_STATUSES excludes from availability.
+   *
+   * Lives here (not in RentalsService) because RentalsService depends on the
+   * request-scoped TenantContext, and @Cron can't run on request-scoped
+   * providers. Cross-tenant by design (cron); each update is a CAS on the
+   * observed status so a payment/approval landing mid-run wins.
+   */
+  @Cron('0 */30 * * * *', { name: 'rental-hold-expiry' })
+  async handleExpiredRentalHolds(now: Date = new Date()): Promise<number> {
+    try {
+      const raw = Number(this.configService.get<string>('RENTAL_HOLD_TTL_HOURS'));
+      const ttlHours = raw > 0 ? raw : DEFAULT_RENTAL_HOLD_TTL_HOURS;
+      const cutoff = new Date(now.getTime() - ttlHours * 60 * 60 * 1000);
+
+      const stale = await this.prisma.rentalOrder.findMany({
+        where: {
+          status: { in: UNPAID_HOLD_STATUSES },
+          createdAt: { lt: cutoff },
+          payments: { none: { status: 'COMPLETED' } },
+        },
+        select: { id: true, tenantId: true, status: true, rentalNumber: true, notes: true },
+        take: 500,
+      });
+
+      let cancelled = 0;
+      for (const r of stale) {
+        const note = `[Auto-cancelled ${now.toISOString()}] Unpaid hold expired after ${ttlHours}h.`;
+        const res = await this.prisma.rentalOrder.updateMany({
+          where: {
+            id: r.id,
+            tenantId: r.tenantId,
+            status: r.status,
+            payments: { none: { status: 'COMPLETED' } },
+          },
+          data: { status: 'CANCELLED', notes: r.notes ? `${r.notes}\n${note}` : note },
+        });
+        if (res.count > 0) {
+          cancelled++;
+          this.logger.warn(`[RENTAL HOLD] ${r.rentalNumber} auto-cancelled (unpaid > ${ttlHours}h)`);
+        }
+      }
+      if (cancelled > 0) this.logger.log(`Rental hold expiry: ${cancelled} cancelled.`);
+      return cancelled;
+    } catch (error) {
+      this.logger.error('Error in rental hold expiry cron:', error);
+      return 0;
     }
   }
 

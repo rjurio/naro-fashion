@@ -6,13 +6,18 @@ import {
   Param,
   Body,
   Headers,
+  Req,
   UseGuards,
+  RawBodyRequest,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { PaymentsService } from './payments.service';
 import { CreatePaymentDto, UpdatePaymentDto } from './dto/create-payment.dto';
 import { InitiatePaymentDto } from './dto/initiate-payment.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 
@@ -23,7 +28,8 @@ export class PaymentsController {
   /**
    * Create a payment record (manual/admin use).
    */
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('payments:manage')
   @Post()
   create(@Body() dto: CreatePaymentDto) {
     return this.paymentsService.create(dto);
@@ -90,9 +96,12 @@ export class PaymentsController {
   }
 
   /**
-   * Update payment status (admin use).
+   * Update payment status (admin use) — e.g. manually mark COMPLETED, which
+   * can flip the order to PAID, so it needs an explicit RBAC permission on
+   * top of AdminGuard.
    */
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
+  @RequiresPermission('payments:manage')
   @Patch(':id')
   updateStatus(
     @Param('id') id: string,
@@ -104,16 +113,22 @@ export class PaymentsController {
   /**
    * Webhook endpoint for Selcom payment callbacks.
    *
-   * Publicly accessible (no JWT) but protected by HMAC signature verification.
+   * Publicly accessible (no JWT) but protected by HMAC signature verification
+   * over the RAW request bytes (`rawBody: true` in main.ts). Re-serialising the
+   * parsed body (JSON.stringify) does not reproduce the bytes Selcom signed —
+   * key order/whitespace/number formatting differ — so it either rejects
+   * genuine callbacks or, worse, invites signing a different representation.
+   * A missing raw body is treated as an invalid signature by the service.
    * Tenant resolved from TenantContext / X-Tenant-Id header.
    */
   @Public()
   @Post('webhook')
   handleWebhook(
+    @Req() req: RawBodyRequest<Request>,
     @Body() payload: any,
     @Headers('digest') signature?: string,
   ) {
-    const rawBody = JSON.stringify(payload);
+    const rawBody = req.rawBody ? req.rawBody.toString('utf8') : undefined;
     return this.paymentsService.handleWebhook(payload, rawBody, signature);
   }
 
@@ -123,15 +138,20 @@ export class PaymentsController {
    * ClickPesa cannot send an X-Tenant-Id header, so the tenant is encoded
    * in the URL path. Per-tenant credentials — including the checksumSecret
    * used to verify the HMAC — come from PaymentMethod.integrationParams.
+   * ClickPesa's checksum is computed over the canonicalised parsed payload,
+   * so the raw body is preferred but a re-serialisation is equivalent.
    */
   @Public()
   @Post('webhook/clickpesa/:tenantSlug')
   handleClickPesaWebhook(
+    @Req() req: RawBodyRequest<Request>,
     @Param('tenantSlug') tenantSlug: string,
     @Body() payload: any,
     @Headers('x-clickpesa-signature') signature?: string,
   ) {
-    const rawBody = JSON.stringify(payload);
+    const rawBody = req.rawBody
+      ? req.rawBody.toString('utf8')
+      : JSON.stringify(payload);
     return this.paymentsService.handleClickPesaWebhook({
       tenantSlug,
       payload,

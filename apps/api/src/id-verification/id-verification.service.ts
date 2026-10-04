@@ -3,15 +3,16 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import { IsString } from 'class-validator';
+import { IsString, MaxLength } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { NotificationsService } from '../notifications/notifications.service';
+import { parseIdDocKey, PRIVATE_REF_PREFIX } from '../upload/private-storage.util';
 
 export class SubmitIdVerificationDto {
-  @IsString() frontImageUrl: string;
-  @IsString() backImageUrl: string;
-  @IsString() idNumber: string;
+  @IsString() @MaxLength(200) frontImageUrl: string;
+  @IsString() @MaxLength(200) backImageUrl: string;
+  @IsString() @MaxLength(50) idNumber: string;
 }
 
 export class RejectVerificationDto {
@@ -28,6 +29,19 @@ export class IdVerificationService {
 
   async submit(userId: string, dto: SubmitIdVerificationDto) {
     const tenantId = this.tenantContext.requireId;
+
+    // The image refs must be private:// references produced by
+    // POST /upload/id-document for THIS tenant. Previously any string was
+    // accepted, so a customer could submit an arbitrary external URL (e.g. a
+    // tracking pixel / phishing link) that admins would then open.
+    for (const ref of [dto.frontImageUrl, dto.backImageUrl]) {
+      const parsed = parseIdDocKey(ref);
+      if (!parsed || !ref.startsWith(PRIVATE_REF_PREFIX) || parsed.tenantId !== tenantId) {
+        throw new BadRequestException(
+          'Invalid ID document reference — upload the images via /upload/id-document first',
+        );
+      }
+    }
 
     // Check if user already has a pending or approved verification
     const existing = await this.prisma.customerIDDocument.findFirst({
@@ -133,6 +147,8 @@ export class IdVerificationService {
       await this.notifications.sendIdVerificationUpdate(
         verification.user.email,
         'APPROVED',
+        undefined,
+        { tenantId },
       );
     }
 
@@ -165,6 +181,7 @@ export class IdVerificationService {
         verification.user.email,
         'REJECTED',
         dto.reason,
+        { tenantId },
       );
     }
 

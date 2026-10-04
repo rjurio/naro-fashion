@@ -7,6 +7,7 @@ import { AdminGuard } from '../auth/guards/admin.guard';
 import { PermissionGuard } from '../auth/guards/permission.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { QueryAuditLogDto } from './dto/query-audit-log.dto';
+import { toCsvRow } from './csv.util';
 
 @Controller('audit')
 @UseGuards(JwtAuthGuard, AdminGuard, PermissionGuard)
@@ -175,17 +176,20 @@ export class AuditController {
 
     // Build CSV
     const header = 'Date,Admin User,Email,Action,Entity,Entity ID,IP Address,Details';
-    const rows = logs.map((log) => {
-      const date = new Date(log.createdAt).toISOString();
-      const adminName = escapeCsv(`${log.adminUser.firstName} ${log.adminUser.lastName}`);
-      const email = escapeCsv(log.adminUser.email);
-      const action = escapeCsv(log.action);
-      const entity = escapeCsv(log.entity);
-      const entityId = escapeCsv(log.entityId || '');
-      const ipAddress = escapeCsv(log.ipAddress || '');
-      const details = escapeCsv(log.details ? JSON.stringify(log.details) : '');
-      return `${date},${adminName},${email},${action},${entity},${entityId},${ipAddress},${details}`;
-    });
+    // toCsvRow quotes per RFC 4180 AND neutralises formula-injection cells
+    // (=, +, -, @, TAB, CR prefixes) — see audit/csv.util.ts.
+    const rows = logs.map((log) =>
+      toCsvRow([
+        new Date(log.createdAt).toISOString(),
+        `${log.adminUser.firstName} ${log.adminUser.lastName}`,
+        log.adminUser.email,
+        log.action,
+        log.entity,
+        log.entityId || '',
+        log.ipAddress || '',
+        log.details ? JSON.stringify(log.details) : '',
+      ]),
+    );
 
     const csv = [header, ...rows].join('\n');
 
@@ -193,15 +197,4 @@ export class AuditController {
     res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
     res.send(csv);
   }
-}
-
-/**
- * Escape a value for CSV output. Wraps in quotes if the value contains
- * commas, quotes, or newlines; doubles any internal quote characters.
- */
-function escapeCsv(value: string): string {
-  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
 }

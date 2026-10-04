@@ -43,7 +43,7 @@ const SRC_ROOT = join(__dirname, '..');
  */
 const CUSTOMER_ROUTE_ALLOWLIST: Record<string, string> = {
   // --- auth.controller.ts ---
-  'auth.controller.ts#logout': 'JWT-authed customer/admin logs out',
+  // logout is @Public() (revokes via the presented token even when expired) — no entry needed.
   'auth.controller.ts#me': 'returns own profile via CurrentUser',
   'auth.controller.ts#updateMe': 'updates own profile via CurrentUser',
   'auth.controller.ts#changePassword': 'changes own password via CurrentUser',
@@ -56,6 +56,8 @@ const CUSTOMER_ROUTE_ALLOWLIST: Record<string, string> = {
   'users.controller.ts#createAddress': 'own address via CurrentUser',
   'users.controller.ts#updateAddress': 'service enforces userId ownership',
   'users.controller.ts#deleteAddress': 'service enforces userId ownership',
+  'users.controller.ts#exportMyData': 'PDPA data-subject access: own data only via CurrentUser, tenant-scoped, admins rejected',
+  'users.controller.ts#deleteMyAccount': 'PDPA erasure: anonymises own account via CurrentUser after current-password check, admins rejected',
 
   // --- cart.controller.ts (everything is customer-scoped via CurrentUser) ---
   'cart.controller.ts#getCart': 'own cart via CurrentUser',
@@ -183,6 +185,17 @@ function extractClassMeta(src: string): { guards: string[]; usesAiSecured: boole
   return { guards, usesAiSecured };
 }
 
+/** Net "(" minus ")" on a line, ignoring parens inside string literals. */
+function parenDelta(line: string): number {
+  const noStrings = line.replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g, '');
+  let d = 0;
+  for (const ch of noStrings) {
+    if (ch === '(') d++;
+    else if (ch === ')') d--;
+  }
+  return d;
+}
+
 /**
  * Parses every HTTP route handler from a controller file.
  *
@@ -212,11 +225,21 @@ function parseRoutes(file: string, src: string): Route[] {
 
     const trimmed = line.trim();
     if (trimmed.startsWith('@')) {
-      // It's a decorator line — buffer the whole decorator (may span multiple
-      // lines if it has a multi-line argument list; for our parser purposes we
-      // capture the first line, which is enough to identify the decorator name
-      // and its top-level args).
-      pendingDecorators.push(trimmed);
+      // It's a decorator line — buffer it. We record the first line (enough
+      // to identify the decorator name and its top-level args), then skip
+      // any continuation lines of a multi-line argument list, e.g.
+      //   @UseInterceptors(
+      //     FileInterceptor('file', { ... }),
+      //   )
+      // so that `FileInterceptor(` isn't mistaken for a method signature.
+      let decorator = trimmed;
+      let depth = parenDelta(trimmed);
+      while (depth > 0 && i + 1 < lines.length) {
+        i++;
+        decorator += ' ' + lines[i].trim();
+        depth += parenDelta(lines[i]);
+      }
+      pendingDecorators.push(decorator);
       continue;
     }
 

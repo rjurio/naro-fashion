@@ -5,11 +5,13 @@ import { UpdateExpenseDto } from './dto/update-expense.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @Controller('expenses')
-@UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
+@UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard, PermissionGuard)
 @RequiresModule('expenses')
 export class ExpensesController {
   constructor(private readonly service: ExpensesService) {}
@@ -34,13 +36,16 @@ export class ExpensesController {
   findOne(@Param('id') id: string) { return this.service.findOne(id); }
 
   @Post()
+  @RequiresPermission('expenses:manage')
   create(@Body() dto: CreateExpenseDto, @CurrentUser('id') createdBy: string) {
     return this.service.create(dto, createdBy);
   }
 
   @Patch(':id')
+  @RequiresPermission('expenses:manage')
   update(@Param('id') id: string, @Body() dto: UpdateExpenseDto) { return this.service.update(id, dto); }
 
   @Delete(':id')
+  @RequiresPermission('expenses:manage')
   remove(@Param('id') id: string) { return this.service.remove(id); }
 }

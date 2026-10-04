@@ -11,6 +11,9 @@ export const RENTAL_STATUSES = [
   'RETURNED',
   'INSPECTION',
   'CLOSED',
+  // Terminal. Admin-cancellable only before dispatch; also set by the
+  // unpaid-hold expiry cron (SchedulerService.handleExpiredRentalHolds).
+  'CANCELLED',
 ] as const;
 
 export class UpdateRentalStatusDto {

@@ -39,6 +39,12 @@ export interface GatewayStatusResult {
   resultCode?: string;
   message?: string;
   rawResponse?: any;
+  /**
+   * Amount the gateway reports as actually collected, when the status API
+   * returns one. Used by PaymentSettlementService to refuse crediting a short
+   * collection on the poll/reconcile paths, same as the webhook path.
+   */
+  collectedAmount?: number;
 }
 
 /**

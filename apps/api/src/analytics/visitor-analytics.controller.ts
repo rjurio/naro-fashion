@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { Request } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { VisitorAnalyticsService } from './visitor-analytics.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
@@ -25,13 +26,13 @@ class TrackPageViewDto {
   @IsOptional() @IsString() @MaxLength(100) userId?: string;
 }
 
-function extractIp(req: Request): string | undefined {
-  // Trust nginx X-Forwarded-For (first hop = client IP)
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff.length > 0) {
-    return xff.split(',')[0].trim();
-  }
-  if (Array.isArray(xff) && xff.length > 0) return xff[0];
+/**
+ * Client IP for geo lookup. eq.ip is the real client address because
+ * main.ts sets 	rust proxy = 1 (nginx is the single trusted hop). We no
+ * longer read the LEFTMOST X-Forwarded-For entry — that value is supplied
+ * by the client and trivially spoofable.
+ */
+export function extractIp(req: Request): string | undefined {
   return req.ip || req.socket?.remoteAddress;
 }
 
@@ -44,11 +45,16 @@ export class VisitorAnalyticsController {
   // X-Tenant-Id (storefront middleware sets the cookie which the API client
   // forwards). No auth required — anonymous traffic is the whole point.
   @Public()
+  // Tighter than the 100/min global default: one call per storefront route
+  // change is far below this, but it caps junk-row floods into PageView.
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @Post('track')
   @HttpCode(HttpStatus.NO_CONTENT)
   async track(@Body() dto: TrackPageViewDto, @Req() req: Request) {
+    // Prefer the interceptor-resolved tenant (cross-checked against any JWT)
+    // over the raw header.
     const tenantId =
-      (req.headers['x-tenant-id'] as string | undefined) || (req as any).tenantId;
+      (req as any).tenantId || (req.headers['x-tenant-id'] as string | undefined);
     if (!tenantId) return;
 
     await this.service.track({

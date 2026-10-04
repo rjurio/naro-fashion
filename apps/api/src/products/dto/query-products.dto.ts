@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsNumber, Min, IsEnum } from 'class-validator';
+import { IsOptional, IsString, IsNumber, Min, Max, IsEnum } from 'class-validator';
 
 export enum SortOrder {
   PRICE_ASC = 'price_asc',
@@ -48,5 +48,6 @@ export class QueryProductsDto {
   @IsOptional()
   @IsNumber()
   @Min(1)
+  @Max(1000) // storefront sitemap requests up to 1000; bounds memory on the 2GB VPS
   limit?: number = 20;
 }

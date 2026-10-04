@@ -19,7 +19,22 @@ export function requireJwtSecret(
   config: ConfigService,
 ): string {
   const v = config.get<string>(name);
-  if (v && v.length >= 32) return v;
+  if (v && v.length >= 32) {
+    // Access and refresh tokens MUST be signed with different keys in
+    // production — otherwise a refresh token verifies as an access token
+    // (and vice versa) and the `typ` claim is the only thing separating them.
+    if (process.env.NODE_ENV === 'production') {
+      const otherName: SecretName = name === 'JWT_SECRET' ? 'JWT_REFRESH_SECRET' : 'JWT_SECRET';
+      const other = config.get<string>(otherName);
+      if (other && other === v) {
+        throw new Error(
+          'Refusing to start: JWT_SECRET and JWT_REFRESH_SECRET must be different values in production. ' +
+            'Generate a fresh one with: openssl rand -hex 48',
+        );
+      }
+    }
+    return v;
+  }
 
   if (process.env.NODE_ENV === 'production') {
     throw new Error(
@@ -40,4 +55,29 @@ export function requireJwtSecret(
     );
   }
   return ephemeralCache[name];
+}
+
+/** JWT `typ` claim values — a token used for the wrong purpose is rejected. */
+export type JwtTokenType = 'access' | 'refresh';
+
+/**
+ * True when a payload's `typ` claim is compatible with the expected use.
+ * Legacy tokens (issued before the claim existed) carry no `typ` and are
+ * accepted so existing sessions aren't all killed on deploy; an explicit
+ * mismatch (refresh token presented as access, or vice versa) is rejected.
+ */
+export function isTokenTypeAllowed(payload: { typ?: unknown } | null | undefined, expected: JwtTokenType): boolean {
+  if (!payload) return false;
+  if (payload.typ === undefined || payload.typ === null) return true;
+  return payload.typ === expected;
+}
+
+/**
+ * True when the payload's token version matches the principal's current
+ * `tokenVersion`. Legacy tokens without a `tv` claim are treated as version 0,
+ * so they keep working until the first logout / password change bumps it.
+ */
+export function isTokenVersionCurrent(payload: { tv?: unknown } | null | undefined, rowVersion: number | null | undefined): boolean {
+  const tv = typeof payload?.tv === 'number' ? payload.tv : 0;
+  return tv === (rowVersion ?? 0);
 }

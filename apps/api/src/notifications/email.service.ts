@@ -5,12 +5,16 @@ import * as nodemailer from 'nodemailer';
 import * as handlebars from 'handlebars';
 import * as fs from 'fs';
 import * as path from 'path';
+import { currentRequestTenantId } from '../tenant/request-context';
+import { resolveDefaultTenantId } from '../tenant/default-tenant';
 
 interface EmailOptions {
   to: string;
   subject: string;
   template: string;
   context: Record<string, any>;
+  /** Tenant whose branding (site_name / business_domain) to use. Preferred. */
+  tenantId?: string | null;
 }
 
 @Injectable()
@@ -23,6 +27,10 @@ export class EmailService {
   private isConfigured = false;
   private storeUrl: string;
   private adminUrl: string;
+  private readonly brandingCache = new Map<
+    string,
+    { value: { businessName: string; domain: string }; expires: number }
+  >();
 
   constructor(
     private readonly configService: ConfigService,
@@ -95,6 +103,7 @@ export class EmailService {
         'newsletter-new-arrivals',
         'contact-acknowledgement',
         'contact-reply',
+        'abandoned-cart',
       ];
 
       for (const name of templateFiles) {
@@ -115,27 +124,57 @@ export class EmailService {
     }
   }
 
-  private async getBusinessName(): Promise<string> {
-    try {
-      const setting = await this.prisma.siteSetting.findFirst({ where: { key: 'site_name' } });
-      return setting?.value || 'Naro Fashion';
-    } catch {
-      return 'Naro Fashion';
-    }
+  /**
+   * Which tenant's branding to use, in order:
+   *   1. the explicit `tenantId` the caller passed (preferred — REQUIRED for
+   *      cron/background paths that iterate rows across tenants)
+   *   2. the tenant of the in-flight HTTP request (AsyncLocalStorage — see
+   *      tenant/request-context.ts; works without making this singleton
+   *      request-scoped)
+   *   3. the deployment's default tenant (DEFAULT_TENANT_SLUG / sole tenant)
+   *   4. null → hard-coded defaults
+   *
+   * Previously every email did an UNSCOPED `findFirst({ key: 'site_name' })`,
+   * so tenant B's customers received tenant A's name/domain.
+   */
+  async resolveTenantId(tenantId?: string | null): Promise<string | null> {
+    if (tenantId) return tenantId;
+    const fromRequest = currentRequestTenantId();
+    if (fromRequest) return fromRequest;
+    return resolveDefaultTenantId(this.prisma);
   }
 
-  private async getDomain(): Promise<string> {
+  /** Tenant-scoped business name + domain (60s cache per tenant). */
+  async getBranding(tenantId?: string | null): Promise<{ businessName: string; domain: string }> {
+    const resolved = await this.resolveTenantId(tenantId);
+    const fallback = { businessName: 'Naro Fashion', domain: 'narofashion.co.tz' };
+    if (!resolved) return fallback;
+
+    const hit = this.brandingCache.get(resolved);
+    if (hit && hit.expires > Date.now()) return hit.value;
+
     try {
-      const setting = await this.prisma.siteSetting.findFirst({ where: { key: 'business_domain' } });
-      return setting?.value || 'narofashion.co.tz';
+      const rows = await this.prisma.siteSetting.findMany({
+        where: { tenantId: resolved, key: { in: ['site_name', 'business_domain'] } },
+        select: { key: true, value: true },
+      });
+      const map = new Map(rows.map((r) => [r.key, r.value]));
+      const value = {
+        businessName: map.get('site_name') || fallback.businessName,
+        domain: map.get('business_domain') || fallback.domain,
+      };
+      this.brandingCache.set(resolved, { value, expires: Date.now() + 60_000 });
+      return value;
     } catch {
-      return 'narofashion.co.tz';
+      return fallback;
     }
   }
 
   /**
    * Send an email using a Handlebars template wrapped in the layout.
    * Never throws — failures are caught and logged.
+   *
+   * Pass `tenantId` whenever known (see resolveTenantId for the fallback chain).
    */
   async send(options: EmailOptions): Promise<{ sent: boolean; channel: string; error?: string }> {
     const { to, subject, template, context } = options;
@@ -149,8 +188,7 @@ export class EmailService {
       return { sent: false, channel: 'error' };
     }
 
-    const businessName = await this.getBusinessName();
-    const domain = await this.getDomain();
+    const { businessName, domain } = await this.getBranding(options.tenantId);
 
     const enrichedContext = {
       ...context,

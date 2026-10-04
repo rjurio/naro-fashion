@@ -217,12 +217,19 @@ export class ClickPesaProvider implements PaymentProvider {
         };
       }
 
+      const collected =
+        picked.collectedAmount != null && picked.collectedAmount !== ''
+          ? Number(picked.collectedAmount)
+          : undefined;
+
       return {
         success: true,
         status: this.mapStatus(picked.status),
         transactionId: picked.id,
         message: picked.message,
         rawResponse: data,
+        collectedAmount:
+          collected != null && Number.isFinite(collected) ? collected : undefined,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

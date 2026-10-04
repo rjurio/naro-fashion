@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
+import { assertSameTenant } from '../products/util/tenant-ownership';
 
 @Injectable()
 export class CategoriesService {
@@ -14,14 +15,17 @@ export class CategoriesService {
   ) {}
 
   async findAll() {
+    const tenantId = this.tenantContext.requireId;
     const categories = await this.prisma.category.findMany({
-      where: { tenantId: this.tenantContext.requireId, parentId: null, deletedAt: null },
+      where: { tenantId, parentId: null, deletedAt: null },
       include: {
+        // Children are tenant-filtered explicitly: a child linked across
+        // tenants (pre parentId-validation) must not surface here.
         children: {
-          where: { deletedAt: null },
+          where: { tenantId, deletedAt: null },
           include: {
             children: {
-              where: { deletedAt: null },
+              where: { tenantId, deletedAt: null },
               include: {
                 _count: { select: { products: { where: { deletedAt: null } } } },
               },
@@ -124,7 +128,7 @@ export class CategoriesService {
         deletedAt: null,
       },
       include: {
-        children: { where: { deletedAt: null, isActive: true } },
+        children: { where: { tenantId: this.tenantContext.requireId, deletedAt: null, isActive: true } },
         parent: { select: { id: true, name: true, slug: true } },
       },
     });
@@ -136,38 +140,88 @@ export class CategoriesService {
     return category;
   }
 
-  async create(dto: CreateCategoryDto) {
-    const slug = dto.name
+  /**
+   * Client-supplied parentId / sizeGuideId must belong to the caller's
+   * tenant (404 otherwise). Without this, a tenant-A admin could nest a
+   * category under tenant B's tree or attach tenant B's size guide.
+   */
+  private async assertCategoryRefs(
+    tenantId: string,
+    refs: { parentId?: string | null; sizeGuideId?: string | null },
+    selfId?: string,
+  ) {
+    if (refs.parentId && selfId && refs.parentId === selfId) {
+      throw new BadRequestException('A category cannot be its own parent');
+    }
+    await assertSameTenant(this.prisma.category, refs.parentId, tenantId, 'Parent category', { deletedAt: null });
+    await assertSameTenant(this.prisma.sizeGuide, refs.sizeGuideId, tenantId, 'Size guide', { deletedAt: null });
+  }
+
+  private slugify(value: string): string {
+    return value
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '');
+  }
+
+  /**
+   * Map a category DTO onto Prisma columns EXPLICITLY — never spread the raw
+   * DTO into Prisma. Accepts both the canonical keys and the legacy admin-form
+   * aliases: name|nameEn, nameSwahili|nameSw, imageUrl|image.
+   * Only keys present on the DTO are written (PATCH semantics); empty strings
+   * on nullable columns become null.
+   */
+  private toCategoryData(dto: CreateCategoryDto | UpdateCategoryDto): Record<string, unknown> {
+    const data: Record<string, unknown> = {};
+    const name = dto.name ?? dto.nameEn;
+    if (name !== undefined) data.name = name.trim();
+    const nameSwahili = dto.nameSwahili !== undefined ? dto.nameSwahili : dto.nameSw;
+    if (nameSwahili !== undefined) data.nameSwahili = nameSwahili || null;
+    if (dto.description !== undefined) data.description = dto.description || null;
+    const imageUrl = dto.imageUrl !== undefined ? dto.imageUrl : dto.image;
+    if (imageUrl !== undefined) data.imageUrl = imageUrl || null;
+    if (dto.parentId !== undefined) data.parentId = dto.parentId || null;
+    if (dto.sizeGuideId !== undefined) data.sizeGuideId = dto.sizeGuideId || null;
+    if (dto.sortOrder !== undefined) data.sortOrder = dto.sortOrder;
+    return data;
+  }
+
+  async create(dto: CreateCategoryDto) {
+    const tenantId = this.tenantContext.requireId;
+    const data = this.toCategoryData(dto);
+    if (!data.name) throw new BadRequestException('Name is required');
+    const slug = this.slugify(dto.slug || (data.name as string));
+    if (!slug) throw new BadRequestException('Name must contain letters or digits');
+
+    await this.assertCategoryRefs(tenantId, { parentId: dto.parentId, sizeGuideId: dto.sizeGuideId });
 
     const cat = await this.prisma.category.create({
       data: {
-        ...dto,
+        ...data,
+        name: data.name as string,
         slug,
-        tenantId: this.tenantContext.requireId,
+        tenantId,
       },
     });
-    await this.auditService.log('CREATE', 'Category', cat.id, { name: dto.name });
+    await this.auditService.log('CREATE', 'Category', cat.id, { name: data.name });
     return cat;
   }
 
   async update(id: string, dto: UpdateCategoryDto) {
-    const category = await this.prisma.category.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
+    const tenantId = this.tenantContext.requireId;
+    const category = await this.prisma.category.findFirst({ where: { id, tenantId } });
     if (!category || category.deletedAt) {
       throw new NotFoundException('Category not found');
     }
 
-    const data: any = { ...dto };
-    if (dto.name) {
-      data.slug = dto.name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '');
-    }
-    if (dto.sizeGuideId !== undefined) {
-      data.sizeGuideId = dto.sizeGuideId || null;
+    await this.assertCategoryRefs(tenantId, { parentId: dto.parentId, sizeGuideId: dto.sizeGuideId }, id);
+
+    const data = this.toCategoryData(dto);
+    if (data.name === '') throw new BadRequestException('Name cannot be empty');
+    if (dto.slug) {
+      data.slug = this.slugify(dto.slug);
+    } else if (data.name) {
+      data.slug = this.slugify(data.name as string);
     }
 
     const updated = await this.prisma.category.update({
@@ -177,7 +231,6 @@ export class CategoriesService {
     await this.auditService.log('UPDATE', 'Category', id);
     return updated;
   }
-
   async delete(id: string) {
     const category = await this.prisma.category.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!category) {

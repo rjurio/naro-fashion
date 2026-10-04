@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
@@ -45,11 +45,52 @@ export class CartService {
     return { items };
   }
 
+  /**
+   * Resolve a purchasable variant for the caller's tenant.
+   *
+   *  - variant must belong to the current tenant (cross-tenant ids → 404)
+   *  - variant AND its product must be live (isActive, not deleted/archived)
+   *  - RENTAL_ONLY products can't go in the purchase cart
+   *  - if the client also sent a productId it must match variant.productId;
+   *    the stored CartItem.productId is ALWAYS derived from the variant so a
+   *    mismatched pair can never reach order creation.
+   */
+  async resolvePurchasableVariant(variantId: string, claimedProductId?: string) {
+    const tenantId = this.tenantContext.requireId;
+    const variant = await this.prisma.productVariant.findFirst({
+      where: { id: variantId, tenantId },
+      select: {
+        id: true,
+        productId: true,
+        isActive: true,
+        product: {
+          select: { id: true, tenantId: true, isActive: true, deletedAt: true, archivedAt: true, availabilityMode: true },
+        },
+      },
+    });
+    if (!variant || variant.product?.tenantId !== tenantId) {
+      throw new NotFoundException('Product variant not found');
+    }
+    if (claimedProductId && claimedProductId !== variant.productId) {
+      throw new BadRequestException('Variant does not belong to the given product');
+    }
+    const p = variant.product;
+    if (!variant.isActive || !p.isActive || p.deletedAt || p.archivedAt) {
+      throw new BadRequestException('This product is no longer available');
+    }
+    if (p.availabilityMode === 'RENTAL_ONLY') {
+      throw new BadRequestException('This product is available for rental only');
+    }
+    return variant;
+  }
+
   async addItem(userId: string, dto: AddCartItemDto) {
+    const variant = await this.resolvePurchasableVariant(dto.variantId, dto.productId);
+
     const existing = await this.prisma.cartItem.findFirst({
       where: {
         userId,
-        variantId: dto.variantId,
+        variantId: variant.id,
       },
     });
 
@@ -57,6 +98,7 @@ export class CartService {
       return this.prisma.cartItem.update({
         where: { id: existing.id },
         data: {
+          productId: variant.productId,
           quantity: existing.quantity + (dto.quantity ?? 1),
           notes: dto.notes ?? existing.notes,
         },
@@ -67,15 +109,14 @@ export class CartService {
     return this.prisma.cartItem.create({
       data: {
         userId,
-        productId: dto.productId,
-        variantId: dto.variantId,
+        productId: variant.productId,
+        variantId: variant.id,
         quantity: dto.quantity ?? 1,
         notes: dto.notes,
       },
       include: this.cartItemInclude,
     });
   }
-
   async updateItem(userId: string, itemId: string, dto: UpdateCartItemDto) {
     const item = await this.prisma.cartItem.findFirst({
       where: { id: itemId, userId },
@@ -121,10 +162,18 @@ export class CartService {
 
   async mergeGuestCart(userId: string, items: MergeCartItemDto[]) {
     for (const item of items) {
+      // Guest carts come from localStorage — silently drop lines whose
+      // variant isn't a live, same-tenant, purchasable variant.
+      let variant: { id: string; productId: string };
+      try {
+        variant = await this.resolvePurchasableVariant(item.variantId, item.productId);
+      } catch {
+        continue;
+      }
       const existing = await this.prisma.cartItem.findFirst({
         where: {
           userId,
-          variantId: item.variantId,
+          variantId: variant.id,
         },
       });
 
@@ -140,8 +189,8 @@ export class CartService {
         await this.prisma.cartItem.create({
           data: {
             userId,
-            productId: item.productId,
-            variantId: item.variantId,
+            productId: variant.productId,
+            variantId: variant.id,
             quantity: item.quantity,
             notes: item.notes,
           },

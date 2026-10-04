@@ -1,4 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { normalizePhone } from './phone.util';
@@ -67,6 +71,31 @@ export class SelcomProvider implements PaymentProvider {
    */
   get configured(): boolean {
     return this.isConfigured;
+  }
+
+  /**
+   * Simulation (fake success / auto-completing status checks / skipped
+   * signature checks) is a DEV-ONLY convenience. In production an
+   * unconfigured gateway must fail CLOSED: previously a prod box missing
+   * SELCOM_* env vars would "complete" every payment after 10s and accept
+   * any unsigned webhook.
+   */
+  private get isProduction(): boolean {
+    return (
+      (this.configService.get<string>('NODE_ENV') ?? process.env.NODE_ENV) ===
+      'production'
+    );
+  }
+
+  private assertConfiguredForInitiate(): void {
+    if (!this.isConfigured && this.isProduction) {
+      this.logger.error(
+        'Selcom payment requested but SELCOM_API_KEY/SELCOM_API_SECRET/SELCOM_VENDOR are not set — refusing (production never simulates).',
+      );
+      throw new ServiceUnavailableException(
+        'Card / mobile-money payments via Selcom are not available right now.',
+      );
+    }
   }
 
   /**
@@ -139,9 +168,10 @@ export class SelcomProvider implements PaymentProvider {
   async initiateUssdPush(
     request: SelcomPaymentRequest,
   ): Promise<SelcomPaymentResponse> {
+    this.assertConfiguredForInitiate();
     if (!this.isConfigured) {
       this.logger.warn(
-        'Selcom not configured — returning simulated USSD push response',
+        'Selcom not configured — returning simulated USSD push response (non-production only)',
       );
       return this.simulatePaymentResponse(request);
     }
@@ -199,9 +229,10 @@ export class SelcomProvider implements PaymentProvider {
   async initiateCardCheckout(
     request: SelcomPaymentRequest,
   ): Promise<SelcomPaymentResponse> {
+    this.assertConfiguredForInitiate();
     if (!this.isConfigured) {
       this.logger.warn(
-        'Selcom not configured — returning simulated card checkout response',
+        'Selcom not configured — returning simulated card checkout response (non-production only)',
       );
       return this.simulatePaymentResponse(request);
     }
@@ -262,6 +293,7 @@ export class SelcomProvider implements PaymentProvider {
     request: SelcomPaymentRequest,
     _creds?: unknown,
   ): Promise<SelcomPaymentResponse> {
+    this.assertConfiguredForInitiate();
     if (request.method === 'MOBILE_MONEY') {
       return this.initiateUssdPush(request);
     }
@@ -276,8 +308,17 @@ export class SelcomProvider implements PaymentProvider {
     _creds?: unknown,
   ): Promise<SelcomStatusResponse> {
     if (!this.isConfigured) {
+      if (this.isProduction) {
+        // Never simulate in production — report "couldn't check" so callers
+        // leave the payment untouched.
+        return {
+          success: false,
+          status: 'PENDING',
+          message: 'Selcom gateway is not configured.',
+        };
+      }
       this.logger.warn(
-        'Selcom not configured — returning simulated status check',
+        'Selcom not configured — returning simulated status check (non-production only)',
       );
       return this.simulateStatusCheck(transactionRef);
     }
@@ -292,9 +333,16 @@ export class SelcomProvider implements PaymentProvider {
         data?.payment_status || data?.order_status,
       );
 
+      const collected =
+        data?.amount != null && data.amount !== ''
+          ? Number(data.amount)
+          : undefined;
+
       return {
         success: true,
         status,
+        collectedAmount:
+          collected != null && Number.isFinite(collected) ? collected : undefined,
         transactionId: data?.transid,
         resultCode: data?.resultcode,
         message: data?.message || data?.result,
@@ -322,8 +370,14 @@ export class SelcomProvider implements PaymentProvider {
     _creds?: unknown,
   ): boolean {
     if (!this.isConfigured) {
+      if (this.isProduction) {
+        this.logger.error(
+          'Selcom webhook received but gateway is not configured — rejecting (fail closed).',
+        );
+        return false;
+      }
       this.logger.warn(
-        'Selcom not configured — skipping webhook signature verification',
+        'Selcom not configured — skipping webhook signature verification (non-production only)',
       );
       return true;
     }

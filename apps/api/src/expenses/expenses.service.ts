@@ -1,13 +1,30 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
+import { toEatPeriod } from '../reports/eat-time.util';
 
-function toPeriod(date: Date | string): string {
-  const d = new Date(date);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+/**
+ * Financial period key for an expense date, in Africa/Dar_es_Salaam time.
+ * The old version used server-local getMonth() (UTC on the VPS), so an
+ * expense dated 00:00–03:00 EAT on the 1st landed in the previous month.
+ */
+export function toPeriod(date: Date | string): string {
+  try {
+    return toEatPeriod(date);
+  } catch {
+    throw new BadRequestException('Invalid expense date');
+  }
 }
+
+/** FinancialPeriod statuses that freeze the books for that month. */
+export const LOCKED_PERIOD_STATUSES = ['CLOSED', 'LOCKED'];
 
 @Injectable()
 export class ExpensesService {
@@ -65,8 +82,40 @@ export class ExpensesService {
     return e;
   }
 
+  /**
+   * Closed financial periods are enforced, not just labels: no expense may be
+   * created in, moved into, edited within, or deleted from a CLOSED/LOCKED
+   * period of this tenant (matched by periodKey).
+   */
+  private async assertPeriodOpen(period: string) {
+    const locked = await this.prisma.financialPeriod.findFirst({
+      where: {
+        tenantId: this.tenantContext.requireId,
+        periodKey: period,
+        status: { in: LOCKED_PERIOD_STATUSES },
+      },
+      select: { periodKey: true, status: true },
+    });
+    if (locked) {
+      throw new ForbiddenException(
+        `Financial period ${locked.periodKey} is ${locked.status}; expenses in it cannot be changed.`,
+      );
+    }
+  }
+
+  /** The category must exist, be active and belong to this tenant. */
+  private async assertCategoryInTenant(categoryId: string) {
+    const cat = await this.prisma.expenseCategory.findFirst({
+      where: { id: categoryId, tenantId: this.tenantContext.requireId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!cat) throw new BadRequestException('Expense category not found');
+  }
+
   async create(dto: CreateExpenseDto, createdBy?: string) {
     const period = toPeriod(dto.expenseDate);
+    await this.assertCategoryInTenant(dto.categoryId);
+    await this.assertPeriodOpen(period);
     return this.prisma.businessExpense.create({
       data: {
         tenantId: this.tenantContext.requireId,
@@ -84,12 +133,23 @@ export class ExpensesService {
   }
 
   async update(id: string, dto: UpdateExpenseDto) {
-    await this.findOne(id);
+    const existing = await this.findOne(id);
+    // Both the period it is in now and (if moving) the period it moves to
+    // must be open.
+    await this.assertPeriodOpen(existing.period);
     const period = dto.expenseDate ? toPeriod(dto.expenseDate) : undefined;
+    if (period && period !== existing.period) await this.assertPeriodOpen(period);
+    if (dto.categoryId) await this.assertCategoryInTenant(dto.categoryId);
+
     return this.prisma.businessExpense.update({
       where: { id },
       data: {
-        ...dto,
+        // Explicit whitelist (no spread of the DTO).
+        ...(dto.categoryId !== undefined ? { categoryId: dto.categoryId } : {}),
+        ...(dto.amount !== undefined ? { amount: dto.amount } : {}),
+        ...(dto.description !== undefined ? { description: dto.description } : {}),
+        ...(dto.vendor !== undefined ? { vendor: dto.vendor } : {}),
+        ...(dto.receiptUrl !== undefined ? { receiptUrl: dto.receiptUrl } : {}),
         ...(dto.expenseDate ? { expenseDate: new Date(dto.expenseDate) } : {}),
         ...(period ? { period } : {}),
       },
@@ -98,7 +158,8 @@ export class ExpensesService {
   }
 
   async remove(id: string) {
-    await this.findOne(id);
+    const existing = await this.findOne(id);
+    await this.assertPeriodOpen(existing.period);
     await this.prisma.businessExpense.delete({ where: { id } });
     return { message: 'Expense deleted' };
   }

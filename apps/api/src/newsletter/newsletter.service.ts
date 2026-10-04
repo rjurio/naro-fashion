@@ -302,6 +302,9 @@ export class NewsletterService {
           to: delivery.subscriber.email,
           subject: newsletter.subject,
           template: templateName,
+          // Background loop — the request's AsyncLocalStorage may be gone by
+          // the time later iterations run, so pass the tenant explicitly.
+          tenantId: newsletter.tenantId,
           context: {
             bodyHtml: newsletter.bodyHtml,
             unsubscribeToken: delivery.subscriber.unsubscribeToken,
