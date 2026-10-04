@@ -117,14 +117,27 @@ An independent full-stack review (2026-10-04), run as five parallel review passe
 7. Change the platform admin password if it is still the documented default. Rotate any credentials published in CLAUDE.md.
 8. Set up backups and monitoring per `docs/OPS/BACKUPS.md` and `docs/OPS/MONITORING.md`: bucket, rclone, age key, cron, Healthchecks, UptimeRobot, Sentry. Then run and record a restore test.
 
-## Deferred (strategic)
-- Committed Prisma migrations with `migrate deploy`, instead of `db push --accept-data-loss`.
-- A Prisma client extension that auto-injects tenantId, plus a shape-spec for tenant scoping. Composite same-tenant FKs, and making `tenantId` required.
-- Release-directory deploys or CI-built artifacts, for real zero-downtime and rollback.
-- Nonce-based CSP in place of `'unsafe-inline'`.
-- A real TOTP 2FA flow.
-- Refund execution through the gateway for `REFUND_PENDING` orders.
+## Follow-up round (same day): previously deferred items, now done
+- **Committed Prisma migrations.** Baseline `0_init` plus `20261004120000_admin_2fa_columns`. deploy.sh runs `migrate deploy` and auto-baselines prod only when there is no drift. `--accept-data-loss` is removed. CI checks migrations against the schema.
+- **Safer deploys.** Next apps build into `.next-build` and are swapped in only after verification. A failed health check triggers an automatic rollback (prev dirs plus git reset). `scripts/ops/rollback.sh` does the same manually. True zero-downtime isn't possible with fork-mode single instances on 2GB.
+- **Runtime tenant-scope guard.** A Prisma `$extends` extension, `TENANT_SCOPE_ENFORCEMENT=warn|strict|off`. The two request-path offenders found (`syncVariants` queries) are fixed.
+- **Nonce-based CSP** in both apps. No script `'unsafe-inline'`.
+- **Real TOTP 2FA** for admins and platform admins, with encrypted secrets, hashed recovery codes, a challenge-token login step, and lockout and replay protection.
+- **Refund workflow.** `POST/GET /orders/:id/refunds` with a cap, a lock, an audit entry and status updates, plus an admin UI. Gateway refunds are **not possible yet**: neither integration has a refund API, so refunds are recorded manually.
+- **High-severity advisories reduced from 26 to 11.** More same-major overrides were added.
+- **Seeding bug fixed.** The system roles, expense categories and product sizes had never been seeded, because their hooks sat on request-scoped services. A shape spec now guards against this.
+
+## Still deferred (strategic)
+- Composite same-tenant FKs and making `tenantId` required. Switch the tenant-scope guard to `strict` once the prod warn logs are clean.
+- Gateway-executed refunds, once ClickPesa or Selcom provide a refund/payout API.
 - A flash-sale per-item stock limit (needs a schema column).
-- Remaining high-severity advisories are transitive: mailer/mjml, Prisma CLI internals and build tooling. Review on the next dependency pass.
+- 11 high-severity advisories remain, all transitive with no same-major fix:
+  - mjml-cli `braces` and `html-minifier` (no patch exists)
+  - Prisma CLI `deepmerge-ts`
+  - geoip-lite `ip-address`
+  - africastalking `joi`
+  - mailer preview-email `nodemailer`
+  
+  Re-check them when those parents release majors.
 - Freeze AI subsystem scope (about 38% of API code). Add Playwright smoke tests and tests for the payment webhook happy path against the provider sandboxes.
 - PDPA: a privacy-notice page per tenant (the footer link exists), retention schedule for ID documents, and documentation of cross-border hosting.
