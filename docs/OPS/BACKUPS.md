@@ -189,7 +189,7 @@ A backup that has never been restored is a hope, not a backup. Once a quarter:
 
 | Date | Dump restored | Product / Order rows | Newest order | Done by |
 |---|---|---|---|---|
-| _not yet performed_ | | | | |
+| 2026-10-04 | `naro_fashion-2026-10-04_031501Z.dump` (296K, local copy; restored into a scratch DB in 1s, then dropped) | 90 products / 96 variants / 6 orders — all 9 checked tables matched live counts | — | Claude (on-box test; off-site copy not yet configured) |
 
 ## Monitoring
 
