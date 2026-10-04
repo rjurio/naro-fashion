@@ -1,17 +1,9 @@
-import { Injectable, OnModuleInit, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
-
-// permission codes excluded from MANAGER role (SUPER_ADMIN-only by default).
-// Keep in sync with the "not granted" list next to MANAGER_DEFAULT_GRANTS in
-// permissions.service.ts.
-const MANAGER_EXCLUDED = [
-  'admins:create', 'admins:delete', 'roles:manage', 'settings:manage', 'audit:export',
-  'payments:manage', 'payment-methods:manage', 'recycle-bin:purge',
-];
 
 // Names reserved for the shared system roles. Tenants may not create or
 // rename a custom role to one of these (it would shadow the system role in
@@ -23,53 +15,15 @@ function isReservedRoleName(name?: string | null): boolean {
   return RESERVED_ROLE_NAMES.includes(name.trim().toUpperCase());
 }
 
+// System role seeding lives in SystemRolesSeeder (singleton): this service is
+// request-scoped via TenantContext, so lifecycle hooks here never run.
 @Injectable()
-export class RolesService implements OnModuleInit {
+export class RolesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
     private readonly auditService: AuditService,
   ) {}
-
-  async onModuleInit() {
-    await this.seedSystemRoles();
-  }
-
-  private async seedSystemRoles() {
-    const allPermissions = await this.prisma.permission.findMany({ where: { isActive: true } });
-    const allCodes = allPermissions.map(p => p.id);
-    const managerCodes = allPermissions.filter(p => !MANAGER_EXCLUDED.includes(p.code)).map(p => p.id);
-    const staffCodes = allPermissions.filter(p =>
-      [
-        'products:view', 'categories:view', 'orders:view', 'orders:update-status',
-        'rentals:view', 'rentals:manage-checklist', 'customers:view',
-        'reviews:view', 'analytics:view', 'inventory:view',
-      ].includes(p.code)
-    ).map(p => p.id);
-
-    const systemRoles = [
-      { name: 'SUPER_ADMIN', description: 'Full access to all system features', permissionIds: allCodes },
-      { name: 'MANAGER', description: 'Access to all features except admin management and system settings', permissionIds: managerCodes },
-      { name: 'STAFF', description: 'Read-only access plus checklist and order status management', permissionIds: staffCodes },
-    ];
-
-    for (const role of systemRoles) {
-      // Match ONLY the shared system row. A bare `{ name }` lookup could hit a
-      // tenant's custom role with the same name and skip seeding entirely.
-      const existing = await this.prisma.role.findFirst({
-        where: { name: role.name, isSystem: true, tenantId: null },
-      });
-      if (!existing) {
-        const created = await this.prisma.role.create({
-          data: { name: role.name, description: role.description, isSystem: true },
-        });
-        await this.prisma.rolePermission.createMany({
-          data: role.permissionIds.map(pid => ({ roleId: created.id, permissionId: pid })),
-          skipDuplicates: true,
-        });
-      }
-    }
-  }
 
   async findAll(includeDeleted = false) {
     const tenantId = this.tenantContext.requireId;

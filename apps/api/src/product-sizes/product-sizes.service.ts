@@ -2,7 +2,6 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
-  OnModuleInit,
 } from '@nestjs/common';
 import { IsString, IsOptional, IsBoolean, IsInt, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -27,47 +26,15 @@ export class UpdateProductSizeDto {
 }
 
 @Injectable()
-export class ProductSizesService implements OnModuleInit {
+export class ProductSizesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
     private readonly auditService: AuditService,
   ) {}
 
-  // Seed common defaults for any tenant on first boot if their list is empty.
-  async onModuleInit() {
-    try {
-      const tenants = await this.prisma.tenant.findMany({ select: { id: true } });
-      for (const t of tenants) {
-        const count = await this.prisma.productSize.count({
-          where: { tenantId: t.id, deletedAt: null },
-        });
-        if (count > 0) continue;
-        const defaults = [
-          { name: 'XS', description: 'Extra Small', category: 'clothing', sortOrder: 10 },
-          { name: 'S', description: 'Small', category: 'clothing', sortOrder: 20 },
-          { name: 'M', description: 'Medium', category: 'clothing', sortOrder: 30 },
-          { name: 'L', description: 'Large', category: 'clothing', sortOrder: 40 },
-          { name: 'XL', description: 'Extra Large', category: 'clothing', sortOrder: 50 },
-          { name: 'XXL', description: 'Double Extra Large', category: 'clothing', sortOrder: 60 },
-          { name: 'XXXL', description: 'Triple Extra Large', category: 'clothing', sortOrder: 70 },
-          { name: '36', category: 'clothing', sortOrder: 100 },
-          { name: '38', category: 'clothing', sortOrder: 110 },
-          { name: '40', category: 'clothing', sortOrder: 120 },
-          { name: '42', category: 'clothing', sortOrder: 130 },
-          { name: '44', category: 'clothing', sortOrder: 140 },
-          { name: '46', category: 'clothing', sortOrder: 150 },
-          { name: 'One Size', description: 'Free size / one size fits all', category: 'clothing', sortOrder: 200 },
-        ];
-        await this.prisma.productSize.createMany({
-          data: defaults.map((d) => ({ ...d, tenantId: t.id })),
-          skipDuplicates: true,
-        });
-      }
-    } catch {
-      // Seeding failure should never break boot
-    }
-  }
+  // Default sizes are seeded by ProductSizesSeeder (singleton) — lifecycle
+  // hooks never run on this request-scoped service.
 
   findAll() {
     return this.prisma.productSize.findMany({
