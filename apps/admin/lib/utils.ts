@@ -14,12 +14,17 @@ export function formatCurrency(amount: number): string {
   }).format(amount);
 }
 
-export function formatDate(date: string | Date): string {
+export function formatDate(date: string | Date | null | undefined): string {
+  // Never throw on a missing/invalid date — Intl.format(Invalid Date) throws
+  // RangeError and takes the whole page down (dashboard crash 2026-10-04).
+  if (!date) return '—';
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return '—';
   return new Intl.DateTimeFormat('en-TZ', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
-  }).format(new Date(date));
+  }).format(d);
 }
 
 export function formatRelativeTime(date: string | Date): string {

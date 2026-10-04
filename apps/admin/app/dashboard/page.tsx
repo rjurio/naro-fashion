@@ -128,8 +128,28 @@ export default function DashboardPage() {
         ]);
 
         if (ordersRes.status === 'fulfilled') {
-          const data = ordersRes.value;
-          setRecentOrders(Array.isArray(data) ? data : data?.data || data?.orders || []);
+          const data: any = ordersRes.value;
+          const rows: any[] = Array.isArray(data) ? data : data?.data || data?.orders || [];
+          // The API returns full Order records (orderNumber, user, items[],
+          // createdAt, Decimal total) — map them to the table's flat shape.
+          setRecentOrders(
+            rows.map((o) => ({
+              ...o,
+              id: o.orderNumber ?? o.id,
+              customer:
+                o.customer ??
+                ([o.user?.firstName, o.user?.lastName].filter(Boolean).join(' ') ||
+                  o.address?.fullName ||
+                  o.user?.email ||
+                  'Walk-in'),
+              items: Array.isArray(o.items)
+                ? o.items.reduce((n: number, i: any) => n + (Number(i.quantity) || 1), 0)
+                : Number(o.items) || 0,
+              total: Number(o.total) || 0,
+              status: String(o.status ?? ''),
+              date: o.date ?? o.createdAt,
+            })),
+          );
         }
         if (statsRes.status === 'fulfilled') {
           setStats(statsRes.value || {});
