@@ -52,7 +52,10 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 
 ### Tenant Admin Pages
 - `/login` - Admin login (checks AdminUser table)
-- `/dashboard` - Overview with stats cards, revenue chart, recent orders
+- `/dashboard` - Overview with stats cards, revenue chart, recent orders (raw API Order records are mapped to the table's `{ id: orderNumber, customer, items: Σqty, total, status, date: createdAt }` shape in `app/dashboard/page.tsx` — don't feed raw API rows to `DataTable` column renderers)
+- `lib/utils.ts` `formatDate()` returns `'—'` for missing/invalid dates (it used to throw `RangeError`, which crashed the whole dashboard on 2026-10-04). Keep formatters non-throwing.
+- `/platform/settings` - Platform admin Security (TOTP 2FA + recovery codes) via `components/auth/TwoFactorSettings`
+- `/dashboard/cms/instagram-posts` - includes the **Instagram Connection** card (token status + Connect / Re-connect with a pasted Graph API Explorer user token → server stores a non-expiring Page token)
 - `/dashboard/products` - Product CRUD (list, create, edit, soft delete, activate/deactivate toggle, barcode generation). **Template + Import CSV buttons** in header: "Template" downloads a pre-filled CSV with all columns and 2 example rows (client-side, no API); "Import CSV" opens `ImportProductsModal` that uploads to `POST /products/bulk-import` and shows created/failed/errors summary with per-row feedback.
 - `/dashboard/products/new` - Create product with full form (basic info, pricing, rental settings, image upload with 3:4 crop, variants)
 - `/dashboard/products/[id]/edit` - Edit product (same form, pre-populated)
