@@ -8,8 +8,15 @@ import Button from '@/components/ui/Button';
 import PresetImageUploadField from '@/components/ui/PresetImageUploadField';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
-import { adminApi } from '@/lib/api';
+import { adminApi, isConflictError } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useSyncStatus } from '@/contexts/SyncContext';
+import { useOutboxVersion } from '@/lib/offline/use-outbox-version';
+import { isQueuedResult } from '@/lib/offline/outbox';
+import { isLocalOnly } from '@/lib/offline/pending-overlay';
+import { LOCAL_ONLY_HINT, SAVED_OFFLINE_MESSAGE, needsInternetTitle } from '@/lib/offline/feedback';
+import PendingSyncPill from '@/components/offline/PendingSyncPill';
+import { useStaleRecordDialog } from '@/components/offline/StaleRecordDialog';
 
 interface Category {
   id: string;
@@ -25,6 +32,20 @@ interface Category {
   productCount?: number;
   _count?: { products: number };
   children?: Category[];
+  updatedAt?: string;
+  __pending?: true;
+  __syncState?: 'pending' | 'failed' | 'conflict';
+  __localOnly?: true;
+}
+
+/** Depth-first search of the category tree. */
+function findInTree(nodes: Category[], id: string): Category | null {
+  for (const n of nodes) {
+    if (n.id === id) return n;
+    const hit = findInTree(n.children || [], id);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 export default function CategoriesPage() {
@@ -33,7 +54,12 @@ export default function CategoriesPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // updatedAt of the category as loaded into the edit form (optimistic concurrency).
+  const [editingUpdatedAt, setEditingUpdatedAt] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);
+  const { online } = useSyncStatus();
+  const outboxVersion = useOutboxVersion();
+  const stale = useStaleRecordDialog('category');
 
   const [formNameEn, setFormNameEn] = useState('');
   const [formNameSw, setFormNameSw] = useState('');
@@ -46,19 +72,21 @@ export default function CategoriesPage() {
   const toast = useToast();
   const confirm = useConfirm();
 
-  const fetchCategories = useCallback(async () => {
+  const fetchCategories = useCallback(async (): Promise<Category[]> => {
     try {
-      setLoading(true);
       const data = await adminApi.getCategories();
-      setCategories(Array.isArray(data) ? data : []);
-      // auto-expand top-level
-      const topIds = (Array.isArray(data) ? data : []).map((c: Category) => c.id);
-      setExpanded(new Set(topIds));
-    } catch { toast.error('Failed to load categories'); setCategories([]); }
+      const list: Category[] = Array.isArray(data) ? data : [];
+      setCategories(list);
+      // auto-expand top-level (keep what the user already expanded on refreshes)
+      const topIds = list.map((c) => c.id);
+      setExpanded((prev) => new Set([...prev, ...topIds]));
+      return list;
+    } catch { toast.error('Failed to load categories'); setCategories([]); return []; }
     finally { setLoading(false); }
   }, [toast]);
 
-  useEffect(() => { fetchCategories(); }, [fetchCategories]);
+  // outboxVersion: re-read when offline changes are queued / synced (pending overlay).
+  useEffect(() => { fetchCategories(); }, [fetchCategories, outboxVersion]);
 
   useEffect(() => {
     adminApi.getSizeGuides().then((guides) => {
@@ -74,7 +102,7 @@ export default function CategoriesPage() {
 
   const resetForm = () => {
     setFormNameEn(''); setFormNameSw(''); setFormSlug(''); setFormParent(''); setFormImage(''); setFormSizeGuideId('');
-    setShowForm(false); setEditingId(null);
+    setShowForm(false); setEditingId(null); setEditingUpdatedAt(undefined);
   };
 
   const startEdit = (cat: Category) => {
@@ -85,6 +113,7 @@ export default function CategoriesPage() {
     setFormImage(cat.image ?? cat.imageUrl ?? '');
     setFormSizeGuideId((cat as any).sizeGuideId || '');
     setEditingId(cat.id);
+    setEditingUpdatedAt(typeof cat.updatedAt === 'string' ? cat.updatedAt : undefined);
     setShowForm(true);
   };
 
@@ -109,16 +138,32 @@ export default function CategoriesPage() {
     };
     setSaving(true);
     try {
+      let result: unknown;
       if (editingId) {
-        await adminApi.updateCategory(editingId, payload);
-        toast.success('Category updated');
+        result = await adminApi.updateCategory(
+          editingId,
+          editingUpdatedAt ? { ...payload, expectedUpdatedAt: editingUpdatedAt } : payload,
+        );
       } else {
-        await adminApi.createCategory(payload);
-        toast.success('Category created');
+        result = await adminApi.createCategory(payload);
       }
+      if (isQueuedResult(result)) toast.info(SAVED_OFFLINE_MESSAGE);
+      else toast.success(editingId ? 'Category updated' : 'Category created');
       resetForm();
       fetchCategories();
-    } catch { toast.error('Failed to save category'); }
+    } catch (err: any) {
+      if (isConflictError(err) && editingId) {
+        const id = editingId;
+        // Reload the tree and put the latest version into the form.
+        stale.open(async () => {
+          const fresh = findInTree(await fetchCategories(), id);
+          if (fresh) startEdit(fresh);
+          else resetForm();
+        });
+      } else {
+        toast.error(err?.message || 'Failed to save category');
+      }
+    }
     finally { setSaving(false); }
   };
 
@@ -146,7 +191,10 @@ export default function CategoriesPage() {
             <FolderOpen className="w-4 h-4 text-brand-gold" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-medium text-sm text-[hsl(var(--foreground))] truncate">{cat.name ?? cat.nameEn ?? cat.slug}</p>
+            <p className="font-medium text-sm text-[hsl(var(--foreground))] truncate flex items-center gap-2">
+              <span className="truncate">{cat.name ?? cat.nameEn ?? cat.slug}</span>
+              <PendingSyncPill record={cat} />
+            </p>
             {(cat.nameSwahili ?? cat.nameSw) && <p className="text-xs text-[hsl(var(--muted-foreground))]">{cat.nameSwahili ?? cat.nameSw}</p>}
           </div>
           <span className="hidden sm:inline text-xs text-[hsl(var(--muted-foreground))] font-mono bg-[hsl(var(--muted))] px-2 py-0.5 rounded">/{cat.slug}</span>
@@ -155,7 +203,12 @@ export default function CategoriesPage() {
             <button onClick={() => startEdit(cat)} className="p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] hover:text-blue-600 transition-colors" title="Edit">
               <Pencil className="w-4 h-4" />
             </button>
-            <button onClick={() => handleDelete(cat)} className="p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] hover:text-red-600 transition-colors" title="Delete">
+            <button
+              onClick={() => handleDelete(cat)}
+              disabled={!online || isLocalOnly(cat)}
+              className="p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] hover:text-red-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title={isLocalOnly(cat) ? LOCAL_ONLY_HINT : needsInternetTitle(online, 'Delete')}
+            >
               <Trash2 className="w-4 h-4" />
             </button>
           </div>
@@ -246,6 +299,7 @@ export default function CategoriesPage() {
           {categories.map((cat) => renderCategory(cat))}
         </div>
       )}
+      {stale.dialog}
     </div>
   );
 }

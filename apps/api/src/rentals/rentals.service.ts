@@ -17,6 +17,7 @@ import {
   NON_BLOCKING_RENTAL_STATUSES,
   assertRentalTransition,
   computeLateFee,
+  resolveReturnedAt,
 } from './rental-rules';
 
 @Injectable()
@@ -294,7 +295,7 @@ export class RentalsService {
     return rental;
   }
 
-  async updateStatus(id: string, status: string, expectedStatus?: string, user?: any) {
+  async updateStatus(id: string, status: string, expectedStatus?: string, user?: any, returnedAtRaw?: string) {
     const rental = await this.prisma.rentalOrder.findFirst({
       where: { id, tenantId: this.tenantContext.requireId },
     });
@@ -319,7 +320,10 @@ export class RentalsService {
 
     const data: any = { status };
     if (status === 'RETURNED') {
-      const returnedAt = new Date();
+      // Offline replays carry the real return time (validated, ≤30 days old).
+      const resolved = resolveReturnedAt(returnedAtRaw, new Date());
+      if ('error' in resolved) throw new BadRequestException(resolved.error);
+      const returnedAt = resolved.at;
       data.actualReturnDate = returnedAt;
 
       // Late fee from the BOOKED return date (rental.returnDate), in whole

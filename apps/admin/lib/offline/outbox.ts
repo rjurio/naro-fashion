@@ -18,6 +18,7 @@
  * This module must not import the API client (api.ts imports it).
  */
 import { idbDelete, idbGet, idbGetAll, idbPut } from './db';
+import { findBlobRefs, releaseBlobs } from './blobs';
 import { refreshCounts } from './sync-store';
 
 // ---------------------------------------------------------------------------
@@ -81,6 +82,11 @@ export interface OutboxEntry {
    * if the replay is refused with a 400, resend it as an offline sale.
    */
   retryAsOffline?: boolean;
+  /**
+   * Offline photos (`offline-blob://<id>`) this entry referenced before the
+   * sync engine replaced them with uploaded URLs — released once it is done.
+   */
+  blobIds?: string[];
 }
 
 export interface ConflictRecord {
@@ -461,10 +467,15 @@ export async function retry(id: string): Promise<boolean> {
   return ok;
 }
 
-/** Drop an entry (and its conflict record) for good. */
+/** Drop an entry (and its conflict record) for good. Offline photos only it used are deleted too. */
 export async function discard(id: string): Promise<boolean> {
+  const e = await getEntry(id);
   await idbDelete('conflicts', id);
   const ok = await idbDelete('outbox', id);
+  if (ok && e) {
+    const ids = new Set<string>([...(e.blobIds ?? []), ...findBlobRefs(e.body)]);
+    if (ids.size) await releaseBlobs(ids, await listOutbox());
+  }
   if (ok) notify('changed');
   return ok;
 }

@@ -93,6 +93,30 @@ export function assertRentalTransition(from: string, to: string): void {
   }
 }
 
+/** Device clock skew tolerated on a client-supplied return time. */
+export const RETURNED_AT_MAX_FUTURE_MS = 5 * 60 * 1000;
+/** Oldest client-supplied return time accepted (matches offline POS sales). */
+export const RETURNED_AT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Resolve the actual return time for a RETURNED transition. Without a
+ * client value it's now; a client value (offline return replayed later) must
+ * be a valid date, ≤ 5 min in the future (clamped to now) and ≤ 30 days old.
+ * Returns an error message instead of throwing so callers pick the exception.
+ */
+export function resolveReturnedAt(raw: string | undefined, now: Date): { at: Date } | { error: string } {
+  if (raw === undefined || raw === null || raw === '') return { at: now };
+  const t = new Date(raw);
+  if (Number.isNaN(t.getTime())) return { error: 'returnedAt must be a valid ISO date.' };
+  if (t.getTime() > now.getTime() + RETURNED_AT_MAX_FUTURE_MS) {
+    return { error: 'returnedAt is in the future — check the device clock.' };
+  }
+  if (t.getTime() < now.getTime() - RETURNED_AT_MAX_AGE_MS) {
+    return { error: 'returnedAt is older than 30 days; record this return manually.' };
+  }
+  return { at: t.getTime() > now.getTime() ? now : t };
+}
+
 /**
  * Late fee from the BOOKED return date (rental.returnDate), not from
  * product.maxRentalDays counted from startDate (which charged a customer who

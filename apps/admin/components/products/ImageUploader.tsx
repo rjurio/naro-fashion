@@ -6,6 +6,7 @@ import { getImagePreset, formatAllowedMimesForToast } from '@naro/shared';
 import { useToast } from '@/contexts/ToastContext';
 import adminApi from '@/lib/api';
 import ImageCropModal from './ImageCropModal';
+import OfflineImage from '@/components/offline/OfflineImage';
 
 interface Props {
   images: string[];
@@ -80,7 +81,10 @@ export default function ImageUploader({ images, onChange, maxImages = 8 }: Props
       const file = new File([blob], `product-${Date.now()}.jpg`, { type: 'image/jpeg' });
       const result = await adminApi.uploadImage(file);
       onChange([...images, result.url]);
-      toast.success('Image uploaded');
+      // Offline: the cropped photo is kept on this device (offline-blob://…)
+      // and uploaded by the sync engine before the product is saved.
+      if (result.__offline) toast.info("Photo saved on this device — it uploads when you're back online");
+      else toast.success('Image uploaded');
     } catch (err: any) {
       toast.error(err.message || 'Upload failed');
     } finally {
@@ -105,8 +109,8 @@ export default function ImageUploader({ images, onChange, maxImages = 8 }: Props
         <div className="grid grid-cols-4 gap-2">
           {images.map((url, i) => (
             <div key={i} className="relative group aspect-[3/4] rounded-lg overflow-hidden border border-[hsl(var(--border))] bg-[hsl(var(--accent))]">
-              <img
-                src={url.startsWith('/') ? `${(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '')}${url}` : url}
+              <OfflineImage
+                src={url}
                 alt={`Product image ${i + 1}`}
                 className="w-full h-full object-cover"
               />

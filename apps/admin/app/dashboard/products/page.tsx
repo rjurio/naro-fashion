@@ -25,6 +25,12 @@ import BarcodeModal from '@/components/products/BarcodeModal';
 import ImportProductsModal from '@/components/products/ImportProductsModal';
 import ServerPager from '@/components/ui/ServerPager';
 import { ADMIN_PAGE_SIZE, normalizePaginated } from '@/lib/pagination';
+import { useSyncStatus } from '@/contexts/SyncContext';
+import { useOutboxVersion } from '@/lib/offline/use-outbox-version';
+import { isLocalOnly } from '@/lib/offline/pending-overlay';
+import { LOCAL_ONLY_HINT, needsInternetTitle } from '@/lib/offline/feedback';
+import PendingSyncPill from '@/components/offline/PendingSyncPill';
+import OfflineImage from '@/components/offline/OfflineImage';
 
 interface Product {
   id: string;
@@ -72,6 +78,9 @@ export default function ProductsPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [fetching, setFetching] = useState(false);
+  // Offline mode: re-read when queued changes are added / synced (pending overlay).
+  const { online } = useSyncStatus();
+  const outboxVersion = useOutboxVersion();
 
   const handleDownloadTemplate = () => {
     const headers = [
@@ -172,7 +181,9 @@ export default function ProductsPage() {
       setLoading(false);
       setFetching(false);
     }
-  }, [page, debouncedSearch]);
+    // outboxVersion: re-read so queued changes show (and clear once synced).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, debouncedSearch, outboxVersion]);
 
   useEffect(() => {
     fetchProducts();
@@ -235,14 +246,17 @@ export default function ProductsPage() {
         return (
           <div className="flex items-center gap-3">
             {img ? (
-              <img src={img} alt={item.name} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />
+              <OfflineImage src={img} alt={item.name} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />
             ) : (
               <div className="w-10 h-10 rounded-lg bg-[hsl(var(--muted))] flex items-center justify-center flex-shrink-0">
                 <Package className="w-4 h-4 text-[hsl(var(--muted-foreground))]" />
               </div>
             )}
             <div>
-              <p className="font-medium text-[hsl(var(--card-foreground))]">{item.name}</p>
+              <p className="font-medium text-[hsl(var(--card-foreground))] flex items-center gap-2 flex-wrap">
+                {item.name}
+                <PendingSyncPill record={item} />
+              </p>
               <p className="text-xs text-[hsl(var(--muted-foreground))]">{item.sku || item.id.substring(0, 8)}</p>
             </div>
           </div>
@@ -303,12 +317,17 @@ export default function ProductsPage() {
     {
       key: 'actions',
       header: '',
-      render: (item) => (
+      render: (item) => {
+        // Toggle/delete are online-only, and a product created on this device
+        // can't be changed on the server until it has synced.
+        const localOnly = isLocalOnly(item);
+        const serverOnlyTitle = (t: string) => (localOnly ? LOCAL_ONLY_HINT : needsInternetTitle(online, t));
+        return (
         <div className="flex items-center gap-1">
           <button
-            className={`p-1.5 rounded-lg transition-colors disabled:opacity-50 ${item.isActive !== false ? 'text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
-            title={item.isActive !== false ? 'Deactivate' : 'Activate'}
-            disabled={togglingId === item.id}
+            className={`p-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${item.isActive !== false ? 'text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+            title={serverOnlyTitle(item.isActive !== false ? 'Deactivate' : 'Activate')}
+            disabled={togglingId === item.id || !online || localOnly}
             onClick={() => handleToggleActive(item.id)}
           >
             {togglingId === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Power className="w-4 h-4" />}
@@ -328,15 +347,16 @@ export default function ProductsPage() {
             <Edit className="w-4 h-4" />
           </button>
           <button
-            className="p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] hover:text-red-600 transition-colors disabled:opacity-50"
-            title="Delete"
-            disabled={deleting === item.id}
+            className="p-1.5 rounded-lg hover:bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] hover:text-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title={serverOnlyTitle('Delete')}
+            disabled={deleting === item.id || !online || localOnly}
             onClick={() => handleDelete(item.id)}
           >
             {deleting === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
           </button>
         </div>
-      ),
+        );
+      },
     },
   ];
 
@@ -371,8 +391,9 @@ export default function ProductsPage() {
           <button
             type="button"
             onClick={() => setShowImportModal(true)}
-            title="Import multiple products from a CSV file"
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[hsl(var(--border))] text-[hsl(var(--foreground))] text-sm font-medium hover:border-brand-gold hover:text-brand-gold transition-colors cursor-pointer"
+            disabled={!online}
+            title={needsInternetTitle(online, 'Import multiple products from a CSV file')}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[hsl(var(--border))] text-[hsl(var(--foreground))] text-sm font-medium hover:border-brand-gold hover:text-brand-gold transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-[hsl(var(--border))] disabled:hover:text-[hsl(var(--foreground))]"
           >
             <Upload className="w-4 h-4" />
             Import CSV

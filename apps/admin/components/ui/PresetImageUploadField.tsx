@@ -10,11 +10,8 @@ import {
 import adminApi from '@/lib/api';
 import { useToast } from '@/contexts/ToastContext';
 import ImageCropModal from '../products/ImageCropModal';
-
-const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace(
-  '/api/v1',
-  '',
-);
+import OfflineImage from '@/components/offline/OfflineImage';
+import { isOfflineBlobUrl } from '@/lib/offline/blobs';
 
 interface SingleProps {
   presetKey: ImagePresetKey;
@@ -43,12 +40,6 @@ interface MultiProps {
 }
 
 type Props = SingleProps | MultiProps;
-
-function resolveSrc(url: string): string {
-  if (!url) return '';
-  if (url.startsWith('/uploads')) return `${API_ORIGIN}${url}`;
-  return url;
-}
 
 function dispatchUpload(
   endpoint: ReturnType<typeof getImagePreset>['uploadEndpoint'],
@@ -123,13 +114,16 @@ export default function PresetImageUploadField(props: Props) {
     async (fileToUpload: File) => {
       setUploading(true);
       try {
-        const result = await dispatchUpload(preset.uploadEndpoint, fileToUpload);
+        const result = (await dispatchUpload(preset.uploadEndpoint, fileToUpload)) as { url: string; __offline?: true };
         if (isMulti) {
           (props as MultiProps).onChangeMany([...(props as MultiProps).values, result.url]);
         } else {
           (props as SingleProps).onChange(result.url);
         }
-        toast.success('Image uploaded');
+        // Product / category photos picked offline are kept on this device and
+        // uploaded by the sync engine before the record that uses them.
+        if (result.__offline || isOfflineBlobUrl(result.url)) toast.info("Photo saved on this device — it uploads when you're back online");
+        else toast.success('Image uploaded');
       } catch (err: any) {
         toast.error(err?.message || 'Upload failed');
       } finally {
@@ -250,7 +244,7 @@ export default function PresetImageUploadField(props: Props) {
               className={`relative group overflow-hidden border border-[hsl(var(--border))] bg-[hsl(var(--accent))] ${radiusClass}`}
               style={aspectStyle}
             >
-              <img src={resolveSrc(url)} alt={`Image ${i + 1}`} className="w-full h-full object-cover" />
+              <OfflineImage src={url} alt={`Image ${i + 1}`} className="w-full h-full object-cover" />
               <button
                 type="button"
                 onClick={() => removeAt(i)}
@@ -272,15 +266,17 @@ export default function PresetImageUploadField(props: Props) {
             className={`relative shrink-0 overflow-hidden border border-[hsl(var(--border))] bg-[hsl(var(--accent))] ${radiusClass}`}
             style={aspectStyle}
           >
-            <img
-              src={resolveSrc((props as SingleProps).value!)}
+            <OfflineImage
+              src={(props as SingleProps).value!}
               alt={preset.label}
               className="w-full h-full object-cover"
             />
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-xs text-[hsl(var(--muted-foreground))] truncate" title={(props as SingleProps).value!}>
-              {(props as SingleProps).value}
+              {isOfflineBlobUrl((props as SingleProps).value)
+                ? 'Saved on this device — uploads when online'
+                : (props as SingleProps).value}
             </p>
             <div className="flex items-center gap-2 mt-1.5">
               <button

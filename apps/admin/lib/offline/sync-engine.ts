@@ -18,9 +18,27 @@
  *   network / 5xx / 408 / 429                 → backoff, run stops (server trouble)
  *   401 a refresh can't fix                   → engine pauses, `needsLogin`, entries kept
  *   400/403/404/422/409 ID_CONFLICT/other 4xx → failed (message shown, Retry / Discard)
+ *
+ * Offline photos (Phase 4): before an entry is sent, every `offline-blob://<id>`
+ * in its body is uploaded (own Idempotency-Key, same outcome rules as above —
+ * a refused upload fails the entry) and replaced by the real URL; the
+ * rewritten body is persisted first, so a retry never uploads twice.
+ *
+ * Chained edits (Phase 4): after a create/update of record X syncs, later
+ * queued edits of X that were made against the SAME base version get their
+ * `expectedUpdatedAt` moved to the new server `updatedAt` — otherwise the
+ * operator's own earlier change would make their next change "conflict".
  */
 import adminApi, { getAuthToken } from '../api';
 import { identityFromToken, scopeFromIdentity } from './response-cache';
+import {
+  findBlobRefs,
+  gcOrphanBlobs,
+  getBlobRecord,
+  markBlobUploaded,
+  releaseBlobs,
+  replaceBlobRefs,
+} from './blobs';
 import {
   getEntry,
   listOutbox,
@@ -102,6 +120,9 @@ export function startSyncEngine() {
   intervalTimer = setInterval(() => {
     if (getSnapshot().online && isVisible()) void syncNow();
   }, SYNC_INTERVAL_MS);
+
+  // Photos picked in forms that were never saved.
+  void listOutbox().then((all) => gcOrphanBlobs(all)).catch(() => undefined);
 
   void syncNow();
 }
@@ -270,7 +291,125 @@ async function markBackoff(e: OutboxEntry, err: OutboxError): Promise<void> {
   scheduleWake(next.nextAttemptAt);
 }
 
-async function sendEntry(e: OutboxEntry, summary: SyncRunSummary): Promise<EntryOutcome> {
+async function pauseForLogin(e: OutboxEntry, code?: string): Promise<void> {
+  // authorizedFetch already tried a refresh; it was definitively refused.
+  paused = true;
+  lastScope = e.scope;
+  setNeedsLogin(true);
+  await saveEntry({ ...e, status: 'pending', lastError: { status: 401, code, message: 'Sign in again to sync.' } });
+}
+
+async function markFailed(e: OutboxEntry, err: OutboxError, summary: SyncRunSummary): Promise<EntryOutcome> {
+  await saveEntry({ ...e, status: 'failed', lastError: err });
+  summary.failed += 1;
+  return 'blocked';
+}
+
+type BlobStep = { kind: 'ready'; entry: OutboxEntry } | { kind: 'stop'; outcome: EntryOutcome };
+
+/** Upload the entry's offline photos and swap their `offline-blob://` URLs for the real ones. */
+async function resolveBlobs(e: OutboxEntry, summary: SyncRunSummary): Promise<BlobStep> {
+  const refs = findBlobRefs(e.body);
+  if (refs.size === 0) return { kind: 'ready', entry: e };
+
+  const urls: Record<string, string> = {};
+  for (const id of refs) {
+    const rec = await getBlobRecord(id);
+    if (!rec) {
+      return {
+        kind: 'stop',
+        outcome: await markFailed(
+          e,
+          {
+            status: 0,
+            code: 'BLOB_MISSING',
+            message: 'A photo saved on this device is missing. Discard this change and add the photo again.',
+          },
+          summary,
+        ),
+      };
+    }
+    if (rec.uploadedUrl) {
+      urls[id] = rec.uploadedUrl;
+      continue;
+    }
+
+    let res;
+    try {
+      res = await adminApi.sendQueuedUpload(rec.endpoint, rec.blob, rec.name, rec.idempotencyKey);
+    } catch (err) {
+      await markBackoff(e, { status: 0, message: err instanceof Error ? err.message : 'Photo upload failed' });
+      return { kind: 'stop', outcome: 'abort' };
+    }
+    if (res.kind === 'network') {
+      await markBackoff(e, { status: 0, message: 'No connection to the server.' });
+      return { kind: 'stop', outcome: 'abort' };
+    }
+    if (res.kind === 'transient') {
+      await markBackoff(e, { status: res.status, message: res.message });
+      return { kind: 'stop', outcome: 'abort' };
+    }
+    const { status, data } = res;
+    const code = errorCode(data);
+    const url = data && typeof data === 'object' ? (data as { url?: unknown }).url : undefined;
+    if (status >= 200 && status < 300 && typeof url === 'string' && url) {
+      urls[id] = url;
+      await markBlobUploaded(rec, url);
+      continue;
+    }
+    if (status === 401) {
+      await pauseForLogin(e, code);
+      return { kind: 'stop', outcome: 'abort' };
+    }
+    if (status === 409 && code === 'IDEMPOTENCY_IN_PROGRESS') {
+      await markBackoff(e, { status, code, message: 'Photo upload still being processed — will check again.' });
+      return { kind: 'stop', outcome: 'blocked' };
+    }
+    if (status === 408 || status === 429 || status >= 500) {
+      await markBackoff(e, { status, code, message: errorMessage(data, `Server error (${status}).`) });
+      return { kind: 'stop', outcome: 'abort' };
+    }
+    return {
+      kind: 'stop',
+      outcome: await markFailed(
+        e,
+        { status, code, message: `Photo upload failed: ${errorMessage(data, `request failed (${status})`)}` },
+        summary,
+      ),
+    };
+  }
+
+  const next: OutboxEntry = {
+    ...e,
+    body: replaceBlobRefs(e.body, urls),
+    blobIds: [...new Set([...(e.blobIds ?? []), ...refs])],
+  };
+  await saveEntry(next, true);
+  return { kind: 'ready', entry: next };
+}
+
+/**
+ * After record X synced (create/update), later queued edits of X made against
+ * the same base version now build on the server's new `updatedAt`.
+ */
+async function rebaseFollowing(e: OutboxEntry, data: unknown): Promise<void> {
+  if (e.kind === 'pos.sale' || e.kind === 'order.status' || e.kind === 'rental.status') return;
+  const updatedAt = data && typeof data === 'object' ? (data as { updatedAt?: unknown }).updatedAt : undefined;
+  if (typeof updatedAt !== 'string' || !updatedAt) return;
+  const key = entityKey(e);
+  const base = e.body.expectedUpdatedAt;
+  for (const x of await listOutbox(e.scope)) {
+    if (x.id === e.id || x.status !== 'pending' || entityKey(x) !== key) continue;
+    if (x.createdAt < e.createdAt || !x.kind.endsWith('.update')) continue;
+    if (x.body.expectedUpdatedAt !== base) continue;
+    await saveEntry({ ...x, body: { ...x.body, expectedUpdatedAt: updatedAt } }, true);
+  }
+}
+
+async function sendEntry(original: OutboxEntry, summary: SyncRunSummary): Promise<EntryOutcome> {
+  const step = await resolveBlobs(original, summary);
+  if (step.kind === 'stop') return step.outcome;
+  const e = step.entry;
   await saveEntry({ ...e, status: 'syncing' }, true);
 
   let res;
@@ -310,15 +449,13 @@ async function sendEntry(e: OutboxEntry, summary: SyncRunSummary): Promise<Entry
     });
     markOwnMutation();
     summary.synced += 1;
+    await rebaseFollowing(e, data);
+    if (e.blobIds?.length) await releaseBlobs(e.blobIds, await listOutbox());
     return 'ok';
   }
 
   if (status === 401) {
-    // authorizedFetch already tried a refresh; it was definitively refused.
-    paused = true;
-    lastScope = e.scope;
-    setNeedsLogin(true);
-    await saveEntry({ ...e, status: 'pending', lastError: { status, code, message: 'Sign in again to sync.' } });
+    await pauseForLogin(e, code);
     return 'abort';
   }
 
@@ -375,11 +512,5 @@ async function sendEntry(e: OutboxEntry, summary: SyncRunSummary): Promise<Entry
     return sendEntry(upgraded, summary);
   }
 
-  await saveEntry({
-    ...e,
-    status: 'failed',
-    lastError: { status, code, message: errorMessage(data, `Request failed (${status}).`) },
-  });
-  summary.failed += 1;
-  return 'blocked';
+  return markFailed(e, { status, code, message: errorMessage(data, `Request failed (${status}).`) }, summary);
 }

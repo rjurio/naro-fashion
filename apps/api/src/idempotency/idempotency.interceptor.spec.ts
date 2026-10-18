@@ -254,6 +254,25 @@ describe('IdempotencyInterceptor', () => {
     );
     expect(rows[0]).toMatchObject({ tenantId: null, principalId: 'pa-1', status: 'COMPLETED' });
   });
+
+  it('multipart photo upload (body not parsed yet at interceptor time) replays the stored { url }', async () => {
+    // Offline photos (admin offline mode, Phase 4): the sync engine uploads each
+    // photo with its own Idempotency-Key; a retry after a dropped response must
+    // return the first upload's URL instead of storing the file twice.
+    const { prisma } = makePrisma();
+    const icpt = new IdempotencyInterceptor(prisma, new Reflector());
+    const first = makeCtx({ url: '/api/v1/upload/image', key: 'blob-b0123456789abcdef' });
+    (first.req as any).body = undefined;
+    await lastValueFrom(icpt.intercept(first.ctx, handlerReturning({ url: '/uploads/products/a.jpg', filename: 'a.jpg' })));
+
+    const retry = makeCtx({ url: '/api/v1/upload/image', key: 'blob-b0123456789abcdef' });
+    (retry.req as any).body = undefined;
+    const next = handlerReturning({ url: '/uploads/products/DUPLICATE.jpg' });
+    const out = await lastValueFrom(icpt.intercept(retry.ctx, next));
+    expect(out).toEqual({ url: '/uploads/products/a.jpg', filename: 'a.jpg' });
+    expect(next.handle).not.toHaveBeenCalled();
+    expect(retry.resHeaders['Idempotency-Replayed']).toBe('true');
+  });
 });
 
 describe('IdempotencyRetentionService', () => {

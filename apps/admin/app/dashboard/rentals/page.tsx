@@ -10,7 +10,13 @@ import {
   ArrowRight, Ban,
 } from 'lucide-react';
 import Button from '@/components/ui/Button';
-import { adminApi } from '@/lib/api';
+import { adminApi, isConflictError } from '@/lib/api';
+import { useSyncStatus } from '@/contexts/SyncContext';
+import { useOutboxVersion } from '@/lib/offline/use-outbox-version';
+import { isQueuedResult } from '@/lib/offline/outbox';
+import { SAVED_OFFLINE_MESSAGE, needsInternetTitle } from '@/lib/offline/feedback';
+import PendingSyncPill from '@/components/offline/PendingSyncPill';
+import { useStaleRecordDialog } from '@/components/offline/StaleRecordDialog';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 
@@ -76,7 +82,7 @@ const REGIONS = [
   'Tanga', 'Unguja North', 'Unguja South', 'Zanzibar Central/South',
 ];
 
-function ChecklistSection({ rentalId }: { rentalId: string }) {
+function ChecklistSection({ rentalId, online }: { rentalId: string; online: boolean }) {
   const [entries, setEntries] = useState<ChecklistEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -149,7 +155,12 @@ function ChecklistSection({ rentalId }: { rentalId: string }) {
         <ul className="space-y-1.5">
           {items.map((entry) => (
             <li key={entry.id} className="flex items-start gap-3 group">
-              <button onClick={() => handleToggleItem(entry)} className="mt-0.5 flex-shrink-0">
+              <button
+                onClick={() => handleToggleItem(entry)}
+                disabled={!online}
+                title={needsInternetTitle(online, entry.isChecked ? 'Uncheck' : 'Check')}
+                className="mt-0.5 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 {entry.isChecked
                   ? <CheckCircle2 className="w-5 h-5 text-emerald-500" />
                   : <Circle className="w-5 h-5 text-[hsl(var(--muted-foreground))] group-hover:text-brand-gold transition-colors" />}
@@ -177,7 +188,7 @@ function ChecklistSection({ rentalId }: { rentalId: string }) {
         <div className="text-center py-4">
           <ClipboardList className="w-8 h-8 mx-auto text-[hsl(var(--muted-foreground))] mb-2" />
           <p className="text-sm text-[hsl(var(--muted-foreground))] mb-3">No checklist assigned yet</p>
-          <Button onClick={loadTemplates} className="text-sm"><Plus className="w-4 h-4" /> Assign Checklist Template</Button>
+          <Button onClick={loadTemplates} disabled={!online} title={needsInternetTitle(online)} className="text-sm"><Plus className="w-4 h-4" /> Assign Checklist Template</Button>
         </div>
       ) : (
         <>
@@ -186,7 +197,7 @@ function ChecklistSection({ rentalId }: { rentalId: string }) {
             {renderGroup('Return', returnItems, 'text-purple-600 dark:text-purple-400')}
           </div>
           <div className="pt-2 border-t border-[hsl(var(--border))]">
-            <button onClick={loadTemplates} className="text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] underline">
+            <button onClick={loadTemplates} disabled={!online} title={needsInternetTitle(online)} className="text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] underline disabled:opacity-50 disabled:cursor-not-allowed">
               Assign additional checklist template
             </button>
           </div>
@@ -206,7 +217,7 @@ function ChecklistSection({ rentalId }: { rentalId: string }) {
                 const dc = (t.items || []).filter((i) => i.itemType === 'DISPATCH').length;
                 const rc = (t.items || []).filter((i) => i.itemType === 'RETURN').length;
                 return (
-                  <button key={t.id} onClick={() => handleAssign(t.id)} disabled={assigning}
+                  <button key={t.id} onClick={() => handleAssign(t.id)} disabled={assigning || !online}
                     className="flex items-center gap-3 p-3 rounded-lg border border-[hsl(var(--border))] hover:border-brand-gold hover:bg-brand-gold/5 transition-colors text-left">
                     <ClipboardList className="w-5 h-5 text-brand-gold flex-shrink-0" />
                     <div className="flex-1 min-w-0">
@@ -226,7 +237,7 @@ function ChecklistSection({ rentalId }: { rentalId: string }) {
   );
 }
 
-function RentalDetailsSection({ rental, onUpdate }: { rental: Rental; onUpdate: (updated: Partial<Rental>) => void }) {
+function RentalDetailsSection({ rental, onUpdate, online }: { rental: Rental; onUpdate: (updated: Partial<Rental>) => void; online: boolean }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
@@ -281,7 +292,14 @@ function RentalDetailsSection({ rental, onUpdate }: { rental: Rental; onUpdate: 
           <h4 className="text-sm font-semibold text-[hsl(var(--foreground))] flex items-center gap-2">
             <Package className="w-4 h-4 text-brand-gold" /> Rental Details
           </h4>
-          <button onClick={() => setEditing(true)} className="text-xs text-brand-gold hover:underline">Edit</button>
+          <button
+            onClick={() => setEditing(true)}
+            disabled={!online}
+            title={needsInternetTitle(online, 'Edit rental details')}
+            className="text-xs text-brand-gold hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
+          >
+            Edit
+          </button>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div><p className={labelClass}>Pickup Time</p><p className={valueClass}>{rental.pickupTime || '—'}</p></div>
@@ -317,7 +335,13 @@ function RentalDetailsSection({ rental, onUpdate }: { rental: Rental; onUpdate: 
         </h4>
         <div className="flex gap-2">
           <button onClick={() => setEditing(false)} className="text-xs text-[hsl(var(--muted-foreground))] hover:underline">Cancel</button>
-          <button onClick={handleSave} disabled={saving} className="text-xs text-brand-gold hover:underline font-medium">
+          <button
+            onClick={handleSave}
+            disabled={saving || !online}
+            title={needsInternetTitle(online)}
+            className="inline-flex items-center gap-1 text-xs text-brand-gold hover:underline font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {saving && <Loader2 className="w-3 h-3 animate-spin" />}
             {saving ? 'Saving...' : 'Save'}
           </button>
         </div>
@@ -379,10 +403,13 @@ function RentalDetailsSection({ rental, onUpdate }: { rental: Rental; onUpdate: 
             <div>
               <label className={labelClass}>Transport Receipt</label>
               <div className="mt-1 flex items-center gap-2">
-                <label className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))] cursor-pointer hover:border-brand-gold transition-colors">
-                  <Upload className="w-3.5 h-3.5" />
+                <label
+                  title={needsInternetTitle(online)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))] transition-colors ${online ? 'cursor-pointer hover:border-brand-gold' : 'opacity-50 cursor-not-allowed'}`}
+                >
+                  {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
                   {uploading ? 'Uploading...' : 'Upload Receipt'}
-                  <input type="file" accept="image/*,.pdf" onChange={handleReceiptUpload} className="hidden" disabled={uploading} />
+                  <input type="file" accept="image/*,.pdf" onChange={handleReceiptUpload} className="hidden" disabled={uploading || !online} />
                 </label>
                 {rental.transportReceiptUrl && (
                   <a href={`${API_ORIGIN}${rental.transportReceiptUrl}`} target="_blank" rel="noreferrer" className="text-xs text-brand-gold hover:underline">View</a>
@@ -565,10 +592,13 @@ export default function RentalsPage() {
   const [activeTab, setActiveTab] = useState<TabKey>('active');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedRentalId, setExpandedRentalId] = useState<string | null>(null);
+  const { online } = useSyncStatus();
+  const outboxVersion = useOutboxVersion();
+  const stale = useStaleRecordDialog('rental');
 
+  // Spinner only on the first load; refreshes (e.g. queued changes synced) are silent.
   const fetchRentals = useCallback(async () => {
     try {
-      setLoading(true);
       const data = await adminApi.getRentals();
       const list = Array.isArray(data) ? data : data?.data || data?.rentals || [];
       // Normalize API response to our Rental interface
@@ -589,18 +619,34 @@ export default function RentalsPage() {
     } finally { setLoading(false); }
   }, []);
 
+  // outboxVersion: re-read so queued status changes show (and clear once synced).
   useEffect(() => {
     fetchRentals();
-  }, [fetchRentals]);
+  }, [fetchRentals, outboxVersion]);
 
-  const handleStatusUpdate = async (rentalId: string, newStatus: string) => {
+  const handleStatusUpdate = async (rental: Rental, newStatus: string) => {
+    const label = STATUS_META[newStatus]?.label || newStatus;
     try {
-      await adminApi.updateRentalStatus(rentalId, newStatus);
-      setRentals((prev) => prev.map((r) => (r.id === rentalId ? { ...r, status: newStatus } : r)));
-      toast(`Rental marked ${(STATUS_META[newStatus]?.label || newStatus).toLowerCase()}`, 'success');
+      // expectedStatus = the status on screen (concurrent change → 409 CONFLICT).
+      const result = await adminApi.updateRentalStatus(
+        rental.id,
+        newStatus,
+        rental.status,
+        `Rental #${rental.rentalNumber || rental.id.slice(-6)} → ${label}`,
+      );
+      const queued = isQueuedResult(result);
+      setRentals((prev) =>
+        prev.map((r) =>
+          r.id === rental.id ? { ...r, status: newStatus, ...(queued ? { __pending: true, __syncState: 'pending' } : {}) } : r,
+        ),
+      );
+      if (queued) toast(SAVED_OFFLINE_MESSAGE, 'info');
+      else toast(`Rental marked ${label.toLowerCase()}`, 'success');
     } catch (err: any) {
-      if (err?.status === 409) {
-        // Optimistic-concurrency guard: someone else changed it first.
+      if (isConflictError(err)) {
+        stale.open(fetchRentals);
+      } else if (err?.status === 409) {
+        // Raced without expectedStatus (server CAS) — same remedy.
         toast('This rental was changed by someone else. Reloading the latest data…', 'warning');
         fetchRentals();
       } else {
@@ -620,7 +666,7 @@ export default function RentalsPage() {
     if (!ok) return;
     setCancellingId(rental.id);
     try {
-      await handleStatusUpdate(rental.id, 'CANCELLED');
+      await handleStatusUpdate(rental, 'CANCELLED');
     } finally {
       setCancellingId(null);
     }
@@ -711,7 +757,10 @@ export default function RentalsPage() {
                   onClick={() => setExpandedRentalId(expandedRentalId === rental.id ? null : rental.id)}>
                   <div className="flex items-center gap-4 flex-1 min-w-0 flex-wrap">
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-[hsl(var(--foreground))] truncate">{rental.rentalNumber || rental.id}</p>
+                      <p className="text-sm font-semibold text-[hsl(var(--foreground))] truncate flex items-center gap-2">
+                        <span className="truncate">{rental.rentalNumber || rental.id}</span>
+                        <PendingSyncPill record={rental} />
+                      </p>
                       <p className="text-xs text-[hsl(var(--muted-foreground))]">{rental.customer}</p>
                     </div>
                     <div className="hidden sm:block min-w-0">
@@ -732,7 +781,7 @@ export default function RentalsPage() {
                     )}
                     <RentalStatusDropdown
                       status={rental.status}
-                      onStatusChange={(newStatus) => handleStatusUpdate(rental.id, newStatus)}
+                      onStatusChange={(newStatus) => handleStatusUpdate(rental, newStatus)}
                     />
                     {CANCELLABLE_STATUSES.has(rental.status) && (
                       <button
@@ -755,7 +804,7 @@ export default function RentalsPage() {
                 {expandedRentalId === rental.id && (
                   <div className="border-t border-[hsl(var(--border))] p-5 bg-[hsl(var(--muted))]/30 space-y-6 rounded-b-xl overflow-hidden">
                     {/* Rental Details */}
-                    <RentalDetailsSection rental={rental} onUpdate={(updated) => handleRentalUpdate(rental.id, updated)} />
+                    <RentalDetailsSection rental={rental} online={online} onUpdate={(updated) => handleRentalUpdate(rental.id, updated)} />
 
                     {/* Checklist */}
                     <div>
@@ -763,7 +812,7 @@ export default function RentalsPage() {
                         <ClipboardList className="w-4 h-4 text-brand-gold" />
                         <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Dispatch & Return Checklist</h3>
                       </div>
-                      <ChecklistSection rentalId={rental.id} />
+                      <ChecklistSection rentalId={rental.id} online={online} />
                     </div>
                   </div>
                 )}
@@ -772,6 +821,7 @@ export default function RentalsPage() {
           })}
         </div>
       )}
+      {stale.dialog}
     </div>
   );
 }

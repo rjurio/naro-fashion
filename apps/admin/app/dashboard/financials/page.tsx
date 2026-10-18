@@ -1,8 +1,15 @@
 'use client';
-import { useState, useEffect, useCallback, lazy } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy } from 'react';
 import dynamic from 'next/dynamic';
 import { TrendingUp, Plus, Pencil, Trash2, RefreshCw, DollarSign } from 'lucide-react';
-import adminApi from '@/lib/api';
+import adminApi, { isConflictError, isOfflineError } from '@/lib/api';
+import { useSyncStatus } from '@/contexts/SyncContext';
+import { useOutboxVersion } from '@/lib/offline/use-outbox-version';
+import { isQueuedResult } from '@/lib/offline/outbox';
+import { isLocalOnly } from '@/lib/offline/pending-overlay';
+import { LOCAL_ONLY_HINT, SAVED_OFFLINE_MESSAGE, needsInternetTitle } from '@/lib/offline/feedback';
+import PendingSyncPill from '@/components/offline/PendingSyncPill';
+import { useStaleRecordDialog } from '@/components/offline/StaleRecordDialog';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
@@ -73,6 +80,12 @@ export default function FinancialsPage() {
   const [catSaving, setCatSaving] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
 
+  // Offline mode: expenses can be recorded/edited offline (queued); everything
+  // else on this page needs the server.
+  const { online } = useSyncStatus();
+  const outboxVersion = useOutboxVersion();
+  const stale = useStaleRecordDialog('expense');
+
   // Load income statement
   useEffect(() => {
     if (activeTab !== 'income') return;
@@ -80,24 +93,46 @@ export default function FinancialsPage() {
     adminApi.getIncomeStatement(period).then(setStatement).catch(() => toast.error('Failed to load income statement')).finally(() => setStmtLoading(false));
   }, [activeTab, period]);
 
-  // Load expenses
-  const loadExpenses = useCallback(async () => {
-    setExpLoading(true);
+  // Expense categories for the form. Offline they come from the device cache:
+  // the active list if it was loaded before, else the Categories-tab list.
+  const loadExpenseCategoryOptions = useCallback(async () => {
     try {
-      const [year, month] = expPeriod.split('-');
-      const p: Record<string, string> = { period: expPeriod };
-      const data = await adminApi.getExpenses(p);
+      setCategories(await adminApi.getExpenseCategories({ isActive: 'true' }));
+    } catch (err) {
+      if (!isOfflineError(err)) return;
+      try {
+        const all = await adminApi.getExpenseCategories({ includeDeleted: 'false' });
+        setCategories((Array.isArray(all) ? all : []).filter((c: any) => c.isActive !== false && !c.deletedAt));
+      } catch { /* not cached on this device */ }
+    }
+  }, []);
+
+  // Load expenses (skeleton only for the first load of a period, not for
+  // refreshes caused by queued changes — see outboxVersion).
+  const shownPeriod = useRef<string | null>(null);
+  const loadExpenses = useCallback(async () => {
+    if (shownPeriod.current !== expPeriod) setExpLoading(true);
+    try {
+      const data = await adminApi.getExpenses({ period: expPeriod });
       setExpenses(data);
-      const cats = await adminApi.getExpenseCategories({ isActive: 'true' });
-      setCategories(cats);
+      shownPeriod.current = expPeriod;
+      return data;
     } catch {
       toast.error('Failed to load expenses');
+      return null;
     } finally {
       setExpLoading(false);
     }
   }, [expPeriod]);
 
-  useEffect(() => { if (activeTab === 'expenses') loadExpenses(); }, [activeTab, loadExpenses]);
+  useEffect(() => {
+    if (activeTab !== 'expenses') return;
+    loadExpenses();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, loadExpenses, outboxVersion]);
+  useEffect(() => { if (activeTab === 'expenses') loadExpenseCategoryOptions(); }, [activeTab, loadExpenseCategoryOptions]);
+
+  const categoryName = (e: any) => e.category?.name ?? categories.find((c: any) => c.id === e.categoryId)?.name ?? '—';
 
   // Load chart
   useEffect(() => {
@@ -136,14 +171,30 @@ export default function FinancialsPage() {
     setExpSaving(true);
     try {
       const data = { categoryId: expForm.categoryId, amount: Number(expForm.amount), expenseDate: expForm.expenseDate, vendor: expForm.vendor || undefined, description: expForm.description || undefined, receiptUrl: expForm.receiptUrl || undefined };
-      if (expModal.expense) await adminApi.updateExpense(expModal.expense.id, data);
-      else await adminApi.createExpense(data);
-      toast.success(`Expense ${expModal.expense ? 'updated' : 'recorded'}`);
+      const editing = expModal.expense;
+      // Optimistic concurrency: the version the form was opened from.
+      const expectedUpdatedAt = typeof editing?.updatedAt === 'string' ? editing.updatedAt : undefined;
+      const result = editing
+        ? await adminApi.updateExpense(editing.id, expectedUpdatedAt ? { ...data, expectedUpdatedAt } : data)
+        : await adminApi.createExpense(data);
+      if (isQueuedResult(result)) toast.info(SAVED_OFFLINE_MESSAGE);
+      else toast.success(`Expense ${editing ? 'updated' : 'recorded'}`);
       setExpModal({ open: false, expense: null });
       loadExpenses();
     } catch (e: any) {
-      // 403 when the expense's period is CLOSED/LOCKED — show the server's reason.
-      toast.error(e?.message || 'Failed to save expense');
+      if (isConflictError(e) && expModal.expense) {
+        const id = expModal.expense.id;
+        // Reload the list and put the latest version into the form.
+        stale.open(async () => {
+          const fresh = await loadExpenses();
+          const row = (fresh?.data ?? []).find((x: any) => x.id === id) ?? e.data?.current;
+          if (row) openExpModal(row);
+          else setExpModal({ open: false, expense: null });
+        });
+      } else {
+        // 403 when the expense's period is CLOSED/LOCKED — show the server's reason.
+        toast.error(e?.message || 'Failed to save expense');
+      }
     } finally {
       setExpSaving(false);
     }
@@ -346,15 +397,25 @@ export default function FinancialsPage() {
                   <tbody>
                     {expenses.data.map((e: any) => (
                       <tr key={e.id} className="border-b border-border/50 hover:bg-muted/20 transition-colors">
-                        <td className="px-4 py-3 text-muted-foreground">{new Date(e.expenseDate).toLocaleDateString()}</td>
-                        <td className="px-4 py-3"><Badge variant="neutral">{e.category?.name ?? '—'}</Badge></td>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {new Date(e.expenseDate).toLocaleDateString()}
+                            <PendingSyncPill record={e} />
+                          </div>
+                        </td>
+                        <td className="px-4 py-3"><Badge variant="neutral">{categoryName(e)}</Badge></td>
                         <td className="px-4 py-3 text-muted-foreground">{e.vendor ?? '—'}</td>
                         <td className="px-4 py-3 max-w-[200px] truncate text-muted-foreground">{e.description ?? '—'}</td>
                         <td className="px-4 py-3 font-medium">{formatTZS(Number(e.amount))}</td>
                         <td className="px-4 py-3">
                           <div className="flex gap-1">
                             <button onClick={() => openExpModal(e)} className="p-1.5 rounded hover:bg-muted transition-colors"><Pencil className="w-4 h-4 text-muted-foreground" /></button>
-                            <button onClick={() => deleteExpense(e)} className="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900 transition-colors"><Trash2 className="w-4 h-4 text-red-500" /></button>
+                            <button
+                              onClick={() => deleteExpense(e)}
+                              disabled={!online || isLocalOnly(e)}
+                              title={isLocalOnly(e) ? LOCAL_ONLY_HINT : needsInternetTitle(online, 'Delete')}
+                              className="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                            ><Trash2 className="w-4 h-4 text-red-500" /></button>
                           </div>
                         </td>
                       </tr>
@@ -418,7 +479,12 @@ export default function FinancialsPage() {
                   Show deleted
                 </label>
               </div>
-              <button onClick={() => openCatModal()} className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors">
+              <button
+                onClick={() => openCatModal()}
+                disabled={!online}
+                title={needsInternetTitle(online)}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 <Plus className="w-4 h-4" /> Add Category
               </button>
             </div>
@@ -443,12 +509,12 @@ export default function FinancialsPage() {
                           <div className="flex gap-1">
                             {!cat.deletedAt ? (
                               <>
-                                <button onClick={() => openCatModal(cat)} className="p-1.5 rounded hover:bg-muted transition-colors"><Pencil className="w-4 h-4 text-muted-foreground" /></button>
-                                <button onClick={() => toggleCat(cat)} className="p-1.5 rounded hover:bg-muted transition-colors"><RefreshCw className="w-4 h-4 text-muted-foreground" /></button>
-                                <button onClick={() => deleteCat(cat)} className="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900 transition-colors"><Trash2 className="w-4 h-4 text-red-500" /></button>
+                                <button onClick={() => openCatModal(cat)} disabled={!online} title={needsInternetTitle(online, 'Edit')} className="p-1.5 rounded hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"><Pencil className="w-4 h-4 text-muted-foreground" /></button>
+                                <button onClick={() => toggleCat(cat)} disabled={!online} title={needsInternetTitle(online, cat.isActive ? 'Deactivate' : 'Activate')} className="p-1.5 rounded hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"><RefreshCw className="w-4 h-4 text-muted-foreground" /></button>
+                                <button onClick={() => deleteCat(cat)} disabled={!online} title={needsInternetTitle(online, 'Delete')} className="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"><Trash2 className="w-4 h-4 text-red-500" /></button>
                               </>
                             ) : (
-                              <button onClick={() => restoreCat(cat)} className="text-xs text-brand-gold hover:underline px-2 py-1">Restore</button>
+                              <button onClick={() => restoreCat(cat)} disabled={!online} title={needsInternetTitle(online)} className="text-xs text-brand-gold hover:underline px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed">Restore</button>
                             )}
                           </div>
                         </td>
@@ -467,8 +533,9 @@ export default function FinancialsPage() {
         footer={
           <>
             <button onClick={() => setExpModal({ open: false, expense: null })} className="px-4 py-2 text-sm border border-border rounded-lg hover:border-foreground hover:text-foreground transition-colors cursor-pointer">Cancel</button>
-            <button onClick={saveExpense} disabled={expSaving} className="px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors disabled:opacity-50">
-              {expSaving ? 'Saving...' : 'Save Expense'}
+            <button onClick={saveExpense} disabled={expSaving} className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors disabled:opacity-50">
+              {expSaving && <RefreshCw className="w-4 h-4 animate-spin" />}
+              {expSaving ? 'Saving...' : online ? 'Save Expense' : 'Save on this device'}
             </button>
           </>
         }
@@ -512,7 +579,7 @@ export default function FinancialsPage() {
         footer={
           <>
             <button onClick={() => setCatModal({ open: false, cat: null })} className="px-4 py-2 text-sm border border-border rounded-lg hover:border-foreground hover:text-foreground transition-colors cursor-pointer">Cancel</button>
-            <button onClick={saveCat} disabled={catSaving} className="px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors disabled:opacity-50">
+            <button onClick={saveCat} disabled={catSaving || !online} title={needsInternetTitle(online)} className="px-4 py-2 text-sm font-medium rounded-lg bg-brand-gold hover:bg-[#c9a832] text-black transition-colors disabled:opacity-50">
               {catSaving ? 'Saving...' : catModal.cat ? 'Save Changes' : 'Create Category'}
             </button>
           </>
@@ -542,6 +609,7 @@ export default function FinancialsPage() {
           </FormField>
         </div>
       </Modal>
+      {stale.dialog}
     </div>
   );
 }

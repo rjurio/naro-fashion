@@ -1,12 +1,16 @@
 /**
  * Tiny promise wrapper around IndexedDB for the admin offline layer.
  *
- * Database `naro-admin-offline` (v1) with four object stores, all created now
- * so later phases never need a version bump:
- *   - responses  keyPath `key`  — last good GET response per scope+path (Phase 1)
- *   - outbox     keyPath `id`   — queued offline writes            (Phase 3)
- *   - conflicts  keyPath `id`   — writes the server refused (409)  (Phase 3)
+ * Database `naro-admin-offline`:
+ *   - responses  keyPath `key`  — last good GET response per scope+path (v1, Phase 1)
+ *   - outbox     keyPath `id`   — queued offline writes            (v1, Phase 3)
+ *   - conflicts  keyPath `id`   — writes the server refused (409)  (v1, Phase 3)
  *   - meta       keyPath `key`  — small key/value pairs (lastSyncAt, profile…)
+ *   - blobs      keyPath `id`   — photos picked offline, uploaded by the sync
+ *                                 engine before the queued write that uses them (v2, Phase 4)
+ *
+ * Upgrades are additive: `onupgradeneeded` only creates stores that are
+ * missing, so a v1 database keeps all its data when it becomes v2.
  *
  * Every function degrades to a no-op (resolves null / 0 / []) when IndexedDB
  * is unavailable — SSR, Firefox private mode, blocked storage, quota errors.
@@ -15,9 +19,9 @@
  */
 
 export const OFFLINE_DB_NAME = 'naro-admin-offline';
-const OFFLINE_DB_VERSION = 1;
+const OFFLINE_DB_VERSION = 2;
 
-export type StoreName = 'responses' | 'outbox' | 'conflicts' | 'meta';
+export type StoreName = 'responses' | 'outbox' | 'conflicts' | 'meta' | 'blobs';
 
 /** Cached GET response (Phase 1). */
 export interface CachedResponseRecord {
@@ -82,6 +86,11 @@ function openDb(): Promise<IDBDatabase | null> {
       }
       if (!db.objectStoreNames.contains('meta')) {
         db.createObjectStore('meta', { keyPath: 'key' });
+      }
+      // v2 (Phase 4): offline photos.
+      if (!db.objectStoreNames.contains('blobs')) {
+        const s = db.createObjectStore('blobs', { keyPath: 'id' });
+        s.createIndex('createdAt', 'createdAt');
       }
     };
     req.onsuccess = () => {
@@ -151,6 +160,41 @@ export function idbPut<T>(store: StoreName, value: T): Promise<boolean> {
   );
 }
 
+/** Outcome of a write whose failure the caller must explain (e.g. storage full). */
+export type StrictPutResult = 'ok' | 'quota' | 'unavailable' | 'error';
+
+function isQuotaError(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name;
+  return name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED';
+}
+
+/**
+ * Like idbPut, but tells a full disk ('quota') apart from "IndexedDB is not
+ * available" — used for offline photos, where the user must be told why the
+ * photo couldn't be kept.
+ */
+export async function idbPutStrict<T>(store: StoreName, value: T): Promise<StrictPutResult> {
+  let db: IDBDatabase | null;
+  try {
+    db = await openDb();
+  } catch {
+    return 'unavailable';
+  }
+  if (!db) return 'unavailable';
+  try {
+    const tx = db.transaction(store, 'readwrite');
+    tx.objectStore(store).put(value);
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    return 'ok';
+  } catch (err) {
+    return isQuotaError(err) ? 'quota' : 'error';
+  }
+}
+
 export function idbDelete(store: StoreName, key: IDBValidKey): Promise<boolean> {
   return withStore<boolean>(
     store,
@@ -212,7 +256,7 @@ export async function idbClearAll(): Promise<void> {
   try {
     const db = await openDb();
     if (!db) return;
-    const names: StoreName[] = ['responses', 'outbox', 'conflicts', 'meta'];
+    const names: StoreName[] = ['responses', 'outbox', 'conflicts', 'meta', 'blobs'];
     const tx = db.transaction(names, 'readwrite');
     for (const n of names) tx.objectStore(n).clear();
     await new Promise<void>((resolve, reject) => {
@@ -228,7 +272,8 @@ export async function idbClearAll(): Promise<void> {
 /**
  * Logout: wipe what the next person on this device must not see (cached API
  * responses + small key/values such as the cached profile and POS catalog)
- * but KEEP `outbox` and `conflicts` — unsynced work belongs to its user
+ * but KEEP `outbox`, `conflicts` and `blobs` (offline photos referenced by
+ * queued writes) — unsynced work belongs to its user
  * (entries carry a `tenant:user` scope) and syncs when they sign in again.
  */
 export async function idbClearForLogout(): Promise<void> {

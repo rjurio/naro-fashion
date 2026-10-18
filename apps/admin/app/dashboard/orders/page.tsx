@@ -6,7 +6,14 @@ import Image from 'next/image';
 import DataTable, { type Column } from '@/components/ui/DataTable';
 import Button from '@/components/ui/Button';
 import ServerPager from '@/components/ui/ServerPager';
-import { adminApi } from '@/lib/api';
+import { adminApi, isConflictError } from '@/lib/api';
+import { useSyncStatus } from '@/contexts/SyncContext';
+import { useOutboxVersion } from '@/lib/offline/use-outbox-version';
+import { isQueuedResult } from '@/lib/offline/outbox';
+import { pendingStateOf, type PendingSyncState } from '@/lib/offline/pending-overlay';
+import { NEEDS_INTERNET, SAVED_OFFLINE_MESSAGE } from '@/lib/offline/feedback';
+import PendingSyncPill from '@/components/offline/PendingSyncPill';
+import { useStaleRecordDialog } from '@/components/offline/StaleRecordDialog';
 import { ADMIN_PAGE_SIZE, normalizePaginated } from '@/lib/pagination';
 import { useToast } from '@/contexts/ToastContext';
 import OrderRefundsPanel, { REFUND_RELEVANT_PAYMENT_STATUSES } from './OrderRefundsPanel';
@@ -36,8 +43,16 @@ interface Order {
   rawItems: OrderItem[];
   shippingAddress?: string;
   notes?: string;
+  /** Offline: a status change saved on this device and not synced yet. */
+  syncState: PendingSyncState | null;
   [key: string]: unknown;
 }
+
+/**
+ * Cancelling an order that has money on it starts the refund workflow
+ * (paymentStatus → REFUND_PENDING), so it stays online-only.
+ */
+const PAID_PAYMENT_STATUSES = new Set(['PAID', 'COMPLETED', 'PARTIAL']);
 
 // Mirrors OrdersService.updateStatus validTransitions on the API.
 const STATUS_TRANSITIONS: Record<string, string[]> = {
@@ -120,6 +135,7 @@ function mapOrder(o: any): Order {
     rawItems: Array.isArray(o.items) ? o.items : [],
     shippingAddress: formatAddress(o.address),
     notes: o.notes || '',
+    syncState: pendingStateOf(o),
   };
 }
 
@@ -137,6 +153,9 @@ export default function OrdersPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const { online } = useSyncStatus();
+  const outboxVersion = useOutboxVersion();
+  const stale = useStaleRecordDialog('order');
 
   // Debounce search; any filter change resets to page 1.
   useEffect(() => {
@@ -167,20 +186,34 @@ export default function OrdersPage() {
       setLoading(false);
       setFetching(false);
     }
-  }, [page, debouncedSearch, statusFilter]);
+    // outboxVersion: re-read so queued status changes show (and clear once synced).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, debouncedSearch, statusFilter, outboxVersion]);
 
   useEffect(() => {
     fetchOrders();
   }, [fetchOrders]);
 
-  const handleStatusUpdate = async (orderId: string, newStatus: string) => {
-    setUpdatingId(orderId);
+  const handleStatusUpdate = async (order: Order, newStatus: string) => {
+    setUpdatingId(order.id);
     try {
-      await adminApi.updateOrderStatus(orderId, newStatus);
-      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o)));
-      toast(`Order marked ${titleCase(newStatus)}`, 'success');
+      // expectedStatus = the status on screen: a change made meanwhile by
+      // someone else becomes a 409 CONFLICT instead of being overwritten.
+      const result = await adminApi.updateOrderStatus(
+        order.id,
+        newStatus,
+        order.status,
+        `Order #${order.orderNumber} → ${titleCase(newStatus)}`,
+      );
+      const queued = isQueuedResult(result);
+      setOrders((prev) =>
+        prev.map((o) => (o.id === order.id ? { ...o, status: newStatus, syncState: queued ? 'pending' : o.syncState } : o)),
+      );
+      if (queued) toast(SAVED_OFFLINE_MESSAGE, 'info');
+      else toast(`Order marked ${titleCase(newStatus)}`, 'success');
     } catch (err: any) {
-      toast(err?.message || 'Failed to update order status', 'error');
+      if (isConflictError(err)) stale.open(fetchOrders);
+      else toast(err?.message || 'Failed to update order status', 'error');
     } finally {
       setUpdatingId(null);
     }
@@ -245,22 +278,29 @@ export default function OrdersPage() {
       header: 'Status',
       render: (order) => {
         const next = STATUS_TRANSITIONS[order.status] || [];
+        // Offline: cancelling a paid order (refund workflow) waits for the internet.
+        const cancelNeedsInternet = !online && PAID_PAYMENT_STATUSES.has(order.paymentStatus);
         return (
-          <span className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <span className="inline-flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
             <select
               value={order.status}
               disabled={next.length === 0 || updatingId === order.id}
-              onChange={(e) => handleStatusUpdate(order.id, e.target.value)}
+              onChange={(e) => handleStatusUpdate(order, e.target.value)}
               className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border-none outline-none cursor-pointer disabled:cursor-default ${STATUS_COLORS[order.status] || ''}`}
             >
               <option value={order.status}>{titleCase(order.status)}</option>
-              {next.map((s) => (
-                <option key={s} value={s}>
-                  {titleCase(s)}
-                </option>
-              ))}
+              {next.map((s) => {
+                const blocked = s === 'CANCELLED' && cancelNeedsInternet;
+                return (
+                  <option key={s} value={s} disabled={blocked}>
+                    {titleCase(s)}
+                    {blocked ? ` (${NEEDS_INTERNET.toLowerCase()} — paid order)` : ''}
+                  </option>
+                );
+              })}
             </select>
             {updatingId === order.id && <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-gold" />}
+            <PendingSyncPill state={order.syncState} />
           </span>
         );
       },
@@ -409,6 +449,7 @@ export default function OrdersPage() {
                   </div>
                   {order.type !== 'POS' && REFUND_RELEVANT_PAYMENT_STATUSES.includes(order.paymentStatus) && (
                     <OrderRefundsPanel
+                      online={online}
                       orderId={order.id}
                       orderNumber={order.orderNumber}
                       onPaymentStatusChange={(ps) =>
@@ -444,6 +485,7 @@ export default function OrdersPage() {
           />
         </>
       )}
+      {stale.dialog}
     </div>
   );
 }

@@ -41,6 +41,8 @@ const inputCls =
   'w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold';
 
 interface Props {
+  /** API reachable — refunds are online-only (money movement). Defaults to true. */
+  online?: boolean;
   orderId: string;
   orderNumber: string;
   /** Called after a refund so the parent row's payment badge updates. */
@@ -51,7 +53,7 @@ interface Props {
  * Expanded-row refund panel for ONLINE orders: refund history, balances and a
  * "Record refund" modal (POST /orders/:id/refunds, `orders:refund`).
  */
-export default function OrderRefundsPanel({ orderId, orderNumber, onPaymentStatusChange }: Props) {
+export default function OrderRefundsPanel({ online = true, orderId, orderNumber, onPaymentStatusChange }: Props) {
   const { hasPermission } = useAuth();
   const { toast } = useToast();
   const allowed = hasPermission('orders:refund');
@@ -133,7 +135,13 @@ export default function OrderRefundsPanel({ orderId, orderNumber, onPaymentStatu
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="text-sm font-semibold text-[hsl(var(--foreground))]">Refunds</h4>
         {summary?.canRefund && (
-          <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); openModal(); }}>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!online}
+            title={online ? undefined : 'Needs internet — refunds are recorded on the server'}
+            onClick={(e) => { e.stopPropagation(); openModal(); }}
+          >
             <RotateCcw className="w-3.5 h-3.5" />
             Record refund
           </Button>
@@ -194,7 +202,7 @@ export default function OrderRefundsPanel({ orderId, orderNumber, onPaymentStatu
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setOpen(false)} disabled={submitting}>Cancel</Button>
-            <Button onClick={submit} disabled={submitting}>
+            <Button onClick={submit} disabled={submitting || !online} title={online ? undefined : 'Needs internet'}>
               {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
               {submitting ? 'Recording…' : 'Record refund'}
             </Button>

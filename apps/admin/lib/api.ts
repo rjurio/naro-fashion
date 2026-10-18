@@ -15,10 +15,18 @@ import {
 } from './offline/sync-store';
 import {
   enqueue as enqueueOutbox,
+  listOutbox,
   optimisticResult,
   prepareOfflineMutation,
   type PreparedMutation,
 } from './offline/outbox';
+import {
+  applyPendingOverlay,
+  matchOverlayTarget,
+  synthesizeDetail,
+  type OverlayTarget,
+} from './offline/pending-overlay';
+import { blobUrl, isOfflineUploadEndpoint, storeOfflineBlob } from './offline/blobs';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
 
@@ -43,19 +51,41 @@ export type QueuedSendResult =
  * Machine-readable error codes set by the client itself (not the server):
  *  - OFFLINE: the API is unreachable (no connection / server down). `status` is 0.
  *  - NETWORK: internal — a fetch failed at the network level (e.g. during token refresh).
+ *  - STORAGE_FULL: an offline photo couldn't be kept because the device storage is full.
  */
-export type ApiErrorCode = 'OFFLINE' | 'NETWORK';
+export type ApiErrorCode = 'OFFLINE' | 'NETWORK' | 'STORAGE_FULL';
 
 export class ApiError extends Error {
   status: number;
   code?: ApiErrorCode;
-  constructor(status: number, message: string, code?: ApiErrorCode) {
+  /** `code` from the server's JSON error body (e.g. 'CONFLICT'), if any. */
+  serverCode?: string;
+  /** Parsed JSON error body (e.g. `{ code:'CONFLICT', current }` for a 409). */
+  data?: any;
+  constructor(status: number, message: string, code?: ApiErrorCode, extra?: { serverCode?: string; data?: any }) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.serverCode = extra?.serverCode;
+    this.data = extra?.data;
   }
 }
+
+/** Message shown when an optimistic-concurrency check fails (409 CONFLICT). */
+export const CONFLICT_MESSAGE = 'Someone else changed this since you opened it. Your change was not saved.';
+
+/**
+ * 409 `{ code:'CONFLICT' }`: the record changed on the server since the
+ * operator loaded it (`expectedUpdatedAt` / `expectedStatus` mismatch).
+ * `err.data.current` holds the server's current version.
+ */
+export function isConflictError(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.status === 409 && err.serverCode === 'CONFLICT';
+}
+
+export const STORAGE_FULL_MESSAGE =
+  "This device is out of storage space, so the photo couldn't be kept offline. Free up space or reconnect, then try again.";
 
 export const OFFLINE_MUTATION_MESSAGE = "You're offline. This change needs an internet connection.";
 export const OFFLINE_UNSAVED_MUTATION_MESSAGE =
@@ -231,8 +261,9 @@ class AdminApiClient {
 
   private async handleError(response: Response): Promise<never> {
     let message = `API Error: ${response.status} ${response.statusText}`;
+    let body: any = undefined;
     try {
-      const body = await response.json();
+      body = await response.json();
       if (body?.message) {
         message = Array.isArray(body.message) ? body.message.join(', ') : body.message;
       } else if (body?.error?.message) {
@@ -248,7 +279,10 @@ class AdminApiClient {
         window.dispatchEvent(new CustomEvent(API_FORBIDDEN_EVENT, { detail: { message } }));
       }
     }
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, undefined, {
+      serverCode: typeof body?.code === 'string' ? body.code : undefined,
+      data: body,
+    });
   }
 
   setToken(token: string) {
@@ -412,10 +446,77 @@ class AdminApiClient {
     };
   }
 
-  /** authorizedFetch + JSON error handling for multipart uploads. */
-  private async uploadMultipart<T>(endpoint: string, file: File, fallbackError = 'Upload failed'): Promise<T> {
+  /**
+   * Upload an offline photo (sync engine) with its own Idempotency-Key, so a
+   * retried upload returns the stored `{ url }` instead of storing the file twice.
+   * HTTP errors are returned, not thrown — same contract as sendQueued.
+   */
+  async sendQueuedUpload(endpoint: string, blob: Blob, filename: string, idempotencyKey: string): Promise<QueuedSendResult> {
+    const formData = new FormData();
+    formData.append('file', blob, filename);
+    let res: Response;
+    try {
+      res = await this.authorizedFetch(this.buildUrl(endpoint), {
+        method: 'POST',
+        body: formData,
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        reportNetworkFailure();
+        return { kind: 'network' };
+      }
+      if (err instanceof ApiError) return { kind: 'transient', status: err.status, message: err.message };
+      throw err;
+    }
+    if (res.status >= 502 && res.status <= 504) reportNetworkFailure();
+    else reportServerReachable();
+    const text = await res.text().catch(() => '');
+    let data: any = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = { message: text };
+    }
+    return {
+      kind: 'response',
+      status: res.status,
+      ok: res.ok,
+      data,
+      replayed: res.headers.get('Idempotency-Replayed') === 'true',
+    };
+  }
+
+  /**
+   * Offline photo: keep the file in the IndexedDB `blobs` store and return an
+   * optimistic `{ url: 'offline-blob://<id>' }`. The sync engine uploads it
+   * before the queued write that references the URL. Only for the photo
+   * endpoints in OFFLINE_UPLOAD_ENDPOINTS (lib/offline/blobs.ts).
+   */
+  private async keepUploadOffline<T>(endpoint: string, file: File, offlineMessage: string): Promise<T> {
+    const scope = scopeFromIdentity(identityFromToken(this.getStoredToken()));
+    if (!scope || !isOfflineUploadEndpoint(endpoint)) throw new ApiError(0, offlineMessage, 'OFFLINE');
+    const stored = await storeOfflineBlob(scope, endpoint, file, file.name);
+    if (!stored.ok) {
+      if (stored.reason === 'quota') throw new ApiError(0, STORAGE_FULL_MESSAGE, 'STORAGE_FULL');
+      throw new ApiError(0, offlineMessage, 'OFFLINE');
+    }
+    return { url: blobUrl(stored.record.id), filename: stored.record.name, __offline: true } as unknown as T;
+  }
+
+  /**
+   * authorizedFetch + JSON error handling for multipart uploads.
+   * `allowOffline`: when the API can't be reached, keep the file on the device
+   * (product / category photos only) instead of failing.
+   */
+  private async uploadMultipart<T>(
+    endpoint: string,
+    file: File,
+    fallbackError = 'Upload failed',
+    allowOffline = false,
+  ): Promise<T> {
     if (isBrowserOffline()) {
-      // Phase 3: enqueue here (offline photo → `blobs` store, uploaded before the queued body).
+      if (allowOffline) return this.keepUploadOffline<T>(endpoint, file, OFFLINE_MUTATION_MESSAGE);
       throw new ApiError(0, OFFLINE_MUTATION_MESSAGE, 'OFFLINE');
     }
     const formData = new FormData();
@@ -426,9 +527,14 @@ class AdminApiClient {
     } catch (err) {
       if (isNetworkFailure(err)) {
         reportNetworkFailure();
+        if (allowOffline) return this.keepUploadOffline<T>(endpoint, file, OFFLINE_UNSAVED_MUTATION_MESSAGE);
         throw new ApiError(0, OFFLINE_UNSAVED_MUTATION_MESSAGE, 'OFFLINE');
       }
       throw err;
+    }
+    if (allowOffline && res.status >= 502 && res.status <= 504) {
+      reportNetworkFailure();
+      return this.keepUploadOffline<T>(endpoint, file, OFFLINE_UNSAVED_MUTATION_MESSAGE);
     }
     reportServerReachable();
     if (res.ok) markOwnMutation();
@@ -464,10 +570,13 @@ class AdminApiClient {
     const cacheable = isGet && isCacheableEndpoint(endpoint);
     const cachePath = url.startsWith(this.baseUrl) ? url.slice(this.baseUrl.length) : url;
     const cacheScope = cacheable ? scopeFromIdentity(identityFromToken(this.getStoredToken())) : null;
+    // Pending overlay (Phase 4): lists/details of offline-writable entities show
+    // this user's unsynced changes on top of the server / cached data.
+    const overlay = isGet ? matchOverlayTarget(cachePath) : null;
 
     if (isBrowserOffline()) {
       if (isGet) {
-        if (cacheable) return this.serveFromCache<T>(cacheScope, cachePath);
+        if (cacheable) return this.serveFromCache<T>(cacheScope, cachePath, overlay);
         throw new ApiError(0, OFFLINE_READ_MESSAGE, 'OFFLINE');
       }
       if (prepared) {
@@ -489,7 +598,7 @@ class AdminApiClient {
       // The server could not be reached at all (not an HTTP error response).
       reportNetworkFailure();
       if (isGet) {
-        if (cacheable) return this.serveFromCache<T>(cacheScope, cachePath);
+        if (cacheable) return this.serveFromCache<T>(cacheScope, cachePath, overlay);
         throw new ApiError(0, OFFLINE_READ_MESSAGE, 'OFFLINE');
       }
       // Failed mid-flight: queue it with the SAME Idempotency-Key, so if it did
@@ -509,24 +618,63 @@ class AdminApiClient {
     reportServerReachable();
 
     if (!response.ok) {
+      // A record created on this device that hasn't synced yet: the server
+      // doesn't know it, so open it from the queued create instead.
+      if (overlay?.mode === 'detail' && response.status === 404) {
+        const local = await this.synthesizeLocal(overlay);
+        if (local) return local as T;
+      }
       await this.handleError(response);
     }
     const text = await response.text();
+    let parsed: unknown = text ? JSON.parse(text) : null;
     if (isGet) {
       markNetworkSuccess();
       if (cacheable) void writeCachedResponse(cacheScope, cachePath, text);
+      if (overlay) parsed = await this.withPendingOverlay(overlay, parsed);
     } else {
       markOwnMutation();
     }
-    return (text ? JSON.parse(text) : null) as T;
+    return parsed as T;
+  }
+
+  /** The signed-in user's outbox entries (for the pending overlay); [] without a session. */
+  private async ownOutbox() {
+    const scope = scopeFromIdentity(identityFromToken(this.getStoredToken()));
+    if (!scope) return [];
+    return listOutbox(scope);
+  }
+
+  /** Merge unsynced outbox changes into a GET response. Never throws (falls back to the raw data). */
+  private async withPendingOverlay(target: OverlayTarget, data: unknown): Promise<unknown> {
+    try {
+      const entries = await this.ownOutbox();
+      return entries.length ? applyPendingOverlay(target, data, entries) : data;
+    } catch {
+      return data;
+    }
+  }
+
+  private async synthesizeLocal(target: OverlayTarget): Promise<unknown | null> {
+    try {
+      return synthesizeDetail(target, await this.ownOutbox());
+    } catch {
+      return null;
+    }
   }
 
   /** Answer a GET from the device cache, or fail with a clear offline error. */
-  private async serveFromCache<T>(scope: string | null, cachePath: string): Promise<T> {
+  private async serveFromCache<T>(scope: string | null, cachePath: string, overlay: OverlayTarget | null = null): Promise<T> {
     const cached = await readCachedResponse(scope, cachePath);
-    if (!cached) throw new ApiError(0, OFFLINE_READ_MESSAGE, 'OFFLINE');
+    if (!cached) {
+      if (overlay?.mode === 'detail') {
+        const local = await this.synthesizeLocal(overlay);
+        if (local) return local as T;
+      }
+      throw new ApiError(0, OFFLINE_READ_MESSAGE, 'OFFLINE');
+    }
     noteCachedServed(cached.savedAt);
-    return cached.data as T;
+    return (overlay ? await this.withPendingOverlay(overlay, cached.data) : cached.data) as T;
   }
 
   async get<T>(endpoint: string, options?: RequestOptions): Promise<T> {
@@ -729,8 +877,9 @@ class AdminApiClient {
   getProductById(id: string) {
     return this.get<any>(`/products/by-id/${id}`);
   }
-  uploadImage(file: File): Promise<{ url: string; filename: string }> {
-    return this.uploadMultipart('/upload/image', file);
+  /** Product photos: kept on the device when offline (`offline-blob://…`) and uploaded on sync. */
+  uploadImage(file: File): Promise<{ url: string; filename: string; __offline?: true }> {
+    return this.uploadMultipart('/upload/image', file, 'Upload failed', true);
   }
   upload3dModel(file: File): Promise<{ url: string; filename: string }> {
     return this.uploadMultipart('/upload/3d-model', file);
@@ -839,13 +988,16 @@ class AdminApiClient {
   getRental(id: string) {
     return this.get<any>(`/rentals/${id}`);
   }
-  /** `expectedStatus` (the status the operator saw) turns a concurrent change into a reviewable 409 CONFLICT. */
+  /**
+   * `expectedStatus` (the status the operator saw) turns a concurrent change into a reviewable 409 CONFLICT.
+   * RETURNED carries `returnedAt` (now, on this device) so a return recorded offline keeps its real
+   * time — the late fee is computed from it, not from when the change synced.
+   */
   updateRentalStatus(id: string, status: string, expectedStatus?: string, offlineLabel?: string) {
-    return this.patch<any>(
-      `/rentals/${id}/status`,
-      expectedStatus ? { status, expectedStatus } : { status },
-      offlineLabel ? { offlineLabel } : undefined,
-    );
+    const body: Record<string, string> = { status };
+    if (expectedStatus) body.expectedStatus = expectedStatus;
+    if (status === 'RETURNED') body.returnedAt = new Date().toISOString();
+    return this.patch<any>(`/rentals/${id}/status`, body, offlineLabel ? { offlineLabel } : undefined);
   }
   markRentalReady(id: string) {
     return this.patch<any>(`/rentals/${id}/ready`, {});
@@ -1137,7 +1289,8 @@ class AdminApiClient {
     return this.uploadMultipart('/upload/hero-slide', file);
   }
   uploadCategoryImage(file: File): Promise<{ url: string; filename: string }> {
-    return this.uploadMultipart('/upload/category', file);
+    // Category photos: kept on the device when offline, uploaded on sync.
+    return this.uploadMultipart('/upload/category', file, 'Upload failed', true);
   }
   uploadBanner(file: File): Promise<{ url: string; filename: string }> {
     return this.uploadMultipart('/upload/banner', file);
