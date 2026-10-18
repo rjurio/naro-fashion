@@ -50,6 +50,12 @@ async function bootstrap() {
       ...splitOrigins(process.env.ADMIN_URL, 'http://localhost:3001'),
     ],
     credentials: true,
+    // Admin offline mode: the sync engine sends `Idempotency-Key` on replayed
+    // writes. allowedHeaders is deliberately left unset — the cors package
+    // then reflects Access-Control-Request-Headers, which already admits
+    // Idempotency-Key (an explicit list would risk dropping headers existing
+    // clients send). The replay marker must be exposed to be readable in JS.
+    exposedHeaders: ['Idempotency-Replayed'],
   });
 
   app.setGlobalPrefix('api/v1');

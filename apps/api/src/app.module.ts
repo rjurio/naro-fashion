@@ -47,6 +47,8 @@ import { ProductSizesModule } from './product-sizes/product-sizes.module';
 import { AiModule } from './ai/ai.module';
 import { AiAssistantModule } from './ai-assistant/ai-assistant.module';
 import { HealthModule } from './health/health.module';
+import { IdempotencyModule } from './idempotency/idempotency.module';
+import { SyncModule } from './sync/sync.module';
 import { AppThrottlerGuard } from './health/app-throttler.guard';
 
 @Module({
@@ -108,6 +110,10 @@ import { AppThrottlerGuard } from './health/app-throttler.guard';
     AiModule,
     AiAssistantModule,
     HealthModule,
+    // Admin offline mode + sync: global Idempotency-Key interceptor for admin
+    // mutations (+ retention cron) and GET /sync/changes.
+    IdempotencyModule,
+    SyncModule,
   ],
   providers: [
     // Global rate limiting. Was configured via ThrottlerModule.forRoot but

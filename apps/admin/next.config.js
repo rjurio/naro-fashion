@@ -25,7 +25,18 @@ const nextConfig = {
   reactStrictMode: true,
 
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }];
+    return [
+      { source: '/:path*', headers: securityHeaders },
+      // Offline service worker (public/sw.js): always revalidate so a new
+      // deploy's worker is picked up promptly; allow it to control the origin.
+      {
+        source: '/sw.js',
+        headers: [
+          { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
+          { key: 'Service-Worker-Allowed', value: '/' },
+        ],
+      },
+    ];
   },
 
   async rewrites() {

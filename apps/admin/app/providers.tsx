@@ -3,6 +3,8 @@
 import { ThemeProvider } from 'next-themes';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { SiteSettingsProvider } from '@/contexts/SiteSettingsContext';
+import { SyncProvider } from '@/contexts/SyncContext';
+import ServiceWorkerRegistrar from '@/components/offline/ServiceWorkerRegistrar';
 
 export default function Providers({
   children,
@@ -21,7 +23,12 @@ export default function Providers({
       nonce={nonce}
     >
       <SiteSettingsProvider>
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <SyncProvider>
+            <ServiceWorkerRegistrar />
+            {children}
+          </SyncProvider>
+        </AuthProvider>
       </SiteSettingsProvider>
     </ThemeProvider>
   );

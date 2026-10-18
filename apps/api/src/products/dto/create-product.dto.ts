@@ -8,8 +8,10 @@ import {
   Min,
   MaxLength,
   ValidateNested,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { CLIENT_ID_REGEX } from '../../common/offline-sync.util';
 
 export class CreateVariantDto {
   @IsString()
@@ -48,6 +50,16 @@ export class CreateVariantDto {
 }
 
 export class CreateProductDto {
+  /**
+   * Optional client-generated id (admin offline mode). Lets an offline
+   * device create a record and keep editing it before sync without id
+   * mapping. Collision with any existing row → 409 ID_CONFLICT.
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(CLIENT_ID_REGEX, { message: 'id must match ^[a-z0-9][a-z0-9_-]{19,40}$' })
+  id?: string;
+
   @IsString()
   @MaxLength(200)
   name: string;

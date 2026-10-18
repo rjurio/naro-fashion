@@ -2,6 +2,14 @@ import { IsString, IsOptional, IsNumber, IsDateString, IsPositive } from 'class-
 import { Type } from 'class-transformer';
 
 export class UpdateExpenseDto {
+  /**
+   * Optimistic concurrency (admin offline mode): the updatedAt the client
+   * last saw. Mismatch → 409 CONFLICT with the current record. Omit = no check.
+   */
+  @IsOptional()
+  @IsDateString()
+  expectedUpdatedAt?: string;
+
   @IsOptional()
   @IsString()
   categoryId?: string;

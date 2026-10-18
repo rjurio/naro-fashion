@@ -60,6 +60,6 @@ export class OrdersController {
     @Body() dto: UpdateOrderStatusDto,
     @CurrentUser() user: any,
   ) {
-    return this.ordersService.updateStatus(id, dto.status, user);
+    return this.ordersService.updateStatus(id, dto.status, user, dto.expectedStatus);
   }
 }

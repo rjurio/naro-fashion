@@ -1,5 +1,7 @@
 import {
   IsArray,
+  IsBoolean,
+  IsDateString,
   IsEnum,
   IsNumber,
   IsOptional,
@@ -78,4 +80,26 @@ export class CreatePosSaleDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  // ---- Admin offline mode -------------------------------------------------
+
+  /**
+   * True when the sale was rung up on a device without internet and is being
+   * replayed after reconnect. Offline sales: only CASH or manual mobile-money
+   * with a transactionRef; never rejected for short stock (stock clamped at 0,
+   * order flagged `oversold`); order createdAt = clientCreatedAt.
+   */
+  @IsOptional()
+  @IsBoolean()
+  offline?: boolean;
+
+  /** Real sale time on the device (ISO). ≤ 5 min in the future, ≤ 30 days old. */
+  @IsOptional()
+  @IsDateString()
+  clientCreatedAt?: string;
+
+  /** The POS shift that was open on the device when the sale was made. */
+  @IsOptional()
+  @IsString()
+  sessionId?: string;
 }

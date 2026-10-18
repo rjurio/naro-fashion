@@ -1,8 +1,10 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import {
@@ -126,6 +128,78 @@ export function allocateChange(
     net.push(round2(p.amount - c));
   }
   return { net, change, changeDue };
+}
+
+// ============================================================
+// Offline sales (admin offline mode)
+// ============================================================
+
+/** Payment methods an offline device may record without any reference. */
+export const OFFLINE_NO_REF_METHODS: ReadonlySet<string> = new Set(['CASH']);
+
+/**
+ * Manual methods an offline device may record ONLY with the customer's
+ * transaction reference (the customer already paid to the till/lipa number;
+ * the cashier types the confirmation code). POS never calls a gateway, but
+ * CARD needs a live terminal authorisation and unknown codes fail closed.
+ */
+export const OFFLINE_MANUAL_REF_METHODS: ReadonlySet<string> = new Set([
+  'MPESA',
+  'TIGO_PESA',
+  'AIRTEL_MONEY',
+  'HALOPESA',
+  'MIX_BY_YAS',
+  'SELCOM_PESA',
+  'MOBILE_MONEY',
+  'BANK_TRANSFER',
+]);
+
+export const OFFLINE_MAX_FUTURE_MS = 5 * 60 * 1000;
+export const OFFLINE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function needsOnline(message: string): BadRequestException {
+  return new BadRequestException({ statusCode: 400, code: 'NEEDS_ONLINE_PAYMENT', message });
+}
+
+/** Throws 400 NEEDS_ONLINE_PAYMENT for any payment an offline sale can't carry. */
+export function assertOfflinePayments(payments: { method: string; transactionRef?: string | null }[]): void {
+  for (const p of payments) {
+    const method = (p.method || '').toUpperCase();
+    if (OFFLINE_NO_REF_METHODS.has(method)) continue;
+    if (OFFLINE_MANUAL_REF_METHODS.has(method)) {
+      if (!p.transactionRef || !p.transactionRef.trim()) {
+        throw needsOnline(`${p.method} recorded offline needs the customer's transaction reference.`);
+      }
+      continue;
+    }
+    throw needsOnline(`${p.method} payments need an internet connection. Use cash or mobile money with a reference.`);
+  }
+}
+
+/**
+ * Resolve the real sale time of an offline sale. Absent → now. Rejects more
+ * than 5 min in the future (device clock wrong) or older than 30 days; a
+ * small future skew (≤ 5 min) is clamped to now so no row is dated ahead.
+ */
+export function resolveClientCreatedAt(raw: string | undefined, now: Date = new Date()): Date {
+  if (!raw) return now;
+  const t = new Date(raw);
+  if (Number.isNaN(t.getTime())) throw new BadRequestException('clientCreatedAt must be a valid ISO date.');
+  if (t.getTime() > now.getTime() + OFFLINE_MAX_FUTURE_MS) {
+    throw new BadRequestException('clientCreatedAt is in the future — check the device clock.');
+  }
+  if (t.getTime() < now.getTime() - OFFLINE_MAX_AGE_MS) {
+    throw new BadRequestException('clientCreatedAt is older than 30 days; record this sale manually.');
+  }
+  return t.getTime() > now.getTime() ? now : t;
+}
+
+export interface OversoldLine {
+  productId: string;
+  variantId: string;
+  requested: number;
+  fulfilledFromStock: number;
+  shortfall: number;
 }
 
 @Injectable()
@@ -443,13 +517,40 @@ export class PosService {
 
   async createSale(dto: CreatePosSaleDto, cashierId: string) {
     const tenantId = this.tenantContext.requireId;
+    const offline = dto.offline === true;
+    const now = new Date();
+    // Real sale time for an offline replay; non-offline sales ignore the
+    // offline-only fields entirely (behaviour unchanged).
+    const saleAt = offline ? resolveClientCreatedAt(dto.clientCreatedAt, now) : now;
+    if (offline) assertOfflinePayments(dto.payments ?? []);
 
-    // 1. Validate open session
-    const session = await this.prisma.posSession.findFirst({
-      where: { adminUserId: cashierId, status: 'OPEN', tenantId },
-    });
-    if (!session) {
-      throw new BadRequestException('No open session. Please open a shift first.');
+    // 1. Validate session. An offline replay may name the shift that was open
+    // on the device at sale time (it may have been closed since) — it must be
+    // this tenant's, this cashier's, and cover the sale time.
+    let session;
+    if (offline && dto.sessionId) {
+      session = await this.prisma.posSession.findFirst({
+        where: { id: dto.sessionId, tenantId, adminUserId: cashierId },
+      });
+      if (!session) {
+        throw new BadRequestException('POS session not found for this cashier.');
+      }
+      const windowEnd = session.closedAt ?? now;
+      if (saleAt < session.openedAt || saleAt > windowEnd) {
+        throw new BadRequestException(
+          'The sale time is outside the selected shift (opened ' +
+            session.openedAt.toISOString() +
+            (session.closedAt ? `, closed ${session.closedAt.toISOString()}` : '') +
+            ').',
+        );
+      }
+    } else {
+      session = await this.prisma.posSession.findFirst({
+        where: { adminUserId: cashierId, status: 'OPEN', tenantId },
+      });
+      if (!session) {
+        throw new BadRequestException('No open session. Please open a shift first.');
+      }
     }
 
     if (!dto.items || dto.items.length === 0) {
@@ -474,7 +575,9 @@ export class PosService {
       if (!variant) {
         throw new BadRequestException(`Variant ${item.variantId} not found.`);
       }
-      if (variant.stock < item.quantity) {
+      // Offline: the cash is already in the drawer — never reject for stock;
+      // the shortfall is clamped + flagged inside the transaction instead.
+      if (!offline && variant.stock < item.quantity) {
         throw new BadRequestException(
           `Insufficient stock for ${variant.product.name} (${variant.name}). Available: ${variant.stock}, requested: ${item.quantity}`,
         );
@@ -532,6 +635,7 @@ export class PosService {
           posSessionId: session.id,
           customerName: dto.customerName,
           customerPhone: dto.customerPhone,
+          ...(offline ? { isOfflineSale: true, createdAt: saleAt } : {}),
           items: {
             create: dto.items.map((item, idx) => ({
               // productId is taken from the tenant-verified variant, never
@@ -565,15 +669,19 @@ export class PosService {
             method: payment.method,
             status: 'COMPLETED',
             transactionRef: payment.transactionRef ?? null,
+            ...(offline ? { createdAt: saleAt } : {}),
             gatewayResponse: {
               posSessionId: session.id,
               cashierId,
               tendered: payment.amount,
               change: change[idx],
+              ...(offline ? { offline: true, clientCreatedAt: saleAt.toISOString() } : {}),
             },
           },
         });
       }
+
+      const oversoldLines: OversoldLine[] = [];
 
       // Deduct stock and log inventory transactions.
       // Atomic guarded decrement (stock >= quantity) instead of an absolute
@@ -587,11 +695,27 @@ export class PosService {
           where: { id: item.variantId, tenantId, stock: { gte: item.quantity } },
           data: { stock: { decrement: item.quantity } },
         });
+        let fulfilled = item.quantity;
         if (dec.count === 0) {
-          throw new BadRequestException(
-            `Insufficient stock for ${variant.product.name} (${variant.name}). It may have sold out during checkout.`,
-          );
+          if (!offline) {
+            throw new BadRequestException(
+              `Insufficient stock for ${variant.product.name} (${variant.name}). It may have sold out during checkout.`,
+            );
+          }
+          // Offline sale: cash already taken — take what is left (never
+          // below 0) and flag the shortfall for review.
+          fulfilled = await this.clampDecrement(tx, tenantId, item.variantId, item.quantity);
+          if (fulfilled < item.quantity) {
+            oversoldLines.push({
+              productId: variant.productId,
+              variantId: item.variantId,
+              requested: item.quantity,
+              fulfilledFromStock: fulfilled,
+              shortfall: item.quantity - fulfilled,
+            });
+          }
         }
+        const shortfall = item.quantity - fulfilled;
 
         // Ledger values come from the post-decrement row read INSIDE the
         // transaction, not the stale pre-transaction read (which drifted
@@ -601,7 +725,7 @@ export class PosService {
           select: { stock: true },
         });
         const quantityAfter = after?.stock ?? 0;
-        const quantityBefore = quantityAfter + item.quantity;
+        const quantityBefore = quantityAfter + fulfilled;
 
         await tx.inventoryTransaction.create({
           data: {
@@ -610,15 +734,29 @@ export class PosService {
             variantId: item.variantId,
             type: 'SALE',
             quantityBefore,
-            quantityChange: -item.quantity,
+            quantityChange: -fulfilled,
             quantityAfter,
             unitCost: item.unitPrice,
             totalValue: item.unitPrice * item.quantity,
             reference: orderNumber,
-            note: `POS sale`,
+            note:
+              shortfall > 0
+                ? `POS offline sale — OVERSOLD by ${shortfall} (requested ${item.quantity}, ${fulfilled} from stock)`
+                : offline
+                  ? 'POS offline sale'
+                  : `POS sale`,
             performedBy: cashierId,
           },
         });
+      }
+
+      if (oversoldLines.length > 0) {
+        await tx.order.updateMany({
+          where: { id: newOrder.id, tenantId },
+          data: { oversold: true, oversoldDetails: oversoldLines as unknown as Prisma.InputJsonValue },
+        });
+        newOrder.oversold = true;
+        newOrder.oversoldDetails = oversoldLines as unknown as Prisma.JsonValue;
       }
 
       // Update session stats
@@ -633,7 +771,43 @@ export class PosService {
       return newOrder;
     });
 
-    return { order, changeDue };
+    return {
+      order,
+      changeDue,
+      isOfflineSale: order.isOfflineSale,
+      oversold: order.oversold,
+      oversoldDetails: (order.oversoldDetails as unknown as OversoldLine[] | null) ?? null,
+    };
+  }
+
+  /**
+   * Offline-sale stock clamp: take whatever is left (never below 0) after the
+   * guarded full decrement failed. Compare-and-swap on the stock value read
+   * inside the transaction, retried if a concurrent writer moves it. Returns
+   * the units actually taken from stock.
+   */
+  private async clampDecrement(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    variantId: string,
+    quantity: number,
+  ): Promise<number> {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const row = await tx.productVariant.findFirst({
+        where: { id: variantId, tenantId },
+        select: { stock: true },
+      });
+      const available = Math.max(0, row?.stock ?? 0);
+      if (available === 0) return 0;
+      const take = Math.min(available, quantity);
+      const res = await tx.productVariant.updateMany({
+        // CAS on the value just read AND a gte guard: can never go negative.
+        where: { id: variantId, tenantId, stock: { gte: take, equals: row!.stock } },
+        data: { stock: { decrement: take } },
+      });
+      if (res.count === 1) return take;
+    }
+    throw new ConflictException('Stock is changing rapidly for this item; retry the sync.');
   }
 
   async getSales(query: QueryPosSalesDto) {

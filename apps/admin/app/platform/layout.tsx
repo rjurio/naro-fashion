@@ -8,6 +8,7 @@ import TopBar from '@/components/layout/TopBar';
 import NavigationProgress from '@/components/ui/NavigationProgress';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { ConfirmDialogProvider } from '@/components/ui/ConfirmDialog';
+import OfflineBanner from '@/components/offline/OfflineBanner';
 import { useState } from 'react';
 
 export default function PlatformLayout({ children }: { children: React.ReactNode }) {
@@ -55,6 +56,7 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
           <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
           <div className="flex flex-col flex-1 overflow-hidden">
             <TopBar onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
+            <OfflineBanner />
             <main className="flex-1 overflow-y-auto p-6">{children}</main>
           </div>
         </div>

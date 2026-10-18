@@ -1,4 +1,4 @@
-import { IsEnum } from 'class-validator';
+import { IsEnum, IsOptional, IsString } from 'class-validator';
 
 export enum OrderStatus {
   PENDING = 'PENDING',
@@ -12,4 +12,13 @@ export enum OrderStatus {
 export class UpdateOrderStatusDto {
   @IsEnum(OrderStatus)
   status: OrderStatus;
+
+  /**
+   * Optimistic concurrency (admin offline mode): the status the client saw.
+   * If the current status differs → 409 CONFLICT with the current record.
+   * Status-based (not updatedAt) because payment roll-ups bump updatedAt.
+   */
+  @IsOptional()
+  @IsString()
+  expectedStatus?: string;
 }

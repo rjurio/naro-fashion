@@ -7,6 +7,13 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto, UpdateVariantDto } from './dto/update-product.dto';
 import { QueryProductsDto, SortOrder } from './dto/query-products.dto';
 import { assertSameTenant } from './util/tenant-ownership';
+import {
+  StaleWriteError,
+  conflictException,
+  parseExpectedUpdatedAt,
+  idConflictException,
+  isPrimaryKeyConflict,
+} from '../common/offline-sync.util';
 
 const sizeGuideSelect = { id: true, name: true, nameSwahili: true, slug: true, content: true, contentSwahili: true, pdfUrl: true, pdfUrlSwahili: true };
 
@@ -308,6 +315,9 @@ export class ProductsService {
     await this.assertProductRefs(tenantId, { categoryId: dto.categoryId, sizeGuideId: dto.sizeGuideId });
 
     const data: any = {
+      // Optional client-generated id (admin offline mode). PK collision →
+      // 409 ID_CONFLICT via rethrowIdConflict below.
+      ...(dto.id ? { id: dto.id } : {}),
       tenantId,
       name: dto.name,
       nameSwahili: dto.nameSwahili,
@@ -366,7 +376,10 @@ export class ProductsService {
         data,
         include: productIncludes,
       })
-      .catch((err) => this.rethrowUnique(err));
+      .catch((err) => {
+        if (dto.id && isPrimaryKeyConflict(err)) throw idConflictException();
+        return this.rethrowUnique(err);
+      });
     await this.auditService.log('CREATE', 'Product', product.id, { name: dto.name });
     return product;
   }
@@ -550,6 +563,7 @@ export class ProductsService {
 
   async update(id: string, dto: UpdateProductDto) {
     const tenantId = this.tenantContext.requireId;
+    const expectedUpdatedAt = parseExpectedUpdatedAt(dto.expectedUpdatedAt);
     const product = await this.prisma.product.findFirst({ where: { id, tenantId } });
     if (!product || product.deletedAt) {
       throw new NotFoundException('Product not found');
@@ -586,6 +600,18 @@ export class ProductsService {
 
     const updated = await this.prisma
       .$transaction(async (tx) => {
+        // Optimistic concurrency (admin offline mode): claim the row only if
+        // it still carries the updatedAt the client saw. The UPDATE takes the
+        // row lock, so a concurrent writer can't slip in between this check
+        // and the writes below. 0 rows → roll back and answer 409 CONFLICT.
+        if (expectedUpdatedAt) {
+          const claim = await tx.product.updateMany({
+            where: { id, tenantId, deletedAt: null, updatedAt: expectedUpdatedAt },
+            data: { updatedAt: new Date() },
+          });
+          if (claim.count === 0) throw new StaleWriteError();
+        }
+
         // Variants: diff/upsert — NEVER delete-all-and-recreate. OrderItem /
         // RentalOrder reference variants with onDelete: Restrict (so the old
         // deleteMany threw on any product that had ever sold) and CartItem
@@ -617,7 +643,12 @@ export class ProductsService {
           include: productIncludes,
         });
       })
-      .catch((err) => this.rethrowUnique(err));
+      .catch(async (err) => {
+        if (err instanceof StaleWriteError) {
+          throw conflictException(await this.findById(id).catch(() => null));
+        }
+        return this.rethrowUnique(err);
+      });
     await this.auditService.log('UPDATE', 'Product', id, { name: dto.name });
     return updated;
   }

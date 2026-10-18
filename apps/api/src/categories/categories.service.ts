@@ -5,6 +5,11 @@ import { AuditService } from '../audit/audit.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { assertSameTenant } from '../products/util/tenant-ownership';
+import {
+  conflictException,
+  parseExpectedUpdatedAt,
+  rethrowIdConflict,
+} from '../common/offline-sync.util';
 
 @Injectable()
 export class CategoriesService {
@@ -195,20 +200,25 @@ export class CategoriesService {
 
     await this.assertCategoryRefs(tenantId, { parentId: dto.parentId, sizeGuideId: dto.sizeGuideId });
 
-    const cat = await this.prisma.category.create({
-      data: {
-        ...data,
-        name: data.name as string,
-        slug,
-        tenantId,
-      },
-    });
+    const cat = await this.prisma.category
+      .create({
+        data: {
+          ...data,
+          // Optional client-generated id (admin offline mode).
+          ...(dto.id ? { id: dto.id } : {}),
+          name: data.name as string,
+          slug,
+          tenantId,
+        },
+      })
+      .catch((err) => rethrowIdConflict(err, dto.id));
     await this.auditService.log('CREATE', 'Category', cat.id, { name: data.name });
     return cat;
   }
 
   async update(id: string, dto: UpdateCategoryDto) {
     const tenantId = this.tenantContext.requireId;
+    const expectedUpdatedAt = parseExpectedUpdatedAt(dto.expectedUpdatedAt);
     const category = await this.prisma.category.findFirst({ where: { id, tenantId } });
     if (!category || category.deletedAt) {
       throw new NotFoundException('Category not found');
@@ -224,10 +234,25 @@ export class CategoriesService {
       data.slug = this.slugify(data.name as string);
     }
 
-    const updated = await this.prisma.category.update({
-      where: { id },
-      data,
-    });
+    let updated;
+    if (expectedUpdatedAt) {
+      // Optimistic concurrency (admin offline mode): atomic conditional
+      // update — only applies if the row still has the updatedAt the client
+      // saw. 0 rows → 409 CONFLICT with the current record.
+      const claim = await this.prisma.category.updateMany({
+        where: { id, tenantId, deletedAt: null, updatedAt: expectedUpdatedAt },
+        data,
+      });
+      if (claim.count === 0) {
+        throw conflictException(await this.prisma.category.findFirst({ where: { id, tenantId } }));
+      }
+      updated = await this.prisma.category.findFirst({ where: { id, tenantId } });
+    } else {
+      updated = await this.prisma.category.update({
+        where: { id },
+        data,
+      });
+    }
     await this.auditService.log('UPDATE', 'Category', id);
     return updated;
   }

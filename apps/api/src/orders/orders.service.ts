@@ -6,6 +6,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { conflictException } from '../common/offline-sync.util';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 import { CreateOrderDto, DeliveryMethod, PaymentMethod } from './dto/create-order.dto';
@@ -445,7 +446,7 @@ export class OrdersService {
     return this.withShippingFee(order);
   }
 
-  async updateStatus(id: string, status: string, user: any) {
+  async updateStatus(id: string, status: string, user: any, expectedStatus?: string) {
     const tenantId = this.tenantContext.requireId;
     const order = await this.prisma.order.findFirst({
       where: { id, tenantId, ...ownerScope(user) },
@@ -453,6 +454,17 @@ export class OrdersService {
 
     if (!order) {
       throw new NotFoundException('Order not found');
+    }
+
+    // Optimistic concurrency (admin offline mode): the client says which
+    // status it saw. Checked BEFORE transition validation so a stale client
+    // gets a reviewable CONFLICT, not a transition error. Both write paths
+    // below compare-and-swap on order.status (== expectedStatus here), so a
+    // change landing after this read also surfaces as CONFLICT.
+    const staleConflict = async () =>
+      conflictException(await this.findOne(id, user).catch(() => null));
+    if (expectedStatus !== undefined && expectedStatus !== order.status) {
+      throw await staleConflict();
     }
 
     const admin = isAdminUser(user);
@@ -527,6 +539,11 @@ export class OrdersService {
           where: { id, tenantId },
           include: { items: true, payments: true },
         });
+      }).catch(async (err) => {
+        if (expectedStatus !== undefined && err instanceof ConflictException) {
+          throw await staleConflict();
+        }
+        throw err;
       });
       await this.auditService.log('UPDATE_STATUS', 'Order', id, { from: order.status, to: status });
       return updated ? this.withShippingFee(updated) : updated;
@@ -538,6 +555,7 @@ export class OrdersService {
       data: { status },
     });
     if (flipped.count !== 1) {
+      if (expectedStatus !== undefined) throw await staleConflict();
       throw new ConflictException('Order was updated by someone else. Please refresh and try again.');
     }
     const updated = await this.prisma.order.findFirst({

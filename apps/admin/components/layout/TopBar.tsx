@@ -23,6 +23,7 @@ import {
 import { cn, formatCurrency } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { adminApi } from '@/lib/api';
+import SyncStatusBadge from '@/components/offline/SyncStatusBadge';
 
 interface TopBarProps {
   onMenuClick: () => void;
@@ -200,6 +201,9 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
 
       {/* Right */}
       <div className="flex items-center gap-2">
+        {/* Online / offline + sync status */}
+        <SyncStatusBadge />
+
         {/* Theme toggle */}
         <div className="relative">
           <button

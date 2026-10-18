@@ -1,4 +1,4 @@
-import { IsString, IsIn } from 'class-validator';
+import { IsString, IsIn, IsOptional } from 'class-validator';
 
 export const RENTAL_STATUSES = [
   'PENDING_ID_VERIFICATION',
@@ -20,4 +20,13 @@ export class UpdateRentalStatusDto {
   @IsString()
   @IsIn(RENTAL_STATUSES)
   status: string;
+
+  /**
+   * Optimistic concurrency (admin offline mode): the status the client saw.
+   * If the current status differs → 409 CONFLICT with the current record.
+   * Status-based (not updatedAt) because payment roll-ups bump updatedAt.
+   */
+  @IsOptional()
+  @IsString()
+  expectedStatus?: string;
 }

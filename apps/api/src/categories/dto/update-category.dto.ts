@@ -1,6 +1,14 @@
-import { IsString, IsOptional, IsInt, MaxLength, Min } from 'class-validator';
+import { IsString, IsOptional, IsInt, MaxLength, Min, IsDateString } from 'class-validator';
 
 export class UpdateCategoryDto {
+  /**
+   * Optimistic concurrency (admin offline mode): the updatedAt the client
+   * last saw. Mismatch → 409 CONFLICT with the current record. Omit = no check.
+   */
+  @IsOptional()
+  @IsDateString()
+  expectedUpdatedAt?: string;
+
   /** Display name. `nameEn` (legacy admin form key) is accepted as an alias. */
   @IsOptional()
   @IsString()

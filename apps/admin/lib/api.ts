@@ -1,16 +1,59 @@
+import {
+  identityFromToken,
+  isCacheableEndpoint,
+  readCachedResponse,
+  scopeFromIdentity,
+  writeCachedResponse,
+} from './offline/response-cache';
+import {
+  isBrowserOffline,
+  markNetworkSuccess,
+  markOwnMutation,
+  noteCachedServed,
+  reportNetworkFailure,
+  reportServerReachable,
+} from './offline/sync-store';
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
 
 interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
 }
 
+/**
+ * Machine-readable error codes set by the client itself (not the server):
+ *  - OFFLINE: the API is unreachable (no connection / server down). `status` is 0.
+ *  - NETWORK: internal — a fetch failed at the network level (e.g. during token refresh).
+ */
+export type ApiErrorCode = 'OFFLINE' | 'NETWORK';
+
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code?: ApiErrorCode;
+  constructor(status: number, message: string, code?: ApiErrorCode) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
+}
+
+export const OFFLINE_MUTATION_MESSAGE = "You're offline. This change needs an internet connection.";
+export const OFFLINE_UNSAVED_MUTATION_MESSAGE =
+  "Couldn't reach the server, so this change may not have been saved. Check your connection and try again.";
+export const OFFLINE_READ_MESSAGE =
+  "You're offline and this page's data hasn't been saved on this device yet. Reconnect to load it.";
+
+/** True for errors meaning "the API could not be reached" (vs. an HTTP error from a reachable server). */
+export function isOfflineError(err: unknown): boolean {
+  return err instanceof ApiError && (err.code === 'OFFLINE' || err.code === 'NETWORK');
+}
+
+/** fetch() rejects with a TypeError on network failure; AbortError is a deliberate cancel. */
+function isNetworkFailure(err: unknown): boolean {
+  if (err instanceof ApiError) return err.code === 'NETWORK' || err.code === 'OFFLINE';
+  if (err && typeof err === 'object' && (err as { name?: string }).name === 'AbortError') return false;
+  return err instanceof TypeError;
 }
 
 // ===== Order refunds (POST/GET /orders/:id/refunds) =====
@@ -137,8 +180,9 @@ function friendlyForbiddenMessage(raw: string): string {
 type RefreshResult =
   | { token: string }
   // 'rejected'  → the API definitively refused the refresh token (or there is none)
-  // 'transient' → network failure / 5xx; tokens may still be valid, keep them
-  | { token: null; reason: 'rejected' | 'transient' };
+  // 'transient' → 5xx / 408 / 429; tokens may still be valid, keep them
+  // 'network'   → the refresh request never reached the server (offline); keep them
+  | { token: null; reason: 'rejected' | 'transient' | 'network' };
 
 /** Auth endpoints that must never trigger a refresh-and-retry (would loop or make no sense). */
 const NO_REFRESH_ENDPOINTS = new Set([
@@ -241,7 +285,7 @@ class AdminApiClient {
         this.token = newAccess;
         return { token: newAccess };
       } catch {
-        return { token: null, reason: 'transient' };
+        return { token: null, reason: 'network' };
       } finally {
         this.refreshPromise = null;
       }
@@ -287,7 +331,11 @@ class AdminApiClient {
         // Refresh couldn't reach the server (network / 5xx). The 401 is not
         // definitive — surface it as a transient error so callers (notably
         // AuthContext on page load) keep the stored tokens.
-        throw new ApiError(503, "Couldn't reach the server to renew your session. Check your connection and try again.");
+        throw new ApiError(
+          503,
+          "Couldn't reach the server to renew your session. Check your connection and try again.",
+          'reason' in result && result.reason === 'network' ? 'NETWORK' : undefined,
+        );
       }
     }
     return response;
@@ -295,9 +343,24 @@ class AdminApiClient {
 
   /** authorizedFetch + JSON error handling for multipart uploads. */
   private async uploadMultipart<T>(endpoint: string, file: File, fallbackError = 'Upload failed'): Promise<T> {
+    if (isBrowserOffline()) {
+      // Phase 3: enqueue here (offline photo → `blobs` store, uploaded before the queued body).
+      throw new ApiError(0, OFFLINE_MUTATION_MESSAGE, 'OFFLINE');
+    }
     const formData = new FormData();
     formData.append('file', file);
-    const res = await this.authorizedFetch(`${this.baseUrl}${endpoint}`, { method: 'POST', body: formData });
+    let res: Response;
+    try {
+      res = await this.authorizedFetch(`${this.baseUrl}${endpoint}`, { method: 'POST', body: formData });
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        reportNetworkFailure();
+        throw new ApiError(0, OFFLINE_UNSAVED_MUTATION_MESSAGE, 'OFFLINE');
+      }
+      throw err;
+    }
+    reportServerReachable();
+    if (res.ok) markOwnMutation();
     if (!res.ok) {
       if (res.status === 403) await this.handleError(res);
       const err = await res.json().catch(() => ({ message: fallbackError }));
@@ -319,17 +382,63 @@ class AdminApiClient {
     const headers = new Headers(extraHeaders);
     if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
 
-    const response = await this.authorizedFetch(
-      url,
-      { method, body, ...fetchOptions, headers },
-      { skipRefresh: NO_REFRESH_ENDPOINTS.has(endpoint) },
-    );
+    const isGet = method.toUpperCase() === 'GET';
+    // Offline read cache (Phase 1): key = scope (tenant|platform : user) + path incl. query.
+    const cacheable = isGet && isCacheableEndpoint(endpoint);
+    const cachePath = url.startsWith(this.baseUrl) ? url.slice(this.baseUrl.length) : url;
+    const cacheScope = cacheable ? scopeFromIdentity(identityFromToken(this.getStoredToken())) : null;
+
+    if (isBrowserOffline()) {
+      if (isGet) {
+        if (cacheable) return this.serveFromCache<T>(cacheScope, cachePath);
+        throw new ApiError(0, OFFLINE_READ_MESSAGE, 'OFFLINE');
+      }
+      // Phase 3: enqueue here — if `endpoint` is on the offline allow-list, write
+      // { clientMutationId, method, path: endpoint, body: data, baseUpdatedAt, ... }
+      // to the IndexedDB `outbox`, call refreshCounts(), and return an optimistic result.
+      throw new ApiError(0, OFFLINE_MUTATION_MESSAGE, 'OFFLINE');
+    }
+
+    let response: Response;
+    try {
+      response = await this.authorizedFetch(
+        url,
+        { method, body, ...fetchOptions, headers },
+        { skipRefresh: NO_REFRESH_ENDPOINTS.has(endpoint) },
+      );
+    } catch (err) {
+      if (!isNetworkFailure(err)) throw err;
+      // The server could not be reached at all (not an HTTP error response).
+      reportNetworkFailure();
+      if (isGet) {
+        if (cacheable) return this.serveFromCache<T>(cacheScope, cachePath);
+        throw new ApiError(0, OFFLINE_READ_MESSAGE, 'OFFLINE');
+      }
+      // Phase 3: enqueue here as well (request failed mid-flight). Replay must carry an
+      // Idempotency-Key so a request that did reach the server isn't applied twice.
+      throw new ApiError(0, OFFLINE_UNSAVED_MUTATION_MESSAGE, 'OFFLINE');
+    }
+    reportServerReachable();
 
     if (!response.ok) {
       await this.handleError(response);
     }
     const text = await response.text();
+    if (isGet) {
+      markNetworkSuccess();
+      if (cacheable) void writeCachedResponse(cacheScope, cachePath, text);
+    } else {
+      markOwnMutation();
+    }
     return (text ? JSON.parse(text) : null) as T;
+  }
+
+  /** Answer a GET from the device cache, or fail with a clear offline error. */
+  private async serveFromCache<T>(scope: string | null, cachePath: string): Promise<T> {
+    const cached = await readCachedResponse(scope, cachePath);
+    if (!cached) throw new ApiError(0, OFFLINE_READ_MESSAGE, 'OFFLINE');
+    noteCachedServed(cached.savedAt);
+    return cached.data as T;
   }
 
   async get<T>(endpoint: string, options?: RequestOptions): Promise<T> {

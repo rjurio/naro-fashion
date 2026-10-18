@@ -95,7 +95,8 @@ export const config = {
      * Page routes only. Excluded:
      * - _next/static, _next/image (build assets / image optimizer)
      * - favicon + static files by extension (incl. /uploads/* images and GLB models)
+     * - sw.js (offline service worker) + manifest.webmanifest — no per-request CSP needed
      */
-    '/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|glb|gltf|woff2?)$).*)',
+    '/((?!_next/static|_next/image|favicon\\.ico|sw\\.js|manifest\\.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|glb|gltf|woff2?)$).*)',
   ],
 };

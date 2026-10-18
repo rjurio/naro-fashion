@@ -5,6 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { conflictException } from '../common/offline-sync.util';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 import { CreateRentalDto } from './dto/create-rental.dto';
@@ -293,12 +294,23 @@ export class RentalsService {
     return rental;
   }
 
-  async updateStatus(id: string, status: string) {
+  async updateStatus(id: string, status: string, expectedStatus?: string, user?: any) {
     const rental = await this.prisma.rentalOrder.findFirst({
       where: { id, tenantId: this.tenantContext.requireId },
     });
     if (!rental) {
       throw new NotFoundException('Rental order not found');
+    }
+
+    // Optimistic concurrency (admin offline mode): status the client saw.
+    // Checked before transition validation; the CAS below (on rental.status
+    // == expectedStatus) also maps a racing change to CONFLICT.
+    const staleConflict = async () =>
+      conflictException(
+        await this.findOne(id, user ?? { isAdmin: true }).catch(() => null),
+      );
+    if (expectedStatus !== undefined && expectedStatus !== rental.status) {
+      throw await staleConflict();
     }
 
     // Forward-only, no jumping over RETURNED (the only step that records
@@ -338,6 +350,7 @@ export class RentalsService {
       data,
     });
     if (claim.count === 0) {
+      if (expectedStatus !== undefined) throw await staleConflict();
       throw new ConflictException('Rental status changed concurrently. Reload and try again.');
     }
 

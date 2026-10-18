@@ -6,8 +6,17 @@ import adminApi, {
   clearAuthTokens,
   getAuthToken,
   getRefreshToken,
+  isOfflineError,
   storeAuthTokens,
 } from '@/lib/api';
+import { idbClearAll } from '@/lib/offline/db';
+import { identityFromToken, loadCachedProfile, saveCachedProfile, scopeFromIdentity } from '@/lib/offline/response-cache';
+import { resetForLogout } from '@/lib/offline/sync-store';
+
+/** Offline-cache partition for the current stored token (tenant|platform : user), or null. */
+function currentScope(): string | null {
+  return scopeFromIdentity(identityFromToken(getAuthToken()));
+}
 
 interface User {
   id: string;
@@ -82,6 +91,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const profile = await adminApi.getProfile();
       setUser(profile);
       setConnectionError(null);
+      // Kept so an offline reload can still render the dashboard shell (cleared on logout).
+      void saveCachedProfile(currentScope(), profile);
       return 'ok';
     } catch (err) {
       if (isDefinitiveAuthFailure(err)) {
@@ -90,6 +101,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
         setConnectionError(null);
         return 'unauthorized';
+      }
+      // Offline: fall back to the profile saved on this device for the SAME token
+      // identity, so the read-only offline dashboard still opens.
+      if (isOfflineError(err)) {
+        const cached = await loadCachedProfile<User>(currentScope());
+        if (cached) {
+          setUser(cached);
+          setConnectionError(null);
+          return 'ok';
+        }
+        setConnectionError("You're offline and this device has no saved session data yet. Reconnect and try again.");
+        return 'transient';
       }
       // Network failure / 5xx — keep tokens (and any loaded user) intact.
       setConnectionError(
@@ -175,7 +198,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAuthTokens();
       adminApi.clearToken();
       setUser(null);
-      window.location.href = wasPlatformAdmin ? '/platform-login' : '/login';
+      // Wipe the offline device cache (responses, outbox, conflicts, meta) — shared shop PCs.
+      resetForLogout();
+      // Wait for the wipe (bounded internally) before navigating away.
+      void idbClearAll().finally(() => {
+        window.location.href = wasPlatformAdmin ? '/platform-login' : '/login';
+      });
     };
     // Best-effort server-side revocation; never block logout on it for long.
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, 3000));

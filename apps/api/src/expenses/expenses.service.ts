@@ -9,6 +9,11 @@ import { TenantContext } from '../tenant/tenant.context';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
 import { toEatPeriod } from '../reports/eat-time.util';
+import {
+  conflictException,
+  parseExpectedUpdatedAt,
+  rethrowIdConflict,
+} from '../common/offline-sync.util';
 
 /**
  * Financial period key for an expense date, in Africa/Dar_es_Salaam time.
@@ -118,6 +123,8 @@ export class ExpensesService {
     await this.assertPeriodOpen(period);
     return this.prisma.businessExpense.create({
       data: {
+        // Optional client-generated id (admin offline mode).
+        ...(dto.id ? { id: dto.id } : {}),
         tenantId: this.tenantContext.requireId,
         categoryId: dto.categoryId,
         amount: dto.amount,
@@ -129,10 +136,11 @@ export class ExpensesService {
         createdBy,
       },
       include: { category: true },
-    });
+    }).catch((err) => rethrowIdConflict(err, dto.id));
   }
 
   async update(id: string, dto: UpdateExpenseDto) {
+    const expectedUpdatedAt = parseExpectedUpdatedAt(dto.expectedUpdatedAt);
     const existing = await this.findOne(id);
     // Both the period it is in now and (if moving) the period it moves to
     // must be open.
@@ -141,18 +149,33 @@ export class ExpensesService {
     if (period && period !== existing.period) await this.assertPeriodOpen(period);
     if (dto.categoryId) await this.assertCategoryInTenant(dto.categoryId);
 
+    const data = {
+      // Explicit whitelist (no spread of the DTO).
+      ...(dto.categoryId !== undefined ? { categoryId: dto.categoryId } : {}),
+      ...(dto.amount !== undefined ? { amount: dto.amount } : {}),
+      ...(dto.description !== undefined ? { description: dto.description } : {}),
+      ...(dto.vendor !== undefined ? { vendor: dto.vendor } : {}),
+      ...(dto.receiptUrl !== undefined ? { receiptUrl: dto.receiptUrl } : {}),
+      ...(dto.expenseDate ? { expenseDate: new Date(dto.expenseDate) } : {}),
+      ...(period ? { period } : {}),
+    };
+
+    if (expectedUpdatedAt) {
+      // Optimistic concurrency (admin offline mode): atomic conditional
+      // update on the updatedAt the client saw; 0 rows → 409 CONFLICT.
+      const claim = await this.prisma.businessExpense.updateMany({
+        where: { id, tenantId: this.tenantContext.requireId, updatedAt: expectedUpdatedAt },
+        data,
+      });
+      if (claim.count === 0) {
+        throw conflictException(await this.findOne(id).catch(() => null));
+      }
+      return this.findOne(id);
+    }
+
     return this.prisma.businessExpense.update({
       where: { id },
-      data: {
-        // Explicit whitelist (no spread of the DTO).
-        ...(dto.categoryId !== undefined ? { categoryId: dto.categoryId } : {}),
-        ...(dto.amount !== undefined ? { amount: dto.amount } : {}),
-        ...(dto.description !== undefined ? { description: dto.description } : {}),
-        ...(dto.vendor !== undefined ? { vendor: dto.vendor } : {}),
-        ...(dto.receiptUrl !== undefined ? { receiptUrl: dto.receiptUrl } : {}),
-        ...(dto.expenseDate ? { expenseDate: new Date(dto.expenseDate) } : {}),
-        ...(period ? { period } : {}),
-      },
+      data,
       include: { category: true },
     });
   }

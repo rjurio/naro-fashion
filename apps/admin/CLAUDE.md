@@ -156,3 +156,8 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 - Tailwind v4: No tailwind.config.ts — theme defined via @theme in globals.css
 - `cropperjs` must be pinned to v1.6.2 in admin (v2 breaks react-cropper CSS import)
 - **Native `<select>` option theming** (`app/globals.css`): browsers only honor `background-color` + `color` on `<option>` elements — no border-radius, padding, or font overrides apply. A single global rule (`select option, select optgroup { background-color: hsl(var(--card)); color: hsl(var(--card-foreground)); }`) themes every select in the admin at once (forms, filters, stock adjust modal, expense filters, etc.). Don't inline-style per `<option>` and don't swap for a custom listbox unless the design requires rich rows.
+
+## Offline mode (Oct 2026)
+- Service worker `public/sw.js` + IndexedDB read cache in `lib/api.ts` `request()` + `lib/offline/*` + `contexts/SyncContext.tsx` + `components/offline/*` (status badge in TopBar and POS header, offline banner). Full notes: root CLAUDE.md → "Admin Offline Mode + Sync".
+- Never add raw `fetch()` calls for API data — go through `adminApi` so offline caching/queuing applies.
+- Offline mutations throw `ApiError` with `code: 'OFFLINE'`; use `isOfflineError(err)` to show a friendly message.

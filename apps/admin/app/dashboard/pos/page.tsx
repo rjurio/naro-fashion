@@ -23,6 +23,7 @@ import ReceiptModal from './components/ReceiptModal';
 import HeldSalesModal from './components/HeldSalesModal';
 import LayawayModal from './components/LayawayModal';
 import ExchangeModal from './components/ExchangeModal';
+import SyncStatusBadge from '@/components/offline/SyncStatusBadge';
 
 interface Customer {
   id: string;
@@ -268,6 +269,9 @@ export default function PosPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Online / offline + sync status (POS has no TopBar) */}
+          <SyncStatusBadge compact />
+
           <button
             onClick={() => setShowHeldSales(true)}
             className="relative flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]"

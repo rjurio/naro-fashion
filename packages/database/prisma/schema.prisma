@@ -629,6 +629,14 @@ model Order {
   customerName  String?  // Walk-in customer name (when no userId)
   customerPhone String?  // Walk-in customer phone
 
+  // Offline POS (admin offline mode). An offline sale is replayed after the
+  // device reconnects; createdAt = the real sale time on the device. Because
+  // the cash was already taken, a short-stock offline sale is accepted with
+  // stock clamped at 0 and flagged `oversold` for review.
+  isOfflineSale   Boolean @default(false)
+  oversold        Boolean @default(false)
+  oversoldDetails Json?   // [{ productId, variantId, requested, fulfilledFromStock, shortfall }]
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -1804,4 +1812,28 @@ model PaymentMethod {
   @@index([isActive])
   @@index([deletedAt])
   @@index([sortOrder])
+}
+
+// Idempotency keys for admin mutations (admin offline mode + sync). A client
+// replaying a queued write sends the same `Idempotency-Key`; the global
+// IdempotencyInterceptor returns the stored response instead of executing the
+// handler twice. Keyed per principal (JWT sub), retention 30 days
+// (IDEMPOTENCY_RETENTION_DAYS) via IdempotencyRetentionService.
+model IdempotencyKey {
+  id             String    @id @default(cuid())
+  tenantId       String?
+  principalId    String
+  key            String
+  method         String
+  path           String
+  requestHash    String
+  status         String    // IN_PROGRESS | COMPLETED
+  responseStatus Int?
+  responseBody   Json?
+  createdAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  @@unique([principalId, key])
+  @@index([tenantId])
+  @@index([createdAt])
 }

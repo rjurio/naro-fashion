@@ -8,6 +8,7 @@ import {
   Min,
   MaxLength,
   ValidateNested,
+  IsDateString,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -57,6 +58,14 @@ export class UpdateVariantDto {
 }
 
 export class UpdateProductDto {
+  /**
+   * Optimistic concurrency (admin offline mode): the updatedAt the client
+   * last saw. Mismatch → 409 CONFLICT with the current record. Omit = no check.
+   */
+  @IsOptional()
+  @IsDateString()
+  expectedUpdatedAt?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(200)
