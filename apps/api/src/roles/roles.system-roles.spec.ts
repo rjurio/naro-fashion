@@ -1,5 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { RolesService } from './roles.service';
+import { SystemRolesSeeder } from './system-roles.seeder';
 import { PermissionsService, MANAGER_DEFAULT_GRANTS } from '../permissions/permissions.service';
 
 /** October 2026 review — shared system roles are not tenant-editable; seeding is unambiguous. */
@@ -31,6 +32,55 @@ describe('RolesService — system role protection', () => {
   it('reserved system role names cannot be used for custom roles', async () => {
     await expect(service.create({ name: 'super_admin' } as any)).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.role.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('SystemRolesSeeder — merge legacy tenant-scoped system role copies', () => {
+  const build = (copies: any[], shared: any) => {
+    const prisma: any = {
+      role: {
+        findMany: jest.fn().mockResolvedValue(copies),
+        findFirst: jest.fn().mockResolvedValue(shared),
+        delete: jest.fn((a: any) => ({ op: 'role.delete', ...a })),
+      },
+      adminUserRole: {
+        findMany: jest.fn().mockResolvedValue([{ adminUserId: 'a1', assignedAt: new Date(0), assignedBy: null }]),
+        createMany: jest.fn((a: any) => ({ op: 'aur.createMany', ...a })),
+        deleteMany: jest.fn((a: any) => ({ op: 'aur.deleteMany', ...a })),
+      },
+      rolePermission: { deleteMany: jest.fn((a: any) => ({ op: 'rp.deleteMany', ...a })) },
+      $transaction: jest.fn().mockResolvedValue([]),
+    };
+    return { prisma, seeder: new SystemRolesSeeder(prisma) };
+  };
+
+  it('moves admins onto the shared role, then deletes the tenant copy', async () => {
+    const { prisma, seeder } = build([{ id: 'r-copy', name: 'SUPER_ADMIN', tenantId: 't1' }], { id: 'r-shared' });
+    await seeder.mergeTenantScopedCopies();
+    expect(prisma.role.findMany.mock.calls[0][0].where).toEqual({
+      name: { in: ['SUPER_ADMIN', 'MANAGER', 'STAFF'] }, isSystem: true, tenantId: { not: null },
+    });
+    const ops = prisma.$transaction.mock.calls[0][0];
+    expect(ops[0]).toEqual(expect.objectContaining({
+      op: 'aur.createMany',
+      data: [expect.objectContaining({ adminUserId: 'a1', roleId: 'r-shared' })],
+      skipDuplicates: true,
+    }));
+    expect(ops[1]).toEqual(expect.objectContaining({ op: 'aur.deleteMany', where: { roleId: 'r-copy' } }));
+    expect(ops[2]).toEqual(expect.objectContaining({ op: 'rp.deleteMany', where: { roleId: 'r-copy' } }));
+    expect(ops[3]).toEqual(expect.objectContaining({ op: 'role.delete', where: { id: 'r-copy' } }));
+  });
+
+  it('leaves the copy alone when the shared role does not exist yet', async () => {
+    const { prisma, seeder } = build([{ id: 'r-copy', name: 'SUPER_ADMIN', tenantId: 't1' }], null);
+    await seeder.mergeTenantScopedCopies();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op once merged', async () => {
+    const { prisma, seeder } = build([], { id: 'r-shared' });
+    await seeder.mergeTenantScopedCopies();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
 

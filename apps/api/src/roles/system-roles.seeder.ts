@@ -35,9 +35,52 @@ export class SystemRolesSeeder implements OnApplicationBootstrap {
   async onApplicationBootstrap() {
     try {
       await this.seed();
+      await this.mergeTenantScopedCopies();
     } catch (err) {
       // Boot must never fail on seeding; next boot retries.
       this.logger.error(`System role seeding failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Collapse legacy tenant-scoped copies of the system roles into the shared
+   * (tenantId null) row. The multi-tenant migration stamped a tenantId onto
+   * the original system roles; `seed()` only looks for tenantId null, so it
+   * created a second SUPER_ADMIN next to the tenant copy and the Roles page
+   * showed two. Postgres treats NULLs as distinct, so @@unique([tenantId,
+   * name]) can't catch it. Admin assignments move to the shared role
+   * (duplicates skipped), then the copy and its grants are removed.
+   * Idempotent: once merged, nothing matches.
+   */
+  async mergeTenantScopedCopies() {
+    const names = ['SUPER_ADMIN', 'MANAGER', 'STAFF'];
+    const copies = await this.prisma.role.findMany({
+      where: { name: { in: names }, isSystem: true, tenantId: { not: null } },
+      select: { id: true, name: true, tenantId: true },
+    });
+    for (const copy of copies) {
+      const shared = await this.prisma.role.findFirst({
+        where: { name: copy.name, isSystem: true, tenantId: null },
+        select: { id: true },
+      });
+      if (!shared) continue; // seed() failed for this name; retry next boot
+      const assignments = await this.prisma.adminUserRole.findMany({
+        where: { roleId: copy.id },
+        select: { adminUserId: true, assignedAt: true, assignedBy: true },
+      });
+      await this.prisma.$transaction([
+        this.prisma.adminUserRole.createMany({
+          data: assignments.map((a) => ({ ...a, roleId: shared.id })),
+          skipDuplicates: true,
+        }),
+        this.prisma.adminUserRole.deleteMany({ where: { roleId: copy.id } }),
+        this.prisma.rolePermission.deleteMany({ where: { roleId: copy.id } }),
+        this.prisma.role.delete({ where: { id: copy.id } }),
+      ]);
+      this.logger.log(
+        `Merged tenant-scoped ${copy.name} (${copy.id}, tenant ${copy.tenantId}) into shared system role ` +
+          `${shared.id}; moved ${assignments.length} admin assignment(s)`,
+      );
     }
   }
 
