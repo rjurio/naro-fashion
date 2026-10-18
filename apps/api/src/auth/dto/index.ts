@@ -13,6 +13,5 @@ export {
   TwoFAVerifyDto,
   TwoFARegenerateRecoveryDto,
   UpdateMeDto,
-  DeleteAccountDto,
 } from './auth-requests.dto';
 export { IsStrongPassword, PASSWORD_POLICY_MESSAGE } from './password-policy';

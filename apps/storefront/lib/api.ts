@@ -359,9 +359,6 @@ export const authApi = {
 export const usersApi = {
   /** GDPR-style data export (JSON). */
   exportMyData: () => api.get<any>('/users/me/export'),
-  /** Permanently delete the account. Requires the current password. */
-  deleteMyAccount: (currentPassword: string) =>
-    request<any>('/users/me', { method: 'DELETE', body: { currentPassword } }),
 };
 
 export const idVerificationApi = {

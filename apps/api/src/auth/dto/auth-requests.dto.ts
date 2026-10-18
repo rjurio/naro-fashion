@@ -130,11 +130,3 @@ export class UpdateMeDto {
   @MaxLength(30)
   phone?: string;
 }
-
-/** Body for `DELETE /users/me` (PDPA erasure). */
-export class DeleteAccountDto {
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(256)
-  currentPassword: string;
-}

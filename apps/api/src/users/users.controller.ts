@@ -16,7 +16,6 @@ import { AdminGuard } from '../auth/guards/admin.guard';
 import { PermissionGuard } from '../auth/guards/permission.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { DeleteAccountDto } from '../auth/dto/auth-requests.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('users')
@@ -53,18 +52,9 @@ export class UsersController {
     return this.usersService.exportMyData(user);
   }
 
-  /**
-   * Erase (anonymise) the calling customer's account. Requires the current
-   * password. Orders/rentals are retained (anonymised via the user row) for
-   * accounting; all sessions are revoked.
-   */
-  @Delete('me')
-  deleteMyAccount(
-    @CurrentUser() user: { id: string; isAdmin?: boolean; isPlatformAdmin?: boolean },
-    @Body() dto: DeleteAccountDto,
-  ) {
-    return this.usersService.deleteMyAccount(user, dto.currentPassword);
-  }
+  // There is deliberately no self-service account deletion. Customers cannot
+  // delete or deactivate their own account; only a tenant admin can
+  // suspend/activate a customer (PATCH :id/suspend|activate above).
 
   // ---- Customer-facing endpoints ----
 

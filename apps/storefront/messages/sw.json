@@ -506,9 +506,6 @@
     "themeStandard": "Kawaida",
     "english": "Kiingereza",
     "kiswahili": "Kiswahili",
-    "dangerZone": "Eneo la Hatari",
-    "dangerZoneDesc": "Mara tu unapofuta akaunti yako, hakuna kurudi nyuma. Data yako yote, oda, na historia ya kukodisha zitafutwa kabisa.",
-    "deleteAccount": "Futa Akaunti Yangu",
     "passwordsDoNotMatch": "Maneno mapya ya siri hayalingani.",
     "passwordMin6": "Neno la siri lazima liwe na herufi 8–128 na liwe na herufi na namba.",
     "passwordUpdatedSuccess": "Neno la siri limesasishwa kwa mafanikio!",
@@ -551,12 +548,6 @@
     "downloadMyData": "Pakua taarifa zangu",
     "downloadingData": "Inaandaa upakuaji...",
     "dataExportFailed": "Imeshindwa kupakua taarifa zako. Tafadhali jaribu tena.",
-    "deleteAccountTitle": "Futa akaunti yako?",
-    "deleteAccountWarning": "Hii itafuta kabisa akaunti yako na taarifa zako binafsi. Kumbukumbu za oda zinazohitajika kisheria zinaweza kubaki bila kukutambulisha. Hatua hii haiwezi kutenduliwa.",
-    "enterPasswordToConfirm": "Weka nenosiri lako kuthibitisha",
-    "confirmDeleteAccount": "Futa kabisa",
-    "deletingAccount": "Inafuta...",
-    "deleteAccountFailed": "Imeshindwa kufuta akaunti yako. Hakikisha nenosiri lako na ujaribu tena.",
     "passwordRequired": "Nenosiri linahitajika"
   },
   "orders": {

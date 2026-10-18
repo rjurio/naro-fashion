@@ -3,13 +3,11 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useTheme } from "next-themes";
-import { ArrowLeft, Sun, Moon, Monitor, Globe, AlertTriangle, Loader2, Download } from "lucide-react";
+import { ArrowLeft, Sun, Moon, Monitor, Globe, Loader2, Download } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { authApi, tokenStore, usersApi, ApiError } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { isValidPassword } from "@/lib/password";
-import { useAuth } from "@/contexts/AuthContext";
-import { useDialog } from "@/lib/use-dialog";
 
 export default function SettingsPage() {
   const { t, locale, setLocale } = useTranslation();
@@ -22,22 +20,11 @@ export default function SettingsPage() {
   const [passwordMsg, setPasswordMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [error, setError] = useState("");
   const { theme, setTheme } = useTheme();
-  const { clearSession } = useAuth();
 
-  // Data export + account deletion
+  // Data export. (There is deliberately no self-service account deletion —
+  // only a store admin can suspend a customer account.)
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deletePassword, setDeletePassword] = useState("");
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState("");
-  const closeDelete = () => {
-    if (deleting) return;
-    setDeleteOpen(false);
-    setDeletePassword("");
-    setDeleteError("");
-  };
-  const deleteDialogRef = useDialog<HTMLDivElement>(deleteOpen, closeDelete);
 
   const handleExportData = async () => {
     setExporting(true);
@@ -53,33 +40,15 @@ export default function SettingsPage() {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch {
-      setExportError(t("account.dataExportFailed"));
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const handleDeleteAccount = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!deletePassword) {
-      setDeleteError(t("account.passwordRequired"));
-      return;
-    }
-    setDeleting(true);
-    setDeleteError("");
-    try {
-      await usersApi.deleteMyAccount(deletePassword);
-      // Account is gone — tokens are already revoked server-side.
-      clearSession();
-      window.location.href = "/";
     } catch (err) {
-      // Show the API's message when it gives one (e.g. OAuth-only accounts
-      // without a password get a 400 explaining what to do).
+      // Surface the API's reason (e.g. 403 for a staff account) instead of a
+      // generic message so failures are diagnosable.
       const apiMsg = err instanceof ApiError ? err.message : "";
       const isGeneric = !apiMsg || /^Request failed with status/.test(apiMsg);
-      setDeleteError(isGeneric ? t("account.deleteAccountFailed") : apiMsg);
-      setDeleting(false);
+      setExportError(isGeneric ? t("account.dataExportFailed") : apiMsg);
+      console.error("Data export failed", err);
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -333,81 +302,6 @@ export default function SettingsPage() {
               )}
             </Button>
           </section>
-
-          {/* Danger Zone */}
-          <section className="rounded-xl border-2 border-red-200 bg-red-50/50 p-4 sm:p-5 md:p-6">
-            <div className="flex items-center gap-2 mb-2">
-              <AlertTriangle className="h-5 w-5 text-red-500" />
-              <h2 className="text-lg font-bold text-red-700">{t("account.dangerZone")}</h2>
-            </div>
-            <p className="text-sm text-red-600 mb-4">
-              {t("account.dangerZoneDesc")}
-            </p>
-            <button
-              type="button"
-              onClick={() => setDeleteOpen(true)}
-              className="px-4 py-2 rounded-lg border-2 border-red-500 text-red-600 text-sm font-medium hover:bg-red-500 hover:text-white transition-colors"
-            >
-              {t("account.deleteAccount")}
-            </button>
-          </section>
-
-          {deleteOpen && (
-            <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-              onClick={closeDelete}
-            >
-              <div
-                ref={deleteDialogRef}
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="delete-account-title"
-                tabIndex={-1}
-                className="w-full max-w-md rounded-xl bg-card border border-border p-6 shadow-xl outline-none"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center gap-2 mb-3">
-                  <AlertTriangle className="h-5 w-5 text-red-500" />
-                  <h2 id="delete-account-title" className="text-lg font-bold text-foreground">
-                    {t("account.deleteAccountTitle")}
-                  </h2>
-                </div>
-                <p className="text-sm text-muted-foreground mb-4">{t("account.deleteAccountWarning")}</p>
-                <form onSubmit={handleDeleteAccount} className="space-y-4">
-                  <div>
-                    <label htmlFor="delete-password" className="block text-sm font-medium text-foreground mb-1.5">
-                      {t("account.enterPasswordToConfirm")}
-                    </label>
-                    <input
-                      id="delete-password"
-                      type="password"
-                      autoComplete="current-password"
-                      value={deletePassword}
-                      onChange={(e) => setDeletePassword(e.target.value)}
-                      className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500"
-                    />
-                  </div>
-                  {deleteError && <p className="text-sm text-red-600" role="alert">{deleteError}</p>}
-                  <div className="flex justify-end gap-3">
-                    <Button type="button" variant="outline" onClick={closeDelete} disabled={deleting}>
-                      {t("common.cancel")}
-                    </Button>
-                    <button
-                      type="submit"
-                      disabled={deleting || !deletePassword}
-                      className="inline-flex items-center px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {deleting ? (
-                        <><Loader2 className="h-4 w-4 animate-spin mr-2" /> {t("account.deletingAccount")}</>
-                      ) : (
-                        t("account.confirmDeleteAccount")
-                      )}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

@@ -358,17 +358,20 @@ export default function AdminUsersPage() {
                         >
                           <UserCog className="w-4 h-4" />
                         </button>
-                        <button
-                          onClick={() => toggleAdmin(a)}
-                          className="p-1.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                          title={a.isActive ? 'Disable' : 'Enable'}
-                        >
-                          {a.isActive ? (
-                            <XCircle className="w-4 h-4" />
-                          ) : (
-                            <CheckCircle className="w-4 h-4" />
-                          )}
-                        </button>
+                        {/* You can never disable or delete your own account (also enforced server-side). */}
+                        {a.id !== user?.id && (
+                          <button
+                            onClick={() => toggleAdmin(a)}
+                            className="p-1.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                            title={a.isActive ? 'Disable' : 'Enable'}
+                          >
+                            {a.isActive ? (
+                              <XCircle className="w-4 h-4" />
+                            ) : (
+                              <CheckCircle className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
                         {isLocked(a) && (
                           <button
                             onClick={() => unlockAdmin(a)}
@@ -378,13 +381,15 @@ export default function AdminUsersPage() {
                             <Lock className="w-4 h-4" />
                           </button>
                         )}
-                        <button
-                          onClick={() => deleteAdmin(a)}
-                          className="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900 transition-colors text-red-500"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {a.id !== user?.id && (
+                          <button
+                            onClick={() => deleteAdmin(a)}
+                            className="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900 transition-colors text-red-500"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

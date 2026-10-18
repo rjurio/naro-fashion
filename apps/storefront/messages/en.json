@@ -506,9 +506,6 @@
     "themeStandard": "Standard",
     "english": "English",
     "kiswahili": "Kiswahili",
-    "dangerZone": "Danger Zone",
-    "dangerZoneDesc": "Once you delete your account, there is no going back. All your data, orders, and rental history will be permanently removed.",
-    "deleteAccount": "Delete My Account",
     "passwordsDoNotMatch": "New passwords do not match.",
     "passwordMin6": "Password must be 8–128 characters and include a letter and a number.",
     "passwordUpdatedSuccess": "Password updated successfully!",
@@ -551,12 +548,6 @@
     "downloadMyData": "Download my data",
     "downloadingData": "Preparing download...",
     "dataExportFailed": "Could not export your data. Please try again.",
-    "deleteAccountTitle": "Delete your account?",
-    "deleteAccountWarning": "This permanently deletes your account and personal data. Order records required by law may be kept in anonymised form. This cannot be undone.",
-    "enterPasswordToConfirm": "Enter your password to confirm",
-    "confirmDeleteAccount": "Permanently delete",
-    "deletingAccount": "Deleting...",
-    "deleteAccountFailed": "Could not delete your account. Check your password and try again.",
     "passwordRequired": "Password is required"
   },
   "orders": {

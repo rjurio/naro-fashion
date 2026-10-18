@@ -57,7 +57,6 @@ const CUSTOMER_ROUTE_ALLOWLIST: Record<string, string> = {
   'users.controller.ts#updateAddress': 'service enforces userId ownership',
   'users.controller.ts#deleteAddress': 'service enforces userId ownership',
   'users.controller.ts#exportMyData': 'PDPA data-subject access: own data only via CurrentUser, tenant-scoped, admins rejected',
-  'users.controller.ts#deleteMyAccount': 'PDPA erasure: anonymises own account via CurrentUser after current-password check, admins rejected',
 
   // --- cart.controller.ts (everything is customer-scoped via CurrentUser) ---
   'cart.controller.ts#getCart': 'own cart via CurrentUser',

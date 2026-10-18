@@ -1,11 +1,11 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
-  BadRequestException,
   ForbiddenException,
-  UnauthorizedException,
+  HttpException,
+  InternalServerErrorException,
 } from '@nestjs/common';
-import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { isAdminUser } from '../auth/util/ownership';
 import { TenantContext } from '../tenant/tenant.context';
@@ -15,6 +15,8 @@ import { UpdateAddressDto } from './dto/update-address.dto';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
@@ -124,6 +126,19 @@ export class UsersService {
    * OAuth ids, tokenVersion) are never included.
    */
   async exportMyData(user: { id: string; isAdmin?: boolean; isPlatformAdmin?: boolean }) {
+    try {
+      return await this.buildExport(user);
+    } catch (e) {
+      if (e instanceof HttpException) throw e;
+      this.logger.error(
+        `Data export failed for user ${user?.id}: ${(e as Error)?.message}`,
+        (e as Error)?.stack,
+      );
+      throw new InternalServerErrorException('Could not export your data');
+    }
+  }
+
+  private async buildExport(user: { id: string; isAdmin?: boolean; isPlatformAdmin?: boolean }) {
     this.assertCustomer(user);
     const tenantId = this.tenantContext.requireId;
     const userId = user.id;
@@ -179,64 +194,6 @@ export class UsersService {
       reviews,
       wishlist,
     };
-  }
-
-  /**
-   * `DELETE /users/me` — right to erasure. Requires the current password.
-   * Anonymises the User row instead of hard-deleting it so orders / rentals /
-   * payments (FK onDelete: Restrict) remain intact for accounting & tax.
-   * Cart + wishlist are deleted; addresses not referenced by any order are
-   * deleted (order-linked ones are kept as part of the accounting record).
-   * tokenVersion is bumped so every session is revoked.
-   */
-  async deleteMyAccount(
-    user: { id: string; isAdmin?: boolean; isPlatformAdmin?: boolean },
-    currentPassword: unknown,
-  ) {
-    this.assertCustomer(user);
-    const tenantId = this.tenantContext.requireId;
-    const userId = user.id;
-
-    const row = await this.prisma.user.findFirst({
-      where: { id: userId, tenantId },
-      select: { id: true, passwordHash: true },
-    });
-    if (!row) throw new NotFoundException('User not found');
-    if (!row.passwordHash) {
-      throw new BadRequestException(
-        'Password confirmation is required. Use "forgot password" to set a password first.',
-      );
-    }
-    if (typeof currentPassword !== 'string' || !(await bcrypt.compare(currentPassword, row.passwordHash))) {
-      throw new UnauthorizedException('Current password is incorrect');
-    }
-
-    await this.prisma.$transaction([
-      this.prisma.cartItem.deleteMany({ where: { userId } }),
-      this.prisma.wishlistItem.deleteMany({ where: { userId } }),
-      this.prisma.address.deleteMany({ where: { userId, orders: { none: {} } } }),
-      this.prisma.user.update({
-        where: { id: userId },
-        data: {
-          email: `deleted-${userId}@invalid`,
-          firstName: null,
-          lastName: null,
-          phone: null,
-          alternativePhone: null,
-          avatarUrl: null,
-          passwordHash: null,
-          passwordResetToken: null,
-          passwordResetExpires: null,
-          googleId: null,
-          facebookId: null,
-          isVerified: false,
-          isActive: false,
-          tokenVersion: { increment: 1 },
-        },
-      }),
-    ]);
-
-    return { message: 'Account deleted' };
   }
 
   // ---- Customer-facing endpoints ----

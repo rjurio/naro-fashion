@@ -1,28 +1,22 @@
-import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import * as bcrypt from 'bcryptjs';
+import { ForbiddenException, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { UsersService } from './users.service';
 
-/** PDPA data-subject rights + suspension revocation (October 2026 review). */
-describe('UsersService — PDPA export / erasure', () => {
+/** PDPA data export + suspension revocation (October 2026 review). */
+describe('UsersService — PDPA export / no self-deletion', () => {
   const TENANT = 't1';
   let prisma: any;
   let service: UsersService;
-  let hash: string;
-
-  beforeAll(async () => {
-    hash = await bcrypt.hash('Correct1pass', 4);
-  });
 
   beforeEach(() => {
     prisma = {
       user: { findFirst: jest.fn(), update: jest.fn((a: any) => a) },
-      address: { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn((a: any) => a) },
+      address: { findMany: jest.fn().mockResolvedValue([]) },
       order: { findMany: jest.fn().mockResolvedValue([]) },
       rentalOrder: { findMany: jest.fn().mockResolvedValue([]) },
       review: { findMany: jest.fn().mockResolvedValue([]) },
-      wishlistItem: { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn((a: any) => a) },
-      cartItem: { deleteMany: jest.fn((a: any) => a) },
-      $transaction: jest.fn().mockResolvedValue([]),
+      wishlistItem: { findMany: jest.fn().mockResolvedValue([]) },
     };
     service = new UsersService(prisma, { requireId: TENANT, id: TENANT } as any);
   });
@@ -45,36 +39,18 @@ describe('UsersService — PDPA export / erasure', () => {
     await expect(service.exportMyData({ id: 'u-other' })).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('delete requires the current password', async () => {
-    prisma.user.findFirst.mockResolvedValue({ id: 'u1', passwordHash: hash });
-    await expect(service.deleteMyAccount({ id: 'u1' }, 'wrong')).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+  it('export turns unexpected failures into a logged 500', async () => {
+    prisma.user.findFirst.mockResolvedValue({ id: 'u1' });
+    prisma.order.findMany.mockRejectedValue(new Error('db exploded'));
+    jest.spyOn((service as any).logger, 'error').mockImplementation(() => undefined);
+    await expect(service.exportMyData({ id: 'u1' })).rejects.toBeInstanceOf(InternalServerErrorException);
+    expect((service as any).logger.error).toHaveBeenCalled();
   });
 
-  it('delete anonymises the user, revokes sessions and keeps orders', async () => {
-    prisma.user.findFirst.mockResolvedValue({ id: 'u1', passwordHash: hash });
-    await expect(service.deleteMyAccount({ id: 'u1' }, 'Correct1pass')).resolves.toEqual({ message: 'Account deleted' });
-    const ops = prisma.$transaction.mock.calls[0][0];
-    const userUpdate = ops.find((o: any) => o?.data?.email);
-    expect(userUpdate.data).toEqual(
-      expect.objectContaining({
-        email: 'deleted-u1@invalid',
-        firstName: null,
-        lastName: null,
-        phone: null,
-        passwordHash: null,
-        isActive: false,
-        tokenVersion: { increment: 1 },
-      }),
-    );
-    // only addresses NOT referenced by an order are deleted
-    const addrDelete = ops.find((o: any) => o?.where?.orders);
-    expect(addrDelete.where).toEqual({ userId: 'u1', orders: { none: {} } });
-    expect(prisma.order.findMany).not.toHaveBeenCalled();
-  });
-
-  it('delete rejects admins', async () => {
-    await expect(service.deleteMyAccount({ id: 'a1', isAdmin: true }, 'x')).rejects.toBeInstanceOf(ForbiddenException);
+  it('customers cannot delete their own account (no service method, no route)', () => {
+    expect((service as any).deleteMyAccount).toBeUndefined();
+    const controller = fs.readFileSync(path.join(__dirname, 'users.controller.ts'), 'utf8');
+    expect(controller).not.toMatch(/@Delete\(\s*['"]me['"]\s*\)/);
   });
 
   it('suspending a customer also bumps tokenVersion', async () => {
