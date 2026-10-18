@@ -697,17 +697,7 @@ export default function ProductDetailPage() {
             {activeTab === "size-guide" && sizeGuide && (
               <div className="max-w-3xl">
                 <div
-                  className="prose prose-sm max-w-none text-muted-foreground
-                    prose-headings:text-foreground prose-headings:font-bold
-                    prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3
-                    prose-h3:text-base prose-h3:mt-4 prose-h3:mb-2
-                    prose-p:leading-relaxed prose-p:mb-4
-                    prose-ul:list-disc prose-ul:pl-5 prose-ul:mb-4
-                    prose-li:mb-1
-                    prose-strong:text-foreground
-                    prose-table:w-full prose-table:border-collapse
-                    prose-th:border prose-th:border-border prose-th:px-3 prose-th:py-2 prose-th:text-left prose-th:text-xs prose-th:font-semibold prose-th:bg-muted
-                    prose-td:border prose-td:border-border prose-td:px-3 prose-td:py-2 prose-td:text-sm"
+                  className="cms-content"
                   // Defense in depth: API sanitizes on write; sanitize again on render.
                   dangerouslySetInnerHTML={{
                     __html: sanitizeHtml(

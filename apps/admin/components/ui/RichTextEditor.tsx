@@ -1,14 +1,33 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useMemo, useState, useCallback, useRef } from 'react';
+import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import { Code, Eye, Upload, ImageIcon, Loader2 } from 'lucide-react';
 import { getImagePreset, formatAllowedMimesForToast } from '@naro/shared';
 import { useToast } from '@/contexts/ToastContext';
 import adminApi from '@/lib/api';
+import { sanitizeHtml } from '@/lib/sanitize-html';
 import 'react-quill-new/dist/quill.snow.css';
 
 const ReactQuill = dynamic(() => import('react-quill-new'), { ssr: false });
+
+/**
+ * Quill can't represent tables: loading table HTML into the visual editor
+ * turns every cell into its own paragraph (the size guide lost its tables
+ * this way). Content with such markup is edited in HTML mode only.
+ */
+const QUILL_UNSUPPORTED = /<(table|thead|tbody|tfoot|tr|th|td|colgroup|col|caption)\b/i;
+export function hasQuillUnsupportedMarkup(html: string | null | undefined): boolean {
+  return QUILL_UNSUPPORTED.test(html ?? '');
+}
+
+/**
+ * Quill 2.0.x's getSemanticHTML emits every space as `&nbsp;`, which stops
+ * text from wrapping on the storefront. Turn them back into plain spaces.
+ */
+function normalizeQuillHtml(html: string): string {
+  return html.replace(/&nbsp;/g, ' ').replace(/ /g, ' ');
+}
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
 const NEWSLETTER_PRESET = getImagePreset('newsletterInline');
@@ -62,7 +81,15 @@ export default function RichTextEditor({
   minHeight = '300px',
   enableImageUpload = true,
 }: RichTextEditorProps) {
-  const [mode, setMode] = useState<'visual' | 'html'>('visual');
+  const visualUnsupported = hasQuillUnsupportedMarkup(value);
+  const [mode, setMode] = useState<'visual' | 'html'>(() =>
+    hasQuillUnsupportedMarkup(value) ? 'html' : 'visual',
+  );
+  // Value often arrives after mount (async page load) — switch to HTML the
+  // moment unsupported markup shows up, before Quill can mangle it.
+  useEffect(() => {
+    if (visualUnsupported && mode === 'visual') setMode('html');
+  }, [visualUnsupported, mode]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
@@ -173,7 +200,13 @@ export default function RichTextEditor({
           <button
             type="button"
             onClick={() => setMode('visual')}
-            className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+            disabled={visualUnsupported}
+            title={
+              visualUnsupported
+                ? 'This content contains a table, which the visual editor cannot keep. Edit it in HTML mode.'
+                : undefined
+            }
+            className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
               mode === 'visual'
                 ? 'bg-brand-gold text-white'
                 : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--background))]'
@@ -322,7 +355,12 @@ export default function RichTextEditor({
           <ReactQuill
             theme="snow"
             value={value}
-            onChange={onChange}
+            // Only real edits count. Quill fires 'api' changes when it
+            // normalises loaded HTML; propagating those silently rewrote
+            // content (lost tables, &nbsp; everywhere) without any typing.
+            onChange={(html, _delta, source) => {
+              if (source === 'user') onChange(normalizeQuillHtml(html));
+            }}
             modules={modules}
             formats={formats}
             placeholder={placeholder}
@@ -332,13 +370,39 @@ export default function RichTextEditor({
 
       {/* HTML source code editor */}
       {mode === 'html' && (
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="<h1>Write your HTML here...</h1>"
-          className="w-full rounded-b-lg border border-t-0 border-[hsl(var(--border))] bg-[hsl(var(--background))] px-4 py-3 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold font-mono resize-y"
-          style={{ minHeight }}
-        />
+        <>
+          {visualUnsupported && (
+            <p className="border-x border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))]">
+              This content contains a table, so it can only be edited as HTML. The preview below shows how it will look.
+            </p>
+          )}
+          <textarea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="<h1>Write your HTML here...</h1>"
+            className="w-full rounded-b-lg border border-t-0 border-[hsl(var(--border))] bg-[hsl(var(--background))] px-4 py-3 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] outline-none focus:border-brand-gold focus:ring-1 focus:ring-brand-gold font-mono resize-y"
+            style={{ minHeight }}
+          />
+          {visualUnsupported && (
+            <div className="mt-3 rounded-lg border border-[hsl(var(--border))] p-4">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-[hsl(var(--muted-foreground))]">Preview</p>
+              <style>{`
+                .rte-preview h2 { font-size: 1.25rem; font-weight: 700; margin: 1rem 0 0.5rem; }
+                .rte-preview h3 { font-size: 1.1rem; font-weight: 600; margin: 1rem 0 0.5rem; }
+                .rte-preview p { margin: 0.5rem 0; }
+                .rte-preview ul { list-style: disc; padding-left: 1.5rem; margin: 0.5rem 0; }
+                .rte-preview ol { list-style: decimal; padding-left: 1.5rem; margin: 0.5rem 0; }
+                .rte-preview table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; font-size: 0.875rem; }
+                .rte-preview th, .rte-preview td { border-bottom: 1px solid hsl(var(--border)); padding: 0.5rem 0.75rem; text-align: left; }
+                .rte-preview th { font-weight: 600; }
+              `}</style>
+              <div
+                className="rte-preview text-sm text-[hsl(var(--foreground))]"
+                dangerouslySetInnerHTML={{ __html: sanitizeHtml(value) }}
+              />
+            </div>
+          )}
+        </>
       )}
     </div>
   );

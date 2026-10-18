@@ -170,16 +170,7 @@ export default function CMSPage() {
           <h1 className="text-3xl font-heading font-bold text-foreground mb-8">{title}</h1>
           <div className="rounded-xl border border-border bg-card p-6 sm:p-8">
             <div
-              className="prose prose-sm max-w-none text-muted-foreground
-                prose-headings:text-foreground prose-headings:font-bold
-                prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3
-                prose-h3:text-base prose-h3:mt-4 prose-h3:mb-2
-                prose-p:leading-relaxed prose-p:mb-4
-                prose-ul:list-disc prose-ul:pl-5 prose-ul:mb-4
-                prose-ol:list-decimal prose-ol:pl-5 prose-ol:mb-4
-                prose-li:mb-1
-                prose-strong:text-foreground
-                prose-a:text-gold-text prose-a:no-underline hover:prose-a:underline"
+              className="cms-content"
               // Defense in depth: API sanitizes on write; sanitize again on render.
               dangerouslySetInnerHTML={{ __html: sanitizeHtml(content) }}
             />

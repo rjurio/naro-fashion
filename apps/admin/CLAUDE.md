@@ -161,3 +161,9 @@ Serves both **tenant admin** (SUPER_ADMIN, MANAGER, STAFF) and **platform admin*
 - Service worker `public/sw.js` + IndexedDB read cache in `lib/api.ts` `request()` + `lib/offline/*` + `contexts/SyncContext.tsx` + `components/offline/*` (status badge in TopBar and POS header, offline banner). Full notes: root CLAUDE.md → "Admin Offline Mode + Sync".
 - Never add raw `fetch()` calls for API data — go through `adminApi` so offline caching/queuing applies.
 - Offline mutations throw `ApiError` with `code: 'OFFLINE'`; use `isOfflineError(err)` to show a friendly message.
+
+## RichTextEditor (Quill) and tables
+- Quill 2 cannot represent tables: loading table HTML in Visual mode flattens every cell into a <p> (the size guide was lost this way in Oct 2026). `RichTextEditor` now opens content containing table markup in **HTML mode**, disables Visual for it, and shows a sanitized live preview.
+- Quill `onChange` is only propagated for `source === 'user'` — Quill's own normalisation on load (source `api`) used to silently rewrite stored content.
+- Quill 2.0.3 emits every space as `&nbsp;` (stops wrapping on the storefront); `normalizeQuillHtml` converts them back.
+- Repair script for the size guide: `node scripts/restore-size-guide-tables.js <tenantSlug> [--dry-run]` (content in `scripts/content/size-guide.{en,sw}.html`).

@@ -195,6 +195,29 @@ select optgroup {
   color: var(--color-foreground);
 }
 
+/* ===== Admin-authored rich text (CMS pages, size guides) =====
+   The Tailwind typography plugin is NOT installed, so `prose-*` classes are
+   no-ops. Style the HTML here instead. Tables follow the size-chart look:
+   header underline, row separators, first column left, figures right. */
+.cms-content { color: var(--color-muted-foreground); line-height: 1.7; font-size: 0.9375rem; }
+.cms-content h2 { color: var(--color-foreground); font-size: 1.125rem; font-weight: 700; margin: 1.5rem 0 0.75rem; }
+.cms-content h3 { color: var(--color-foreground); font-size: 1rem; font-weight: 700; margin: 1.5rem 0 0.5rem; }
+.cms-content h2:first-child, .cms-content h3:first-child { margin-top: 0; }
+.cms-content p { margin: 0 0 1rem; }
+.cms-content ul { list-style: disc; padding-left: 1.25rem; margin: 0 0 1rem; }
+.cms-content ol { list-style: decimal; padding-left: 1.25rem; margin: 0 0 1rem; }
+.cms-content li { margin-bottom: 0.25rem; }
+.cms-content strong { color: var(--color-foreground); }
+.cms-content a { color: var(--color-gold-text); }
+.cms-content a:hover { text-decoration: underline; }
+.cms-content table { width: 100%; border-collapse: collapse; margin: 0.5rem 0 1.5rem; font-size: 0.875rem; font-variant-numeric: tabular-nums; }
+.cms-content th { color: var(--color-foreground); font-weight: 600; text-align: left; padding: 0.625rem 0.75rem; border-bottom: 1px solid var(--color-foreground); white-space: nowrap; }
+.cms-content td { color: var(--color-foreground); padding: 0.75rem; border-bottom: 1px solid var(--color-border); }
+.cms-content tr:last-child td { border-bottom: none; }
+.cms-content th:not(:first-child), .cms-content td:not(:first-child) { text-align: right; }
+.cms-content th:first-child, .cms-content td:first-child { padding-left: 0; }
+.cms-content th:last-child, .cms-content td:last-child { padding-right: 0; }
+
 /* ===== Utility classes ===== */
 @utility scrollbar-hide {
   -ms-overflow-style: none;
