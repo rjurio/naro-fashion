@@ -254,7 +254,8 @@
     "failedSubmitReview": "Imeshindwa kuwasilisha maoni. Tafadhali jaribu tena.",
     "downloadSizeGuide": "Pakua Mwongozo wa Ukubwa (PDF)",
     "rateStars": "Kadiria nyota {n}",
-    "rateStarsPlural": "Kadiria nyota {n}"
+    "rateStarsPlural": "Kadiria nyota {n}",
+    "perRental": " / ukodishaji"
   },
   "cart": {
     "yourCart": "Kikapu cha Ununuzi",
@@ -430,7 +431,10 @@
     "productNotFound": "Bidhaa Haijapatikana",
     "productNotFoundDesc": "Bidhaa ya kukodisha unayoitafuta haipo.",
     "retailPrice": "Bei ya rejareja:",
-    "perDay": "/ siku"
+    "perDay": "/ siku",
+    "perRental": "/ ukodishaji (hadi siku {max})",
+    "rentalFeeFlat": "Ada ya kukodisha (hadi siku {max})",
+    "lateFeeWarning": "Ukikaa nalo zaidi ya siku {max}, ada ya kuchelewa itaongezwa kwa kila siku ya ziada."
   },
   "flashSales": {
     "title": "Mauzo ya Haraka",

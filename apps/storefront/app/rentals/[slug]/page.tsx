@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   Crown,
   Star,
@@ -18,8 +18,9 @@ import {
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { formatPrice } from "@/lib/utils";
-import { productsApi, rentalsApi } from "@/lib/api";
+import { productsApi, rentalsApi, ApiError } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { useTranslation } from "@/lib/i18n";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
@@ -33,13 +34,17 @@ function resolveImg(url?: string): string {
 export default function RentalDetailPage() {
   const params = useParams();
   const slug = params.slug as string;
+  const router = useRouter();
   const toast = useToast();
   const { t } = useTranslation();
+  const { isAuthenticated } = useAuth();
 
   const [product, setProduct] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [selectedImage, setSelectedImage] = useState(0);
-  const [selectedSize, setSelectedSize] = useState("");
+  // The API books a specific variant, so we store its id (the buttons show
+  // the size / variant name).
+  const [selectedVariantId, setSelectedVariantId] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [checking, setChecking] = useState(false);
@@ -68,18 +73,30 @@ export default function RentalDetailPage() {
   }, [product?.id, startDate, endDate]);
 
   const handleBookNow = async () => {
-    if (!product || !selectedSize || !startDate || !endDate) return;
+    if (!product || !selectedVariantId || !startDate || !endDate) return;
+    if (!isAuthenticated) {
+      router.push(`/auth/login?redirect=${encodeURIComponent(`/rentals/${slug}`)}`);
+      return;
+    }
     setBooking(true);
     try {
+      // Contract: CreateRentalDto (apps/api/src/rentals/dto). The API rejects
+      // unknown fields, so send exactly these. The customer collects the item
+      // on the start date.
       await rentalsApi.create({
         productId: product.id,
-        size: selectedSize,
+        variantId: selectedVariantId,
         startDate,
-        endDate,
+        returnDate: endDate,
+        pickupDate: startDate,
       });
       toast.success(t('rentals.rentalBookedSuccess'));
-    } catch {
-      toast.error(t('rentals.rentalBookFailed'));
+      router.push('/account/rentals');
+    } catch (err) {
+      // Show the API's reason (incomplete profile, dates taken, too long…).
+      const apiMsg = err instanceof ApiError ? err.message : '';
+      const isGeneric = !apiMsg || /^Request failed with status/.test(apiMsg);
+      toast.error(isGeneric ? t('rentals.rentalBookFailed') : apiMsg);
     } finally {
       setBooking(false);
     }
@@ -130,8 +147,14 @@ export default function RentalDetailPage() {
   const images = (product.images || []).map((img: any) => resolveImg(typeof img === 'string' ? img : img.url));
   const variants = (product.variants || []).filter((v: any) => v.isActive !== false);
   const uniqueSizes = [...new Set(variants.map((v: any) => v.size).filter(Boolean))] as string[];
+  // One rentable item per size: book the first active variant of that size.
+  const variantIdBySize = new Map<string, string>();
+  for (const v of variants) if (v.size && !variantIdBySize.has(v.size)) variantIdBySize.set(v.size, v.id);
+  const selectedSize = variants.find((v: any) => v.id === selectedVariantId)?.size ?? "";
   const features: string[] = Array.isArray(product.specifications) ? product.specifications : [];
-  const rentalPricePerDay = Number(product.rentalPricePerDay) || 0;
+  // Despite the column name, rentalPricePerDay is a FLAT price for the whole
+  // rental (up to maxRentalDays) — see schema.prisma + RentalsService.create.
+  const rentalPrice = Number(product.rentalPricePerDay) || 0;
   const depositAmount = Number(product.rentalDepositAmount) || 0;
   const downPaymentPercent = product.rentalDownPaymentPct || 25;
   const maxRentalDays = product.maxRentalDays || 7;
@@ -140,6 +163,7 @@ export default function RentalDetailPage() {
   const reviewCount = product.reviewCount || 0;
   const retailPrice = Number(product.basePrice) || 0;
 
+  // Same day count the API uses: whole days between pickup and return.
   const rentalDays =
     startDate && endDate
       ? Math.max(
@@ -147,11 +171,16 @@ export default function RentalDetailPage() {
           Math.ceil(
             (new Date(endDate).getTime() - new Date(startDate).getTime()) /
               (1000 * 60 * 60 * 24)
-          ) + 1
+          )
         )
       : 0;
+  const nextDay = (d: string) => {
+    const x = new Date(d);
+    x.setDate(x.getDate() + 1);
+    return x.toISOString().split("T")[0];
+  };
 
-  const rentalFee = rentalDays * rentalPricePerDay;
+  const rentalFee = rentalPrice;
   const downPayment = Math.round(rentalFee * (downPaymentPercent / 100));
   const totalCost = rentalFee + depositAmount;
   const remainingPayment = totalCost - downPayment;
@@ -248,9 +277,9 @@ export default function RentalDetailPage() {
             <div className="mt-6 p-4 rounded-xl bg-gold-500/10 border border-gold-500/30">
               <div className="flex items-baseline gap-2">
                 <span className="text-3xl font-bold text-foreground">
-                  {formatPrice(rentalPricePerDay)}
+                  {formatPrice(rentalPrice)}
                 </span>
-                <span className="text-muted-foreground">{t('rentals.perDay')}</span>
+                <span className="text-muted-foreground">{t('rentals.perRental').replace('{max}', String(maxRentalDays))}</span>
               </div>
               {retailPrice > 0 && (
                 <p className="text-sm text-muted-foreground mt-1">
@@ -274,7 +303,7 @@ export default function RentalDetailPage() {
                     <button
                       key={size}
                       type="button"
-                      onClick={() => setSelectedSize(size)}
+                      onClick={() => setSelectedVariantId(variantIdBySize.get(size) ?? "")}
                       className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
                         selectedSize === size
                           ? "border-gold-500 bg-gold-500 text-[#1A1A1A]"
@@ -294,9 +323,9 @@ export default function RentalDetailPage() {
                     <button
                       key={v.id}
                       type="button"
-                      onClick={() => setSelectedSize(v.name || v.id)}
+                      onClick={() => setSelectedVariantId(v.id)}
                       className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
-                        selectedSize === (v.name || v.id)
+                        selectedVariantId === v.id
                           ? "border-gold-500 bg-gold-500 text-[#1A1A1A]"
                           : "border-border text-foreground hover:border-gold-500"
                       }`}
@@ -323,7 +352,11 @@ export default function RentalDetailPage() {
                     type="date"
                     title={t('rentals.pickupDate')}
                     value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
+                    onChange={(e) => {
+                      setStartDate(e.target.value);
+                      // The return date must be at least one day after pickup.
+                      if (endDate && e.target.value && endDate <= e.target.value) setEndDate("");
+                    }}
                     min={new Date().toISOString().split("T")[0]}
                     className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500"
                   />
@@ -337,7 +370,7 @@ export default function RentalDetailPage() {
                     title={t('rentals.returnDate')}
                     value={endDate}
                     onChange={(e) => setEndDate(e.target.value)}
-                    min={startDate || new Date().toISOString().split("T")[0]}
+                    min={startDate ? nextDay(startDate) : new Date().toISOString().split("T")[0]}
                     className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500"
                   />
                 </div>
@@ -351,6 +384,12 @@ export default function RentalDetailPage() {
               )}
               {available === false && (
                 <p className="text-xs text-red-500 mt-1">{t('rentals.notAvailable')}</p>
+              )}
+              {rentalDays > maxRentalDays && (
+                <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3" />
+                  {t('rentals.lateFeeWarning').replace('{max}', String(maxRentalDays))}
+                </p>
               )}
               {available === true && (
                 <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
@@ -368,10 +407,7 @@ export default function RentalDetailPage() {
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">
-                      {t('rentals.rentalFeeLine')
-                        .replace('{days}', String(rentalDays))
-                        .replace('{unit}', rentalDays === 1 ? t('rentals.day') : t('rentals.daysLong'))
-                        .replace('{rate}', formatPrice(rentalPricePerDay))}
+                      {t('rentals.rentalFeeFlat').replace('{max}', String(maxRentalDays))}
                     </span>
                     <span className="font-medium text-foreground">
                       {formatPrice(rentalFee)}
@@ -430,7 +466,7 @@ export default function RentalDetailPage() {
                 variant="secondary"
                 size="lg"
                 className="w-full gap-2"
-                disabled={!selectedSize || !startDate || !endDate || available === false || booking}
+                disabled={!selectedVariantId || !startDate || !endDate || available === false || booking}
                 onClick={handleBookNow}
               >
                 <Crown className="h-5 w-5" />
@@ -438,7 +474,7 @@ export default function RentalDetailPage() {
                   ? t('rentals.booking')
                   : `${t('rentals.bookNowWithPay')}${rentalDays > 0 ? ` - ${t('rentals.payAmount').replace('{amount}', formatPrice(downPayment))}` : ""}`}
               </Button>
-              {(!selectedSize || !startDate || !endDate) && (
+              {(!selectedVariantId || !startDate || !endDate) && (
                 <p className="text-xs text-muted-foreground text-center mt-2">
                   {t('rentals.selectSizeAndDates')}
                 </p>

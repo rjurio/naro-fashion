@@ -217,7 +217,7 @@ export default function ProductCard({
         {/* Rent price */}
         {isRentable && rentPrice && (
           <p className="mt-1 text-xs text-gold-text">
-            {t('product.rentFrom')} {formatPrice(rentPrice)}{t('product.perDay')}
+            {t('product.rentFrom')} {formatPrice(rentPrice)}{t('product.perRental')}
           </p>
         )}
       </div>

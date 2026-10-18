@@ -318,7 +318,7 @@ The shop page (`/shop` or `/products`) displays the store's complete product cat
 - Products are displayed in a responsive grid (2 columns on mobile, 3 on tablet, 4 on desktop).
 - Each product card shows: thumbnail image, product name, price (in TZS), star rating, and review count.
 - Products on sale show the original price crossed out with the sale price highlighted.
-- Rental-eligible products display a "Rent" badge and the rental price per day.
+- Rental-eligible products display a "Rent" badge and the rental price (a flat price per rental).
 - New arrivals display a "New" badge.
 
 **Filtering:**
@@ -369,7 +369,7 @@ Click on any product card to view its full details. The product detail page (`/p
    - On **mobile phones**, tap the **AR button** to place the item in your real-world environment using augmented reality.
    - Click **"Photos"** to switch back to the standard image gallery.
 
-3. **Price Display** -- Shows the current price in TZS. If on sale, the original price appears crossed out with the discount percentage shown. For rental-eligible items, both the purchase price and the rental price per day are displayed.
+3. **Price Display** -- Shows the current price in TZS. If on sale, the original price appears crossed out with the discount percentage shown. For rental-eligible items, both the purchase price and the rental price (flat, per rental) are displayed.
 
 4. **Size and Color Selection** -- Select your desired size and color variant. Available options appear as clickable buttons. Unavailable sizes or colors are grayed out.
 
@@ -579,7 +579,7 @@ Promotional codes (also called coupon codes or discount codes) can save you mone
 Some products on the store are available for rental in addition to (or instead of) purchase. This is especially common for designer gowns, formal wear, and wedding attire.
 
 ![Rentals page](screenshots/store-07-rentals.png)
-*Figure 6: The rentals browse page showing designer gowns available for rental with daily rates and availability information.*
+*Figure 6: The rentals browse page showing designer gowns available for rental with their rental prices and availability information.*
 
 Each product has an **availability mode**:
 
@@ -591,7 +591,7 @@ Each product has an **availability mode**:
 
 On product cards and detail pages:
 - Products available for rental display a **"Rent"** badge.
-- The **rental price per day** is shown alongside the purchase price.
+- The **rental price** is shown alongside the purchase price, e.g. "TZS 35,000 / rental". It is a **flat price for the whole rental** -- up to the item's maximum rental days (7 by default) -- not a daily rate.
 - Rental products are also featured on the dedicated **Rentals** page (`/rentals`).
 
 ### ID Verification
@@ -625,22 +625,27 @@ Before a rental can be confirmed you must complete **identity verification**. Th
 
 ### Booking a Rental
 
+**Before you book**, make sure you are **logged in** and your profile is complete: **full name, phone number, email, and at least one address** (Account > Settings and Account > Addresses). The store needs these to arrange pickup and contact you. If anything is missing, the booking button tells you exactly what to add.
+
 1. **Browse rental items** on the Rentals page (`/rentals`). You can filter by type (e.g., Ball Gowns, Mermaid, A-Line, Wedding Gowns, Suits & Tuxedos) and sort by rental price.
 2. **Click on a rental item** to view its detail page (`/rentals/[slug]`).
 3. **Select Size** (or variant).
 4. **Select Rental Period:**
-   - **Pickup Date** -- When you need the item.
-   - **Return Date** -- When you will return it.
+   - **Pickup Date** -- The day you collect the item.
+   - **Return Date** -- The day you bring it back. It must be **at least one day after** the pickup date.
    - The page checks availability as you choose and shows **"Available for selected dates"** or **"Not available for selected dates. Please choose different dates."**
    - A note shows the store's **buffer days** between rentals (default 7) and the **maximum number of rental days**. For example, with a 7-day buffer, if another customer has the item until the 15th, the earliest you can book is the 22nd.
+   - If your dates go past the maximum rental days, the page warns that a **late fee** will be added for each extra day.
 5. **Review the Price Breakdown:**
-   - Rental fee (number of days x daily rate)
+   - Rental fee -- the **flat rental price**, covering up to the maximum rental days
    - Security deposit (refundable)
    - Total
    - **Down payment** (25% by default -- pay now)
    - **Remaining** (pay before dispatch)
-6. Click **"Book Now"**. The booking is created and appears under **Account > My Rentals** with its payment status.
+6. Click **"Book Now"**. If you are not logged in you are taken to the login page first and brought back afterwards. Once booked, you are taken to **Account > My Rentals**, where the booking appears with its status (**Pending ID Verification** until your ID is approved).
 7. **Pay the down payment** to secure the booking, and the remaining balance before the item is dispatched. Arrange payment with the store as instructed (the store records the payments; the remaining balance must be paid before dispatch).
+
+> **If booking fails**, the message on screen explains why -- for example a missing phone number or address, dates that were just taken by someone else, or a rental longer than the store allows. Fix the issue and try again.
 
 > **Important -- unpaid bookings expire:** A booking that has not been paid is only held for a limited time (**48 hours by default**). After that it is cancelled automatically and the dates are released for other customers.
 

@@ -479,7 +479,7 @@ export default function ProductDetailPage() {
               <div className="mt-3 flex items-center gap-2 p-3 rounded-lg bg-gold-500/10 border border-gold-500/30">
                 <Crown className="h-5 w-5 text-gold-600" />
                 <span className="text-sm font-medium text-gold-text">
-                  {t("product.rentalPrice")} {formatPrice(rentPrice)}{t("product.perDay")}
+                  {t("product.rentalPrice")} {formatPrice(rentPrice)}{t("product.perRental")}
                 </span>
               </div>
             )}
