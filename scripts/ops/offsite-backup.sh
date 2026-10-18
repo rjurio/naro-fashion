@@ -12,6 +12,9 @@
 #      packed as one tar.gz per run and ENCRYPTED with `age` (or gpg symmetric
 #      fallback). This step REFUSES to run without an encryption key: national
 #      ID scans must never sit in a bucket in plaintext.
+#   4. server config not in git (.env files, /etc/nginx, /etc/letsencrypt,
+#      backup cron files)                          -> s3://$BUCKET/server-config/
+#      one encrypted tar.gz per run; also refuses to run without a key.
 #
 # Remote retention: uses `rclone copy` (never `sync`), so a local deletion or
 # ransomware wipe does NOT propagate to the bucket. Configure a lifecycle rule
@@ -20,7 +23,8 @@
 # Dead-man's switch: pings $HEALTHCHECK_BACKUP_URL on success, /fail on failure.
 #
 # Config: env vars, or /etc/naro-backup.env (mode 600, root-owned):
-#   BACKUP_S3_ENDPOINT            e.g. https://fra1.vultrobjects.com   (required)
+#   BACKUP_S3_ENDPOINT            e.g. https://<acct>.r2.cloudflarestorage.com (required)
+#   BACKUP_S3_PROVIDER            rclone s3 provider: Cloudflare | Other (default Other)
 #   BACKUP_S3_BUCKET              e.g. naro-fashion-backups            (required)
 #   BACKUP_S3_ACCESS_KEY_ID       bucket access key                    (required*)
 #   BACKUP_S3_SECRET_ACCESS_KEY   bucket secret key                    (required*)
@@ -81,7 +85,10 @@ if [ -n "${BACKUP_S3_ACCESS_KEY_ID:-}" ] && [ -n "${BACKUP_S3_SECRET_ACCESS_KEY:
   [ -n "${BACKUP_S3_ENDPOINT:-}" ] || fail "BACKUP_S3_ENDPOINT not set"
   REMOTE_ENV_PREFIX="RCLONE_CONFIG_$(echo "$REMOTE_NAME" | tr '[:lower:]' '[:upper:]')"
   export "${REMOTE_ENV_PREFIX}_TYPE=s3"
-  export "${REMOTE_ENV_PREFIX}_PROVIDER=Other"
+  export "${REMOTE_ENV_PREFIX}_PROVIDER=${BACKUP_S3_PROVIDER:-Other}"
+  # The bucket is created by hand; object-scoped tokens (e.g. Cloudflare R2
+  # "Object Read & Write") can't call CreateBucket, which rclone otherwise tries.
+  export "${REMOTE_ENV_PREFIX}_NO_CHECK_BUCKET=true"
   export "${REMOTE_ENV_PREFIX}_ENDPOINT=${BACKUP_S3_ENDPOINT}"
   export "${REMOTE_ENV_PREFIX}_ACCESS_KEY_ID=${BACKUP_S3_ACCESS_KEY_ID}"
   export "${REMOTE_ENV_PREFIX}_SECRET_ACCESS_KEY=${BACKUP_S3_SECRET_ACCESS_KEY}"
@@ -163,6 +170,40 @@ if [ -d "$PRIVATE_DIR" ] && [ -n "$(find "$PRIVATE_DIR" -type f -print -quit)" ]
   log "private-uploads: uploaded $(basename "$ENC_OUT") ($(du -h "$ENC_OUT" | awk '{print $1}'))"
 else
   log "private-uploads: nothing to back up"
+fi
+
+# ---------------------------------------------------------------- 4. server config (not in git)
+# Everything needed to rebuild the box that the repo doesn't hold: the three
+# .env files (JWT secrets, DB password, TWO_FA_ENCRYPTION_KEY — losing that
+# one locks out every 2FA admin), any frontend .env*, nginx sites, TLS certs
+# + ACME account, and the backup cron entries. Always encrypted.
+CONFIG_PATHS=()
+for p in \
+  "${APP_DIR}/.env" \
+  "${APP_DIR}/apps/api/.env" \
+  "${APP_DIR}/packages/database/.env" \
+  "${APP_DIR}"/apps/storefront/.env* \
+  "${APP_DIR}"/apps/admin/.env* \
+  /etc/nginx \
+  /etc/letsencrypt \
+  /etc/cron.d/naro-pg-backup \
+  /etc/cron.d/naro-offsite-backup; do
+  [ -e "$p" ] && CONFIG_PATHS+=("$p")
+done
+if [ "${#CONFIG_PATHS[@]}" -gt 0 ]; then
+  [ -n "$ENC_EXT" ] || fail "server config contains secrets but no encryption key is configured — refusing to upload it in plaintext"
+  TS=$(date -u +%Y-%m-%d_%H%M%SZ)
+  CFG_TAR="$(mktemp "${STAGING_DIR}/server-config-XXXXXX.tar.gz")"
+  TMP_FILES+=("$CFG_TAR")
+  CFG_OUT="${STAGING_DIR}/server-config-${TS}.tar.gz${ENC_EXT}"
+  TMP_FILES+=("$CFG_OUT")
+  # Absolute paths are stored without the leading "/" (restore with tar -C /).
+  tar -czf "$CFG_TAR" "${CONFIG_PATHS[@]}" 2>/dev/null
+  encrypt "$CFG_TAR" "$CFG_OUT"
+  rclone copyto "$CFG_OUT" "${REMOTE}/server-config/$(basename "$CFG_OUT")" "${RCLONE_OPTS[@]}"
+  log "server-config: uploaded $(basename "$CFG_OUT") (${#CONFIG_PATHS[@]} path(s), $(du -h "$CFG_OUT" | awk '{print $1}'))"
+else
+  log "WARN: no server config paths found — skipping"
 fi
 
 log "OK off-site backup complete"

@@ -95,7 +95,18 @@ It does NOT protect against:
 
 It also did NOT cover **uploaded files** (`apps/api/uploads/` product/CMS images, `apps/api/private-uploads/` ID documents) — those were on the VPS disk only.
 
-**Mitigation: off-site sync to Vultr Object Storage** via [`scripts/ops/offsite-backup.sh`](../../scripts/ops/offsite-backup.sh). The script is in the repo; **the operator must complete the setup below before it does anything** (status: NOT YET LIVE until the steps are ticked off).
+**Mitigation: off-site sync to Cloudflare R2** via [`scripts/ops/offsite-backup.sh`](../../scripts/ops/offsite-backup.sh).
+
+**Status: LIVE since 2026-10-18.**
+- Bucket `naro-fashion-backups` on the owner's Cloudflare account, location Automatic → Western Europe, Standard class, private. Free tier (10 GB); ~65 MB used at go-live.
+- API token `naro-vps-backup`: Object Read & Write, this bucket only, no expiry. Access Key ID + endpoint are in `/etc/naro-backup.env`; the **Secret Access Key is in that file and the owner's password manager only**.
+- Encryption: `age`, recipient `age1lxvcy7kydpe0n3u90pz6ew79fatc0st04999yy88v5sxuvlrrueqt054z5`. The **private key is NOT on the VPS** — it's in the owner's password manager + an offline copy. Without it nothing can be restored.
+- Cron `/etc/cron.d/naro-offsite-backup`, 04:00 UTC (07:00 EAT). Script installed at `/usr/local/bin/naro-offsite-backup.sh` (re-install after changing it in the repo: `install -m 0755 scripts/ops/offsite-backup.sh /usr/local/bin/naro-offsite-backup.sh`).
+- First run 2026-10-18 09:03Z: 43 dumps (12.6 MB), 243 uploads (52 MB), server-config bundle (29 KB, 9 paths). Uploaded dumps start with the `age-encryption.org/v1` header.
+- Alerting LIVE (2026-10-18): Healthchecks.io project "Naro Fashion" (owner's account, email integration). Checks `naro-pg-backup` (cron `15 3 * * *` UTC, 2h grace) and `naro-offsite-backup` (cron `0 4 * * *` UTC, 2h grace); ping URLs are `HEALTHCHECK_PGBACKUP_URL` / `HEALTHCHECK_BACKUP_URL` in `/etc/naro-backup.env`. A missed run or a `/fail` ping emails the owner.
+- Cost alert: $1 budget alert in the R2 dashboard (owner).
+
+The setup steps below are kept for a rebuild (they were written for Vultr Object Storage; R2 differences are noted inline).
 
 ## Pre-deploy dumps (automatic)
 
@@ -122,6 +133,8 @@ Cost: Vultr Object Storage ~US$6/mo tier minimum (check current pricing); a chea
 5. **[MANUAL — VPS]** Create `/etc/naro-backup.env` (read by both `pg-backup.sh` and `offsite-backup.sh`):
    ```bash
    cat > /etc/naro-backup.env <<'EOF'
+   # R2: BACKUP_S3_PROVIDER=Cloudflare and endpoint https://<account-id>.r2.cloudflarestorage.com
+   BACKUP_S3_PROVIDER=Other
    BACKUP_S3_ENDPOINT=https://fra1.vultrobjects.com
    BACKUP_S3_BUCKET=naro-fashion-backups
    BACKUP_S3_ACCESS_KEY_ID=<access key>
@@ -165,6 +178,24 @@ Cost: Vultr Object Storage ~US$6/mo tier minimum (check current pricing); a chea
 | `/var/backups/naro/postgres/*.dump` | `postgres/<name>.dump.age` | yes (age) — plaintext + WARN if no key |
 | `apps/api/uploads/` | `uploads/` (mirror, copy-only) | no — already public via the site |
 | `apps/api/private-uploads/` (ID documents) | `private-uploads/private-uploads-<ts>.tar.gz.age` | **always** — script refuses to upload without a key |
+| Server config not in git: the 3 `.env` files + any `apps/{storefront,admin}/.env*`, `/etc/nginx`, `/etc/letsencrypt`, `/etc/cron.d/naro-*` | `server-config/server-config-<ts>.tar.gz.age` (one per night) | **always** — refuses to upload without a key |
+
+### Rebuilding a server from the off-site backup
+
+On a fresh Ubuntu VPS (after `git clone` of the repo to `/var/www/naro-fashion`), with the age private key on hand:
+
+```bash
+# fetch (laptop or new VPS) — needs an R2 token; the backup token is IP-limited/write-scoped, so create a temporary read-only one
+rclone copy r2:naro-fashion-backups/server-config/<newest>.tar.gz.age .
+rclone copy r2:naro-fashion-backups/postgres/<newest>.dump.age .
+age -d -i naro-backup-age.key -o server-config.tar.gz <newest>.tar.gz.age
+age -d -i naro-backup-age.key -o restore.dump <newest>.dump.age
+tar -tzf server-config.tar.gz          # inspect first
+sudo tar -xzf server-config.tar.gz -C /  # restores .env files, nginx, letsencrypt, cron entries
+# then: create the DB + naro_admin user, pg_restore (see "Restoring" above), rclone copy uploads/ back into apps/api/uploads/, run deploy.sh
+```
+
+`TWO_FA_ENCRYPTION_KEY` in `apps/api/.env` must be restored exactly — a new value makes every enrolled admin's 2FA unusable.
 
 `rclone copy` is used (never `sync`), so a local deletion or ransomware wipe does not propagate to the bucket.
 
@@ -190,6 +221,7 @@ A backup that has never been restored is a hope, not a backup. Once a quarter:
 | Date | Dump restored | Product / Order rows | Newest order | Done by |
 |---|---|---|---|---|
 | 2026-10-04 | `naro_fashion-2026-10-04_031501Z.dump` (296K, local copy; restored into a scratch DB in 1s, then dropped) | 90 products / 96 variants / 6 orders — all 9 checked tables matched live counts | — | Claude (on-box test; off-site copy not yet configured) |
+| 2026-10-18 | `naro_fashion-2026-10-18_031501Z.dump.age` (the encrypted off-site copy) — decrypted on the owner's laptop with the age private key → valid `PGDMP` archive; full `pg_restore` to SQL succeeded (75 tables with data) | 90 products / 96 variants / 19 categories / 6 orders / 3 admins / 78 settings | — | Claude, with owner's key (decrypted files deleted afterwards) |
 
 ## Monitoring
 
