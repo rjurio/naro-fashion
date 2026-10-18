@@ -20,6 +20,25 @@
      Use `text-gold-text` for text; keep `gold-500` for fills/accents. */
   --color-gold-text: #8A6D1A;
 
+  /* Semantic theme colors. Registering them here is what makes Tailwind v4
+     generate `bg-card`, `bg-muted`, `text-muted-foreground`, … utilities —
+     without this they silently produce no CSS (dropdowns render transparent).
+     Values are the light defaults; the [data-theme] blocks below override the
+     variables, and the utilities read them via var(), so theming still works. */
+  --color-background: #FFFFFF;
+  --color-foreground: #1A1A1A;
+  --color-primary: #D4AF37;
+  --color-primary-foreground: #FFFFFF;
+  --color-accent: #D4AF37;
+  --color-accent-foreground: #1A1A1A;
+  --color-muted: #F3F4F6;
+  --color-muted-foreground: #6B7280;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #1A1A1A;
+  --color-border: #E5E7EB;
+  --color-input: #E5E7EB;
+  --color-ring: #D4AF37;
+
   /* Dark palette */
   --color-dark-50: #E8E8E8;
   --color-dark-100: #D1D1D1;
