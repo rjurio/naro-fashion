@@ -13,6 +13,8 @@ interface SettingDef {
   type: 'text' | 'email' | 'url' | 'select' | 'textarea';
   group: string;
   options?: string[];
+  /** Display text per option value (the value is what gets stored). */
+  optionLabels?: Record<string, string>;
   defaultValue: string;
   hint?: string;
   /** If true, a paired _sw key is auto-generated for Swahili */
@@ -21,7 +23,13 @@ interface SettingDef {
 
 const SETTING_DEFINITIONS: SettingDef[] = [
   // General
-  { key: 'default_theme', label: 'Default Theme', type: 'select', group: 'General', options: ['Light', 'Dark', 'Standard'], defaultValue: 'Standard' },
+  {
+    key: 'default_theme', label: 'Default Theme', type: 'select', group: 'General',
+    options: ['system', 'light', 'dark', 'standard'],
+    optionLabels: { system: "Device default (follows the visitor's light/dark setting)", light: 'Light', dark: 'Dark', standard: 'Standard' },
+    defaultValue: 'system',
+    hint: 'What storefront visitors see until they choose a theme themselves. Device default switches automatically with their phone or computer setting.',
+  },
   // Features
   { key: 'instagram_feed_visible', label: 'Show Instagram Feed on Storefront', type: 'select', group: 'Features', options: ['true', 'false'], defaultValue: 'true' },
   { key: 'instagram_feed_layout', label: 'Instagram Feed Layout', type: 'select', group: 'Features', options: ['single_row', 'multi_row'], defaultValue: 'single_row', hint: 'Single row shows up to 6 posts (one desktop row). Multi row uses the row count below.' },
@@ -77,7 +85,13 @@ export default function SiteSettingsPage() {
       // Merge with defaults
       const merged: Record<string, string> = {};
       SETTING_DEFINITIONS.forEach((def) => {
-        merged[def.key] = map[def.key] ?? def.defaultValue;
+        let v = map[def.key] ?? def.defaultValue;
+        // A select shows its FIRST option when the stored value doesn't match
+        // exactly (legacy rows hold e.g. "Light" vs option "light").
+        if (def.options && !def.options.includes(v)) {
+          v = def.options.find((o) => o.toLowerCase() === String(v).toLowerCase()) ?? def.defaultValue;
+        }
+        merged[def.key] = v;
         if (def.bilingual) {
           merged[`${def.key}_sw`] = map[`${def.key}_sw`] ?? '';
         }
@@ -114,7 +128,7 @@ export default function SiteSettingsPage() {
       return (
         <div>
           <select title={placeholder} value={values[key] || ''} onChange={(e) => setValues({ ...values, [key]: e.target.value })} className={inputClass}>
-            {def.options?.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+            {def.options?.map((opt) => <option key={opt} value={opt}>{def.optionLabels?.[opt] ?? opt}</option>)}
           </select>
           {def.hint && key === def.key && <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">{def.hint}</p>}
         </div>

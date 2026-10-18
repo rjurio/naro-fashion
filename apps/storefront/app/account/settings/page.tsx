@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useTheme } from "next-themes";
-import { ArrowLeft, Sun, Moon, Monitor, Globe, Loader2, Download } from "lucide-react";
+import { ArrowLeft, Sun, Moon, Monitor, Globe, Loader2, Download, SunMoon } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { authApi, tokenStore, usersApi, ApiError } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
@@ -117,6 +117,7 @@ export default function SettingsPage() {
   };
 
   const themes = [
+    { id: "system" as const, label: t("account.themeSystem"), icon: SunMoon },
     { id: "light" as const, label: t("account.themeLight"), icon: Sun },
     { id: "dark" as const, label: t("account.themeDark"), icon: Moon },
     { id: "standard" as const, label: t("account.themeStandard"), icon: Monitor },
@@ -246,7 +247,7 @@ export default function SettingsPage() {
           {/* Theme */}
           <section className="rounded-xl border border-border bg-card p-4 sm:p-5 md:p-6">
             <h2 className="text-lg font-bold text-foreground mb-4">{t("account.themePreference")}</h2>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {themes.map((t) => (
                 <button
                   key={t.id}

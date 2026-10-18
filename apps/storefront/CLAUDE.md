@@ -8,10 +8,10 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 - custom I18nProvider (English + Swahili)
 
 ## Theming
-- ThemeProvider: `attribute="data-theme"`, themes: `light | dark | standard`, `enableSystem={false}`
-- **First-visit auto-detection**: Inline `<script>` in `app/layout.tsx` runs before React hydrates — reads `prefers-color-scheme`, sets `localStorage('theme')` and `data-theme` attribute on `<html>` (dark→`dark`, else→`standard`)
-- **Returning visitors**: next-themes reads `localStorage('theme')` — user's manual choice is preserved
-- Theme toggle (`components/ui/ThemeToggle.tsx`) cycles: light → dark → standard
+- ThemeProvider: `attribute="data-theme"`, themes `light | dark | standard` + **`system` (follows the device's light/dark preference live, `enableSystem`)**, `storageKey="naro-theme"`.
+- **Default comes from the tenant's `default_theme` SiteSetting** (Admin → CMS → Settings → General: Device default / Light / Dark / Standard; new default `system`). `getDefaultTheme()` in `lib/settings-server.ts` reads it during SSR (1.5s timeout → `system`; legacy "Light"-style values normalised) and the root layout passes it as `defaultTheme`. A visitor's own toggle choice (stored under `naro-theme`) wins.
+- next-themes injects its own pre-hydration script with the CSP nonce — there is no custom inline theme script any more. (The old one SAVED the auto-detected theme under `theme` on first visit, which pinned visitors forever and ignored the admin setting; the storage key was changed so everyone starts fresh on the tenant default.)
+- Theme toggle (`components/ui/ThemeToggle.tsx`) cycles: Auto (system) → light → dark → standard. Account settings has the same four choices.
 
 ## Pages
 - `/` - Homepage (featured categories, new arrivals, flash sales, rental gowns). Hero stats (products/rentals/customers) fetched live from `GET /cms/storefront-stats` — each stat auto-hides when count is 0 (no placeholder numbers). Rental section perks come from `rental_section_features` CMS setting (newline-separated, admin-editable at `/dashboard/cms/settings`).

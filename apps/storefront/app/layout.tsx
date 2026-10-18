@@ -9,7 +9,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { SiteSettingsProvider } from "@/contexts/SiteSettingsContext";
 import { ToastProvider } from "@/contexts/ToastContext";
 import { ParallaxProvider } from "@/contexts/ParallaxContext";
-import { getBusinessProfile } from "@/lib/settings-server";
+import { getBusinessProfile, getDefaultTheme } from "@/lib/settings-server";
 import Header from "@/components/layout/Header";
 import Footer from "@/components/layout/Footer";
 import WhatsAppButton from "@/components/ui/WhatsAppButton";
@@ -93,22 +93,29 @@ export default async function RootLayout({
   } catch {
     /* outside a request */
   }
+  const defaultTheme = await getDefaultTheme();
   return (
     <html
       lang={locale}
       suppressHydrationWarning
       className={`${inter.variable} ${playfair.variable}`}
     >
-      <head>
-        {/* Auto-detect device theme on first visit. Runs before React hydration to prevent flash. */}
-        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'standard';localStorage.setItem('theme',t);}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();` }} />
-      </head>
       <body className="font-sans min-h-screen flex flex-col">
+        {/*
+          Theme = the visitor's own choice (toggle), else the tenant's
+          `default_theme` setting. "system" follows the device's light/dark
+          preference live. next-themes injects its own pre-hydration script
+          (with our CSP nonce) so there's no flash.
+          storageKey changed from the default "theme": the old inline script
+          SAVED the auto-detected theme there on first visit, which pinned
+          visitors to it forever and ignored the admin setting.
+        */}
         <ThemeProvider
           attribute="data-theme"
-          defaultTheme="light"
+          defaultTheme={defaultTheme}
           themes={["light", "dark", "standard"]}
-          enableSystem={false}
+          enableSystem
+          storageKey="naro-theme"
           nonce={nonce}
         >
           <I18nProvider initialLocale={locale}>

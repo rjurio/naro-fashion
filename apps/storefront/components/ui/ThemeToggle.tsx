@@ -2,19 +2,22 @@
 
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
-import { Sun, Moon, Monitor } from "lucide-react";
+import { Sun, Moon, Monitor, SunMoon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const themes = ["light", "dark", "standard"] as const;
+// "system" follows the device's light/dark preference (next-themes enableSystem).
+const themes = ["system", "light", "dark", "standard"] as const;
 type Theme = (typeof themes)[number];
 
 const themeIcons: Record<Theme, React.ReactNode> = {
+  system: <SunMoon className="h-4 w-4" />,
   light: <Sun className="h-4 w-4" />,
   dark: <Moon className="h-4 w-4" />,
   standard: <Monitor className="h-4 w-4" />,
 };
 
 const themeLabels: Record<Theme, string> = {
+  system: "Auto",
   light: "Light",
   dark: "Dark",
   standard: "Standard",
@@ -37,12 +40,12 @@ export default function ThemeToggle({ className }: { className?: string }) {
         )}
         aria-label="Toggle theme"
       >
-        <Sun className="h-4 w-4" />
+        <SunMoon className="h-4 w-4" />
       </button>
     );
   }
 
-  const currentTheme = (theme as Theme) || "light";
+  const currentTheme: Theme = themes.includes(theme as Theme) ? (theme as Theme) : "system";
   const currentIndex = themes.indexOf(currentTheme);
   const nextTheme = themes[(currentIndex + 1) % themes.length];
 
@@ -54,7 +57,7 @@ export default function ThemeToggle({ className }: { className?: string }) {
         className,
       )}
       aria-label={`Switch to ${themeLabels[nextTheme]} theme`}
-      title={`Current: ${themeLabels[currentTheme]}. Click for ${themeLabels[nextTheme]}`}
+      title={`Current: ${themeLabels[currentTheme]}${currentTheme === "system" ? " (follows your device)" : ""}. Click for ${themeLabels[nextTheme]}`}
     >
       {themeIcons[currentTheme]}
       <span className="hidden sm:inline text-xs">{themeLabels[currentTheme]}</span>

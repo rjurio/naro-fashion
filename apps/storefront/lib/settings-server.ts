@@ -75,3 +75,31 @@ export async function getBusinessProfile(): Promise<BusinessProfile> {
     return DEFAULTS;
   }
 }
+
+export type StorefrontTheme = 'system' | 'light' | 'dark' | 'standard';
+
+/**
+ * Tenant's `default_theme` SiteSetting (admin → CMS → Settings → General):
+ * the theme a visitor gets until they pick one with the theme toggle.
+ * `system` follows the device's light/dark preference. Legacy rows may hold
+ * "Light"/"Dark"/"Standard" — normalised here. Falls back to `system`, and
+ * never blocks the page for long (short timeout).
+ */
+export async function getDefaultTheme(): Promise<StorefrontTheme> {
+  try {
+    const res = await fetch(`${API_URL}/cms/settings`, {
+      cache: 'no-store',
+      headers: await tenantHeader(),
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!res.ok) return 'system';
+    const rows = await res.json();
+    const raw = Array.isArray(rows)
+      ? rows.find((r: { key?: string }) => r?.key === 'default_theme')?.value
+      : undefined;
+    const v = String(raw ?? '').trim().toLowerCase();
+    return v === 'light' || v === 'dark' || v === 'standard' ? v : 'system';
+  } catch {
+    return 'system';
+  }
+}
