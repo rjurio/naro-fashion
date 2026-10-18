@@ -119,7 +119,7 @@ Customer-facing Next.js PWA for Naro Fashion. Runs on port 3000.
 ## Conventions
 - Use `@naro/shared` for types/enums, `@naro/ui` for shared components
 - All user-facing strings must support i18n (English + Swahili) via `useTranslation()`
-- Translation files: `messages/en.json` and `messages/sw.json` — 836 keys each (incl. `events` + `contact` namespaces), 100% parity (required). Whole storefront is fully internationalized (products, categories, cart, checkout, account, auth, header, footer, homepage, flash sales, rentals).
+- Translation files: `messages/en.json` and `messages/sw.json` — 828 keys each (Oct 2026: −9 delete-account keys, +1 `themeSystem`) (incl. `events` + `contact` namespaces), 100% parity (required). Whole storefront is fully internationalized (products, categories, cart, checkout, account, auth, header, footer, homepage, flash sales, rentals).
 - **i18n interpolation**: The `t()` hook has no native placeholder support — use `t('key').replace('{placeholder}', value)` for dynamic values (e.g., price ranges, day counts, subscription labels).
 - **Module-level arrays with translations**: Arrays of options (sortOptions, priceRanges, deliveryMethods, paymentMethods, steps, quickLinks) must live INSIDE the component (not at module scope) so `t()` can be called. Otherwise labels are stuck in the language at initial import.
 - **Language switcher UX**: Header's single-button toggle shows the **target** language (shows "SW" when current is English, "EN" when current is Swahili) so the label tells the user what clicking will do. MobileMenu uses a two-button pattern where both are visible and the active one is highlighted.

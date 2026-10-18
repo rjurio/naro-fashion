@@ -196,7 +196,8 @@ Only if it does not, restore the pre-deploy dump:
   PGPASSFILE=/root/.pgpass pg_restore --clean --if-exists --no-owner --no-acl \\
     -h localhost -U naro_admin -d naro_fashion ${1:-<pre-deploy dump in /var/backups/naro/postgres/>}
   # re-apply table ownership (docs/OPS/BACKUPS.md "Restoring"), then
-  pm2 restart all
+  # (never `pm2 restart all` — the VPS also runs other apps)
+  pm2 restart naro-api naro-admin naro-storefront
 ------------------------------------------------------------------------
 EOF
 }

@@ -76,6 +76,6 @@ echo "  Cron entry:  ${CRON_DST}"
 echo "  Schedule:    daily at 03:15 UTC (06:15 EAT)"
 echo "  Retention:   30 days (rolling)"
 echo
-echo "Next: configure S3 off-site sync once you have a Vultr Object"
-echo "Storage bucket. See docs/OPS/BACKUPS.md for the procedure."
+echo "Next: configure off-site sync (Cloudflare R2 / any S3 bucket)"
+echo "See docs/OPS/BACKUPS.md for the procedure."
 echo "=========================================="

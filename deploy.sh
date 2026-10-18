@@ -24,9 +24,9 @@
 #      app. On failure -> AUTOMATIC ROLLBACK of the app builds + source tree
 #      (NOT the database) and exit non-zero.
 #
-# Zero downtime is NOT achievable here: every PM2 app is fork mode with a
-# single instance on a 2GB box, so `pm2 reload` is a restart (a few seconds
-# of 502s per app). What this script guarantees instead: the live process is
+# Zero downtime is NOT achievable here: every PM2 app runs ONE instance
+# (cluster mode, instances: 1 — see ecosystem.config.js) on a 2GB box, so a
+# reload/restart means a few seconds of 502s per app. What this script guarantees instead: the live process is
 # never pointed at a half-written build, and a bad release is reverted
 # automatically. See docs/OPS/DEPLOY.md.
 
@@ -298,11 +298,13 @@ esac
 cd "$APP_DIR"
 
 # ---------------------------------------------------------------------------
-# 6. Build — SEQUENTIALLY and to the SIDE. Root `pnpm build` fans out via
+# 6. Build — SEQUENTIALLY and IN PLACE. Root `pnpm build` fans out via
 #    Turbo in parallel and gets OOM-killed on the 2GB VPS (CLAUDE.md "2GB
-#    VPS + parallel Turbo builds"). Next apps build into .next-build
-#    (next.config.js honours NEXT_DIST_DIR), so the live .next is untouched
-#    if a build dies half-way. packages/shared + packages/ui have no build.
+#    VPS + parallel Turbo builds"). Each app's live build is copied aside
+#    first (.next-prev.pending / dist-prev.pending) and restored if its build
+#    fails. Never build Next into another distDir and rename it to .next —
+#    next build bakes the distDir name in (2026-10-04 outage).
+#    packages/shared + packages/ui have no build.
 # ---------------------------------------------------------------------------
 PHASE="building"
 
@@ -385,8 +387,8 @@ else
 fi
 printf '%s\n' "$GIT_SHA" > "${DEPLOY_STATE_DIR}/current_sha"
 
-# All apps are fork mode (instances: 1), so `pm2 reload` is effectively a
-# restart (brief downtime per app). --update-env pushes GIT_SHA into each
+# All apps run a single instance, so a reload is effectively a restart
+# (brief downtime per app); Next apps get a hard restart (see reload_pm2). --update-env pushes GIT_SHA into each
 # process env so GET /api/v1/health can report the running commit.
 reload_pm2 "$GIT_SHA"
 
