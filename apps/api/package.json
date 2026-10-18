@@ -36,7 +36,7 @@
     "cookie-parser": "^1.4.7",
     "cron": "^3.5.0",
     "geoip-lite": "^2.0.1",
-    "handlebars": "^4.7.9",
+    "handlebars": "^4.7.10",
     "helmet": "^8.0.0",
     "image-size": "^2.0.4",
     "multer": "^2.4.0",
