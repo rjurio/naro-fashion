@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import {
+  CloudOff,
   Split,
   X,
 } from 'lucide-react';
@@ -74,22 +75,28 @@ const CardIcon = ({ className }: { className?: string }) => (
   </svg>
 );
 
+// `offlineOk`: may be recorded while offline (server: OFFLINE_NO_REF_METHODS /
+// OFFLINE_MANUAL_REF_METHODS — mobile money only WITH the customer's reference).
 const PAYMENT_METHODS = [
-  { key: 'CASH', label: 'Cash', icon: CashIcon, requiresRef: false },
-  { key: 'MPESA', label: 'M-Pesa', icon: MpesaIcon, requiresRef: true },
-  { key: 'SELCOM_PESA', label: 'Selcom Pesa', icon: SelcomIcon, requiresRef: true },
-  { key: 'AIRTEL_MONEY', label: 'Airtel Money', icon: AirtelIcon, requiresRef: true },
-  { key: 'MIX_BY_YAS', label: 'MIX by YAS', icon: MixYasIcon, requiresRef: true },
-  { key: 'CARD', label: 'Card', icon: CardIcon, requiresRef: true },
+  { key: 'CASH', label: 'Cash', icon: CashIcon, requiresRef: false, offlineOk: true },
+  { key: 'MPESA', label: 'M-Pesa', icon: MpesaIcon, requiresRef: true, offlineOk: true },
+  { key: 'SELCOM_PESA', label: 'Selcom Pesa', icon: SelcomIcon, requiresRef: true, offlineOk: true },
+  { key: 'AIRTEL_MONEY', label: 'Airtel Money', icon: AirtelIcon, requiresRef: true, offlineOk: true },
+  { key: 'MIX_BY_YAS', label: 'MIX by YAS', icon: MixYasIcon, requiresRef: true, offlineOk: true },
+  { key: 'CARD', label: 'Card', icon: CardIcon, requiresRef: true, offlineOk: false },
 ];
+
+const NEEDS_INTERNET = 'Needs internet';
 
 interface Props {
   total: number;
-  onPaymentsConfirmed: (payments: PaymentEntry[]) => void;
+  onPaymentsConfirmed: (payments: PaymentEntry[], meta?: { cashReceived?: number }) => void;
   disabled?: boolean;
+  /** Offline: card is disabled and mobile money needs a transaction reference. */
+  offline?: boolean;
 }
 
-export default function PaymentPanel({ total, onPaymentsConfirmed, disabled }: Props) {
+export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, offline = false }: Props) {
   const [mode, setMode] = useState<'single' | 'split'>('single');
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
   const [transactionRef, setTransactionRef] = useState('');
@@ -101,22 +108,32 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled }: P
 
   const requiresRef = PAYMENT_METHODS.find((m) => m.key === selectedMethod)?.requiresRef;
   const changeDue = selectedMethod === 'CASH' ? Math.max(0, cashReceived - total) : 0;
+  const methodAllowed = (key: string | null) => !offline || !!PAYMENT_METHODS.find((m) => m.key === key)?.offlineOk;
+  // Offline, a mobile-money payment can only be recorded with the customer's reference.
+  const refMissing = offline && !!requiresRef && !transactionRef.trim();
 
   const splitTotal = splitPayments.reduce((s, p) => s + p.amount, 0);
   const splitRemaining = total - splitTotal;
+  const splitRequiresRef = !!PAYMENT_METHODS.find((m) => m.key === splitMethod)?.requiresRef;
+  const splitRefMissing = offline && splitRequiresRef && !splitRef.trim();
+  const splitHasBlocked = offline && splitPayments.some((p) => !methodAllowed(p.method) || (PAYMENT_METHODS.find((m) => m.key === p.method)?.requiresRef && !p.transactionRef?.trim()));
 
   const handleSinglePay = () => {
     if (!selectedMethod || disabled) return;
+    if (!methodAllowed(selectedMethod) || refMissing) return;
     const amount = selectedMethod === 'CASH' ? cashReceived : total;
     if (amount < total) return;
 
-    onPaymentsConfirmed([
-      {
-        method: selectedMethod,
-        amount: selectedMethod === 'CASH' ? total : total,
-        transactionRef: requiresRef ? transactionRef || undefined : undefined,
-      },
-    ]);
+    onPaymentsConfirmed(
+      [
+        {
+          method: selectedMethod,
+          amount: selectedMethod === 'CASH' ? total : total,
+          transactionRef: requiresRef ? transactionRef.trim() || undefined : undefined,
+        },
+      ],
+      selectedMethod === 'CASH' ? { cashReceived } : undefined,
+    );
 
     // Reset
     setSelectedMethod(null);
@@ -126,6 +143,7 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled }: P
 
   const addSplitPayment = () => {
     if (!splitMethod || splitAmount <= 0) return;
+    if (!methodAllowed(splitMethod) || splitRefMissing) return;
     const methodInfo = PAYMENT_METHODS.find((m) => m.key === splitMethod);
 
     setSplitPayments([
@@ -133,7 +151,7 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled }: P
       {
         method: splitMethod,
         amount: splitAmount,
-        transactionRef: methodInfo?.requiresRef ? splitRef || undefined : undefined,
+        transactionRef: methodInfo?.requiresRef ? splitRef.trim() || undefined : undefined,
       },
     ]);
     setSplitMethod(null);
@@ -146,7 +164,7 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled }: P
   };
 
   const handleSplitPay = () => {
-    if (splitRemaining > 0.01 || disabled) return;
+    if (splitRemaining > 0.01 || disabled || splitHasBlocked) return;
     onPaymentsConfirmed(splitPayments);
     setSplitPayments([]);
     setMode('single');
@@ -182,24 +200,40 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled }: P
       {mode === 'single' ? (
         <>
           {/* Payment Method Grid */}
+          {offline && (
+            <p className="flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+              <CloudOff className="w-3 h-3 shrink-0" aria-hidden="true" />
+              Offline: cash, or mobile money with the customer&apos;s transaction reference. Card needs internet.
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-2">
-            {PAYMENT_METHODS.map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                onClick={() => {
-                  setSelectedMethod(key);
-                  if (key === 'CASH') setCashReceived(total);
-                }}
-                className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg border text-xs font-medium transition-colors ${
-                  selectedMethod === key
-                    ? 'border-brand-gold bg-brand-gold/10 text-brand-gold'
-                    : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:border-brand-gold/50'
-                }`}
-              >
-                <Icon className="w-10 h-7 flex-shrink-0 rounded" />
-                {label}
-              </button>
-            ))}
+            {PAYMENT_METHODS.map(({ key, label, icon: Icon, offlineOk }) => {
+              const blocked = offline && !offlineOk;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  disabled={blocked}
+                  title={blocked ? NEEDS_INTERNET : undefined}
+                  aria-label={blocked ? `${label} (${NEEDS_INTERNET})` : label}
+                  onClick={() => {
+                    setSelectedMethod(key);
+                    if (key === 'CASH') setCashReceived(total);
+                  }}
+                  className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg border text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                    selectedMethod === key
+                      ? 'border-brand-gold bg-brand-gold/10 text-brand-gold'
+                      : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:border-brand-gold/50'
+                  }`}
+                >
+                  <Icon className="w-10 h-7 flex-shrink-0 rounded" />
+                  <span className="flex flex-col items-start leading-tight">
+                    {label}
+                    {blocked && <span className="text-[10px] font-normal">{NEEDS_INTERNET}</span>}
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Cash Input */}
@@ -228,13 +262,16 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled }: P
           {/* Transaction Ref Input */}
           {selectedMethod && requiresRef && (
             <div>
-              <label className="text-xs text-[hsl(var(--muted-foreground))]">
-                Transaction Reference
+              <label htmlFor="pos-txn-ref" className="text-xs text-[hsl(var(--muted-foreground))]">
+                Transaction Reference{offline ? ' (required offline)' : ''}
               </label>
               <input
+                id="pos-txn-ref"
                 type="text"
                 value={transactionRef}
                 onChange={(e) => setTransactionRef(e.target.value)}
+                required={offline}
+                aria-invalid={refMissing || undefined}
                 className="w-full mt-1 px-3 py-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))] text-sm"
                 placeholder="Enter transaction ref..."
               />
@@ -246,6 +283,8 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled }: P
             disabled={
               disabled ||
               !selectedMethod ||
+              !methodAllowed(selectedMethod) ||
+              refMissing ||
               (selectedMethod === 'CASH' && cashReceived < total) ||
               total <= 0
             }
@@ -287,10 +326,12 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled }: P
           {/* Add Split Payment */}
           <div className="space-y-2 p-3 border border-[hsl(var(--border))] rounded-lg">
             <div className="grid grid-cols-2 gap-1.5">
-              {PAYMENT_METHODS.map(({ key, label, icon: Icon }) => (
+              {PAYMENT_METHODS.map(({ key, label, icon: Icon, offlineOk }) => (
                 <button
                   key={key}
-                  disabled={splitRemaining <= 0}
+                  type="button"
+                  disabled={splitRemaining <= 0 || (offline && !offlineOk)}
+                  title={offline && !offlineOk ? NEEDS_INTERNET : undefined}
                   onClick={() => {
                     setSplitMethod(key);
                     setSplitAmount(Math.max(0, splitRemaining));
@@ -338,12 +379,13 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled }: P
                     value={splitRef}
                     onChange={(e) => setSplitRef(e.target.value)}
                     className="w-full px-3 py-2 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))] text-sm"
-                    placeholder="Transaction ref..."
+                    placeholder={offline ? 'Transaction ref (required offline)...' : 'Transaction ref...'}
+                    aria-invalid={splitRefMissing || undefined}
                   />
                 )}
                 <button
                   onClick={addSplitPayment}
-                  disabled={splitAmount <= 0 || splitAmount > splitRemaining}
+                  disabled={splitAmount <= 0 || splitAmount > splitRemaining || splitRefMissing || !methodAllowed(splitMethod)}
                   className="w-full py-2 rounded bg-[hsl(var(--accent))] text-[hsl(var(--foreground))] text-xs font-medium disabled:opacity-40"
                 >
                   Add Payment
@@ -354,7 +396,7 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled }: P
 
           <button
             onClick={handleSplitPay}
-            disabled={disabled || splitRemaining > 0.01 || total <= 0}
+            disabled={disabled || splitRemaining > 0.01 || total <= 0 || splitHasBlocked}
             className="w-full py-3 rounded-lg bg-brand-gold text-black font-bold text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-brand-gold/90 transition-colors"
           >
             Complete Sale — {total.toLocaleString()} TZS

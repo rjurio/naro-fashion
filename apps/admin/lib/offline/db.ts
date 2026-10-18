@@ -225,6 +225,29 @@ export async function idbClearAll(): Promise<void> {
   }
 }
 
+/**
+ * Logout: wipe what the next person on this device must not see (cached API
+ * responses + small key/values such as the cached profile and POS catalog)
+ * but KEEP `outbox` and `conflicts` — unsynced work belongs to its user
+ * (entries carry a `tenant:user` scope) and syncs when they sign in again.
+ */
+export async function idbClearForLogout(): Promise<void> {
+  try {
+    const db = await openDb();
+    if (!db) return;
+    const names: StoreName[] = ['responses', 'meta'];
+    const tx = db.transaction(names, 'readwrite');
+    for (const n of names) tx.objectStore(n).clear();
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } catch {
+    /* best effort */
+  }
+}
+
 export async function metaGet<T>(key: string): Promise<T | null> {
   const rec = await idbGet<MetaRecord<T>>('meta', key);
   return rec ? rec.value : null;
@@ -232,4 +255,8 @@ export async function metaGet<T>(key: string): Promise<T | null> {
 
 export function metaSet<T>(key: string, value: T): Promise<boolean> {
   return idbPut<MetaRecord<T>>('meta', { key, value });
+}
+
+export function metaDelete(key: string): Promise<boolean> {
+  return idbDelete('meta', key);
 }

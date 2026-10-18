@@ -20,6 +20,8 @@ interface Props {
   onSelectCustomer: (customer: Customer | null) => void;
   onCustomerNameChange: (name: string) => void;
   onCustomerPhoneChange: (phone: string) => void;
+  /** Offline: registering a customer needs internet (walk-in name/phone still work). */
+  offline?: boolean;
 }
 
 export default function CustomerLookup({
@@ -29,6 +31,7 @@ export default function CustomerLookup({
   onSelectCustomer,
   onCustomerNameChange,
   onCustomerPhoneChange,
+  offline = false,
 }: Props) {
   const toast = useToast();
   const [query, setQuery] = useState('');
@@ -38,6 +41,11 @@ export default function CustomerLookup({
   const [newFirstName, setNewFirstName] = useState('');
   const [newPhone, setNewPhone] = useState('');
   const [creating, setCreating] = useState(false);
+
+  // Going offline closes the register form (the request would fail).
+  useEffect(() => {
+    if (offline) setShowCreateForm(false);
+  }, [offline]);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const debounceTimer = useRef<NodeJS.Timeout>(null);
 
@@ -137,7 +145,10 @@ export default function CustomerLookup({
         </div>
         <button
           onClick={() => setShowCreateForm(!showCreateForm)}
-          className="px-2.5 py-1.5 rounded border border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] flex items-center gap-1"
+          disabled={offline}
+          title={offline ? 'Needs internet' : undefined}
+          aria-label={offline ? 'New customer (needs internet)' : 'New customer'}
+          className="px-2.5 py-1.5 rounded border border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <UserPlus className="w-3.5 h-3.5" />
           New

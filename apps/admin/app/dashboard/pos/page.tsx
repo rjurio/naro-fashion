@@ -11,8 +11,13 @@ import {
   RefreshCw,
   ArrowLeftRight,
   BookOpen,
+  CloudOff,
 } from 'lucide-react';
 import adminApi from '../../../lib/api';
+import { isQueuedResult } from '@/lib/offline/outbox';
+import { useSyncStatus } from '@/contexts/SyncContext';
+import { usePosCatalog } from './hooks/usePosCatalog';
+import OfflineReceiptModal, { type OfflineReceiptData } from './components/OfflineReceiptModal';
 import ProductSearch from './components/ProductSearch';
 import PosCart, { CartItem } from './components/PosCart';
 import PaymentPanel from './components/PaymentPanel';
@@ -25,6 +30,9 @@ import LayawayModal from './components/LayawayModal';
 import ExchangeModal from './components/ExchangeModal';
 import SyncStatusBadge from '@/components/offline/SyncStatusBadge';
 
+const NEEDS_INTERNET = 'Needs internet';
+const NO_OFFLINE_SHIFT = 'Open a shift while online before selling offline.';
+
 interface Customer {
   id: string;
   firstName: string | null;
@@ -36,6 +44,9 @@ interface Customer {
 export default function PosPage() {
   const toast = useToast();
   const router = useRouter();
+  const { online } = useSyncStatus();
+  const offline = !online;
+  const catalog = usePosCatalog(online);
 
   // Session
   const [session, setSession] = useState<any>(null);
@@ -57,6 +68,7 @@ export default function PosPage() {
 
   // Modals
   const [showReceipt, setShowReceipt] = useState<string | null>(null);
+  const [offlineReceipt, setOfflineReceipt] = useState<OfflineReceiptData | null>(null);
   const [showHeldSales, setShowHeldSales] = useState(false);
   const [heldCount, setHeldCount] = useState(0);
   const [processing, setProcessing] = useState(false);
@@ -145,16 +157,29 @@ export default function PosPage() {
     try {
       const newSession = await adminApi.posOpenSession({ openingCash });
       setSession(newSession);
+      // Refresh the device copy of "current shift" so offline sales can use it.
+      void adminApi.posGetCurrentSession().catch(() => undefined);
     } catch (err: any) {
       toast.error(err.message || 'Failed to open shift');
     }
   };
 
   // Complete sale
-  const handleCompleteSale = async (payments: { method: string; amount: number; transactionRef?: string }[]) => {
+  const handleCompleteSale = async (
+    payments: { method: string; amount: number; transactionRef?: string }[],
+    meta?: { cashReceived?: number },
+  ) => {
     if (cartItems.length === 0 || processing) return;
+    if (offline && !session?.id) {
+      toast.error(NO_OFFLINE_SHIFT);
+      return;
+    }
     setProcessing(true);
+    const saleAt = Date.now();
     try {
+      // sessionId + clientCreatedAt are always sent: the server ignores them
+      // for online sales, and they let a sale that fails mid-flight be replayed
+      // as an offline sale. `offline: true` only when we know we're offline.
       const result = await adminApi.posCreateSale({
         items: cartItems.map((i) => ({
           productId: i.productId,
@@ -170,9 +195,38 @@ export default function PosPage() {
         discount: discount > 0 ? discount : undefined,
         discountType: discount > 0 ? discountType : undefined,
         note: note || undefined,
+        sessionId: session?.id,
+        clientCreatedAt: new Date(saleAt).toISOString(),
+        ...(offline ? { offline: true } : {}),
       });
 
-      setShowReceipt(result.order?.id);
+      if (isQueuedResult(result)) {
+        const custName = selectedCustomer
+          ? [selectedCustomer.firstName, selectedCustomer.lastName].filter(Boolean).join(' ') || 'Customer'
+          : customerName || 'Walk-in';
+        setOfflineReceipt({
+          outboxId: result.__outboxId,
+          createdAt: saleAt,
+          customer: custName,
+          customerPhone: (selectedCustomer ? selectedCustomer.phone : customerPhone) || undefined,
+          items: cartItems.map((i) => ({
+            name: i.productName,
+            variant: i.size || i.color ? `${i.size ?? ''} ${i.color ?? ''}`.trim() : i.variantName,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            total: i.unitPrice * i.quantity - (i.itemDiscount ?? 0),
+          })),
+          subtotal,
+          discount: discountAmount,
+          total,
+          payments,
+          changeDue: meta?.cashReceived ? Math.max(0, meta.cashReceived - total) : 0,
+        });
+        toast.info('Offline sale saved on this device — it will sync automatically.');
+      } else {
+        setShowReceipt(result.order?.id);
+        if (result?.oversold) toast.warning('Sale recorded, but stock was short — review stock for these items.');
+      }
       clearCart();
     } catch (err: any) {
       toast.error(err.message || 'Sale failed');
@@ -183,7 +237,7 @@ export default function PosPage() {
 
   // Hold sale
   const handleHoldSale = async () => {
-    if (cartItems.length === 0) return;
+    if (cartItems.length === 0 || offline) return;
     try {
       await adminApi.posHoldSale({
         items: cartItems.map((i) => ({
@@ -247,6 +301,29 @@ export default function PosPage() {
     );
   }
 
+  // No session offline: a shift can only be opened online.
+  if (!session && offline) {
+    return (
+      <div className="h-full flex items-center justify-center p-4">
+        <div className="max-w-sm text-center space-y-3">
+          <CloudOff className="w-10 h-10 mx-auto text-[hsl(var(--muted-foreground))]" aria-hidden="true" />
+          <h2 className="text-lg font-semibold text-[hsl(var(--foreground))]">You&apos;re offline</h2>
+          <p className="text-sm text-[hsl(var(--muted-foreground))]">{NO_OFFLINE_SHIFT}</p>
+          <div className="flex justify-center gap-2">
+            <SyncStatusBadge compact align="left" />
+            <button
+              type="button"
+              onClick={() => router.push('/dashboard')}
+              className="px-3 py-1.5 rounded-lg border border-[hsl(var(--border))] text-xs text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))]"
+            >
+              Back to dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // No session - show open shift modal
   if (!session) {
     return <OpenShiftModal onOpen={handleOpenShift} onCancel={() => router.push('/dashboard')} />;
@@ -274,7 +351,9 @@ export default function PosPage() {
 
           <button
             onClick={() => setShowHeldSales(true)}
-            className="relative flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]"
+            disabled={offline}
+            title={offline ? NEEDS_INTERNET : undefined}
+            className="relative flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Clock className="w-3.5 h-3.5" />
             Held Sales
@@ -287,7 +366,9 @@ export default function PosPage() {
 
           <button
             onClick={() => setShowLayaway(true)}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]"
+            disabled={offline}
+            title={offline ? NEEDS_INTERNET : undefined}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Clock className="w-3.5 h-3.5" />
             Layaways
@@ -295,7 +376,9 @@ export default function PosPage() {
 
           <button
             onClick={() => setShowExchange(true)}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]"
+            disabled={offline}
+            title={offline ? NEEDS_INTERNET : undefined}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <ArrowLeftRight className="w-3.5 h-3.5" />
             Exchange
@@ -317,7 +400,9 @@ export default function PosPage() {
 
           <button
             onClick={() => setShowCloseShift(true)}
-            className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium hover:bg-red-700"
+            disabled={offline}
+            title={offline ? NEEDS_INTERNET : undefined}
+            className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Close Shift
           </button>
@@ -328,7 +413,7 @@ export default function PosPage() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left Panel - Product Search */}
         <div className="w-1/2 border-r border-[hsl(var(--border))] flex flex-col">
-          <ProductSearch onAddToCart={addToCart} categories={categories} />
+          <ProductSearch onAddToCart={addToCart} categories={categories} catalog={catalog} offline={offline} />
         </div>
 
         {/* Right Panel - Cart + Payment */}
@@ -357,6 +442,7 @@ export default function PosPage() {
               onSelectCustomer={setSelectedCustomer}
               onCustomerNameChange={setCustomerName}
               onCustomerPhoneChange={setCustomerPhone}
+              offline={offline}
             />
 
             {/* Note */}
@@ -373,16 +459,18 @@ export default function PosPage() {
               total={total}
               onPaymentsConfirmed={handleCompleteSale}
               disabled={cartItems.length === 0 || processing}
+              offline={offline}
             />
 
             {/* Hold Sale Button */}
             <button
               onClick={handleHoldSale}
-              disabled={cartItems.length === 0}
+              disabled={cartItems.length === 0 || offline}
+              title={offline ? NEEDS_INTERNET : undefined}
               className="w-full py-2 rounded-lg border border-amber-500 text-amber-500 text-xs font-medium disabled:opacity-30 hover:bg-amber-500/10 flex items-center justify-center gap-1.5"
             >
               <Pause className="w-3.5 h-3.5" />
-              Hold Sale
+              Hold Sale{offline ? ` · ${NEEDS_INTERNET}` : ''}
             </button>
           </div>
         </div>
@@ -391,6 +479,10 @@ export default function PosPage() {
       {/* Modals */}
       {showReceipt && (
         <ReceiptModal orderId={showReceipt} onClose={() => setShowReceipt(null)} />
+      )}
+
+      {offlineReceipt && (
+        <OfflineReceiptModal receipt={offlineReceipt} onClose={() => setOfflineReceipt(null)} />
       )}
 
       {showHeldSales && (
@@ -407,6 +499,8 @@ export default function PosPage() {
           onShiftClosed={() => {
             setSession(null);
             setShowCloseShift(false);
+            // Refresh the device copy so a closed shift is never used for offline sales.
+            void adminApi.posGetCurrentSession().catch(() => undefined);
             router.push('/dashboard');
           }}
         />

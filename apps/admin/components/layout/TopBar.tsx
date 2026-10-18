@@ -24,6 +24,7 @@ import { cn, formatCurrency } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { adminApi } from '@/lib/api';
 import SyncStatusBadge from '@/components/offline/SyncStatusBadge';
+import LogoutGuardDialog, { countUnsyncedForCurrentUser } from '@/components/offline/LogoutGuardDialog';
 
 interface TopBarProps {
   onMenuClick: () => void;
@@ -66,6 +67,21 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
   const router = useRouter();
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  // Unsynced offline changes when "Sign out" was clicked (null = no guard dialog).
+  const [logoutGuardCount, setLogoutGuardCount] = useState<number | null>(null);
+  const [checkingLogout, setCheckingLogout] = useState(false);
+
+  const handleSignOut = async () => {
+    setCheckingLogout(true);
+    try {
+      const n = await countUnsyncedForCurrentUser().catch(() => 0);
+      setShowUserMenu(false);
+      if (n > 0) setLogoutGuardCount(n);
+      else logout();
+    } finally {
+      setCheckingLogout(false);
+    }
+  };
   const [showNotifications, setShowNotifications] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -409,8 +425,9 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
                 </Link>
                 <div className="border-t border-[hsl(var(--border))]" />
                 <button
-                  onClick={logout}
-                  className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                  onClick={() => void handleSignOut()}
+                  disabled={checkingLogout}
+                  className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-60"
                 >
                   <LogOut className="w-4 h-4" />
                   Sign out
@@ -420,6 +437,16 @@ export default function TopBar({ onMenuClick }: TopBarProps) {
           )}
         </div>
       </div>
+      {logoutGuardCount !== null && (
+        <LogoutGuardDialog
+          initialCount={logoutGuardCount}
+          onCancel={() => setLogoutGuardCount(null)}
+          onLogout={() => {
+            setLogoutGuardCount(null);
+            logout();
+          }}
+        />
+      )}
     </header>
   );
 }

@@ -9,9 +9,10 @@ import adminApi, {
   isOfflineError,
   storeAuthTokens,
 } from '@/lib/api';
-import { idbClearAll } from '@/lib/offline/db';
+import { idbClearForLogout } from '@/lib/offline/db';
 import { identityFromToken, loadCachedProfile, saveCachedProfile, scopeFromIdentity } from '@/lib/offline/response-cache';
 import { resetForLogout } from '@/lib/offline/sync-store';
+import { resetSyncEngineForLogout } from '@/lib/offline/sync-engine';
 
 /** Offline-cache partition for the current stored token (tenant|platform : user), or null. */
 function currentScope(): string | null {
@@ -198,10 +199,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAuthTokens();
       adminApi.clearToken();
       setUser(null);
-      // Wipe the offline device cache (responses, outbox, conflicts, meta) — shared shop PCs.
+      // Wipe cached API responses + profile/catalog (shared shop PCs) but KEEP
+      // the outbox + conflicts: unsynced work is scoped to this user and syncs
+      // the next time they sign in. (TopBar warns before logging out with any.)
       resetForLogout();
+      resetSyncEngineForLogout();
       // Wait for the wipe (bounded internally) before navigating away.
-      void idbClearAll().finally(() => {
+      void idbClearForLogout().finally(() => {
         window.location.href = wasPlatformAdmin ? '/platform-login' : '/login';
       });
     };

@@ -202,6 +202,38 @@ export interface OversoldLine {
   shortfall: number;
 }
 
+/** Hard cap on products in the offline POS catalog snapshot. */
+export const POS_CATALOG_MAX_PRODUCTS = 5000;
+
+export interface PosCatalogVariant {
+  id: string;
+  name: string;
+  sku: string;
+  barcode: string | null;
+  size: string | null;
+  color: string | null;
+  colorHex: string | null;
+  price: number;
+  stock: number;
+}
+
+export interface PosCatalogProduct {
+  id: string;
+  name: string;
+  sku: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
+  imageUrl: string | null;
+  variants: PosCatalogVariant[];
+}
+
+export interface PosCatalogResponse {
+  generatedAt: string;
+  /** True when the tenant has more than POS_CATALOG_MAX_PRODUCTS sellable products. */
+  truncated: boolean;
+  products: PosCatalogProduct[];
+}
+
 @Injectable()
 export class PosService {
   constructor(
@@ -414,6 +446,73 @@ export class PosService {
       },
       take: 20,
     });
+  }
+
+  /**
+   * Offline POS catalog: active, non-deleted products of THIS tenant with
+   * their active variants (same visibility + price/stock fields as
+   * searchProducts), flattened to a compact shape. Products without an
+   * active variant are omitted (nothing to sell).
+   */
+  async getCatalog(): Promise<PosCatalogResponse> {
+    const tenantId = this.tenantContext.requireId;
+    const rows = await this.prisma.product.findMany({
+      where: { tenantId, isActive: true, deletedAt: null },
+      select: {
+        id: true,
+        name: true,
+        sku: true,
+        category: { select: { id: true, name: true } },
+        images: {
+          where: { isPrimary: true },
+          take: 1,
+          select: { url: true },
+        },
+        variants: {
+          where: { isActive: true },
+          orderBy: { name: 'asc' },
+          select: {
+            id: true,
+            name: true,
+            sku: true,
+            barcode: true,
+            size: true,
+            color: true,
+            colorHex: true,
+            price: true,
+            stock: true,
+          },
+        },
+      },
+      orderBy: { name: 'asc' },
+      take: POS_CATALOG_MAX_PRODUCTS + 1,
+    });
+
+    const truncated = rows.length > POS_CATALOG_MAX_PRODUCTS;
+    const products: PosCatalogProduct[] = rows
+      .slice(0, POS_CATALOG_MAX_PRODUCTS)
+      .filter((p) => Array.isArray(p.variants) && p.variants.length > 0)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        sku: p.sku ?? null,
+        categoryId: p.category?.id ?? null,
+        categoryName: p.category?.name ?? null,
+        imageUrl: p.images?.[0]?.url ?? null,
+        variants: p.variants.map((v) => ({
+          id: v.id,
+          name: v.name,
+          sku: v.sku,
+          barcode: v.barcode ?? null,
+          size: v.size ?? null,
+          color: v.color ?? null,
+          colorHex: v.colorHex ?? null,
+          price: Number(v.price),
+          stock: v.stock,
+        })),
+      }));
+
+    return { generatedAt: new Date().toISOString(), truncated, products };
   }
 
   async lookupBarcode(barcode: string) {

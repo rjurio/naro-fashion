@@ -16,15 +16,18 @@ import {
   type SyncChangesResponse,
   type SyncSnapshot,
 } from '@/lib/offline/sync-store';
+import { resumeSync, startSyncEngine, syncNow, type SyncRunSummary } from '@/lib/offline/sync-engine';
 
 interface SyncActions {
   /** Reload the current page's data. */
   refresh: () => void;
   /** Probe the server now and look for newer data / queue changes. */
   checkNow: () => Promise<void>;
+  /** Push queued offline changes now (the engine also runs on its own). */
+  syncNow: () => Promise<SyncRunSummary>;
 }
 
-const FALLBACK_ACTIONS: SyncActions = { refresh, checkNow };
+const FALLBACK_ACTIONS: SyncActions = { refresh, checkNow, syncNow };
 const SyncActionsContext = createContext<SyncActions>(FALLBACK_ACTIONS);
 
 /**
@@ -37,7 +40,14 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     startSyncStore();
+    startSyncEngine();
   }, []);
+
+  // A (re)signed-in user: lift a "sign in again" pause and replay their queue.
+  const userId = user?.id ?? null;
+  useEffect(() => {
+    if (userId) resumeSync();
+  }, [userId]);
 
   // Poll /sync/changes only for tenant admins (platform admins have no tenant data feed).
   const tenantAdmin = !!user && !isPlatformAdmin;

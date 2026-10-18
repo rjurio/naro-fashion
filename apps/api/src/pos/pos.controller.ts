@@ -70,6 +70,16 @@ export class PosController {
   // PRODUCT & CUSTOMER SEARCH
   // ============================================================
 
+  /**
+   * Compact snapshot of every sellable product + active variant for the
+   * admin's offline POS (search + barcode lookup while the API is
+   * unreachable). Same guards/module as products/search; tenant-scoped.
+   */
+  @Get('catalog')
+  getCatalog() {
+    return this.posService.getCatalog();
+  }
+
   @Get('products/search')
   searchProducts(@Query('q') query: string) {
     return this.posService.searchProducts(query);

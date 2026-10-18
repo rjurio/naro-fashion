@@ -1,14 +1,16 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, CloudOff, Loader2, RefreshCw, UploadCloud, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CloudOff, ListChecks, Loader2, LogIn, RefreshCw, UploadCloud, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useSyncStatus, type SyncStatus } from '@/contexts/SyncContext';
+import SyncDrawer from './SyncDrawer';
 
-type BadgeState = 'offline' | 'review' | 'syncing' | 'pending' | 'remote' | 'ok';
+type BadgeState = 'offline' | 'login' | 'review' | 'syncing' | 'pending' | 'remote' | 'ok';
 
 export function badgeState(s: SyncStatus): BadgeState {
   if (!s.online) return 'offline';
+  if (s.needsLogin) return 'login';
   if (s.conflictCount + s.failedCount > 0) return 'review';
   if (s.syncing) return 'syncing';
   if (s.pendingCount > 0) return 'pending';
@@ -46,7 +48,14 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 function labels(state: BadgeState, s: SyncStatus): { long: string; short: string } {
   switch (state) {
     case 'offline':
-      return { long: 'Offline', short: 'Offline' };
+      return s.pendingCount > 0
+        ? { long: `Offline · ${plural(s.pendingCount, 'change')} saved`, short: 'Offline' }
+        : { long: 'Offline', short: 'Offline' };
+    case 'login':
+      return {
+        long: s.pendingCount > 0 ? `Sign in again to sync ${plural(s.pendingCount, 'change')}` : 'Sign in again to sync',
+        short: 'Sign in',
+      };
     case 'review': {
       const n = s.conflictCount + s.failedCount;
       return { long: `${n} need review`, short: `${n} review` };
@@ -66,6 +75,10 @@ const STATE_STYLES: Record<BadgeState, { pill: string; dot: string }> = {
   offline: {
     pill: 'border-zinc-400/50 bg-zinc-200 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100 dark:border-zinc-600',
     dot: 'bg-zinc-500',
+  },
+  login: {
+    pill: 'border-red-300 bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800',
+    dot: 'bg-red-500',
   },
   review: {
     pill: 'border-red-300 bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800',
@@ -93,6 +106,8 @@ function StateIcon({ state, className }: { state: BadgeState; className?: string
   switch (state) {
     case 'offline':
       return <CloudOff className={className} aria-hidden="true" />;
+    case 'login':
+      return <LogIn className={className} aria-hidden="true" />;
     case 'review':
       return <AlertTriangle className={className} aria-hidden="true" />;
     case 'syncing':
@@ -130,6 +145,7 @@ interface SyncStatusBadgeProps {
 export default function SyncStatusBadge({ compact = false, align = 'right', className }: SyncStatusBadgeProps) {
   const status = useSyncStatus();
   const [open, setOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [mounted, setMounted] = useState(false);
   const now = useNow();
@@ -255,7 +271,12 @@ export default function SyncStatusBadge({ compact = false, align = 'right', clas
                       {status.showingCachedSince || status.lastSyncAt
                         ? ` (from ${formatClock(status.showingCachedSince ?? status.lastSyncAt)})`
                         : ''}
-                      . Changes need internet.
+                      . POS sales are saved here and sync automatically; most other changes need internet.
+                    </p>
+                  )}
+                  {state === 'login' && (
+                    <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+                      Your session expired. Queued changes stay on this device and sync after you sign in again.
                     </p>
                   )}
                   {state !== 'offline' && status.showingCachedSince && (
@@ -304,7 +325,23 @@ export default function SyncStatusBadge({ compact = false, align = 'right', clas
               )}
             </div>
 
-            <div className="flex gap-2 border-t border-[hsl(var(--border))] px-4 py-3">
+            <div className="border-t border-[hsl(var(--border))] px-4 pt-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  setDrawerOpen(true);
+                }}
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+              >
+                <ListChecks className="h-3.5 w-3.5" />
+                Changes on this device
+                {status.pendingCount + status.failedCount + status.conflictCount > 0 &&
+                  ` (${status.pendingCount + status.failedCount + status.conflictCount})`}
+              </button>
+            </div>
+
+            <div className="flex gap-2 px-4 py-3">
               <button
                 type="button"
                 onClick={() => void status.checkNow()}
@@ -328,6 +365,8 @@ export default function SyncStatusBadge({ compact = false, align = 'right', clas
           </div>
         </>
       )}
+
+      <SyncDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
     </div>
   );
 }

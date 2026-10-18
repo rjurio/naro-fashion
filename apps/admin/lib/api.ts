@@ -13,12 +13,31 @@ import {
   reportNetworkFailure,
   reportServerReachable,
 } from './offline/sync-store';
+import {
+  enqueue as enqueueOutbox,
+  optimisticResult,
+  prepareOfflineMutation,
+  type PreparedMutation,
+} from './offline/outbox';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
 
 interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
+  /**
+   * Human-readable label for the sync panel if this write gets queued offline
+   * (e.g. `Update product “Ball Gown X”`). Ignored for non-offline-capable writes.
+   */
+  offlineLabel?: string;
 }
+
+/** Raw outcome of replaying a queued write (sync engine). HTTP errors are returned, never thrown. */
+export type QueuedSendResult =
+  | { kind: 'response'; status: number; ok: boolean; data: any; replayed: boolean }
+  /** The server could not be reached. */
+  | { kind: 'network' }
+  /** Token refresh hit a 5xx/408/429 — try again later. */
+  | { kind: 'transient'; status: number; message: string };
 
 /**
  * Machine-readable error codes set by the client itself (not the server):
@@ -341,6 +360,58 @@ class AdminApiClient {
     return response;
   }
 
+  /**
+   * Store an allow-listed write in the offline outbox and build the optimistic
+   * result request() returns. Null when it can't be stored (no signed-in
+   * identity / IndexedDB unavailable) — the caller then throws OFFLINE as before.
+   */
+  private async enqueueOffline<T>(prepared: PreparedMutation, label?: string): Promise<T | null> {
+    const scope = scopeFromIdentity(identityFromToken(this.getStoredToken()));
+    if (!scope) return null;
+    const entry = await enqueueOutbox(prepared, { scope, label });
+    return entry ? (optimisticResult(entry) as unknown as T) : null;
+  }
+
+  /**
+   * Replay a queued write with its stored Idempotency-Key. Bypasses the
+   * outbox and the read cache; HTTP errors are returned, not thrown, so the
+   * sync engine can read `code` / `current` from the body.
+   */
+  async sendQueued(method: string, endpoint: string, body: unknown, idempotencyKey: string): Promise<QueuedSendResult> {
+    const headers = new Headers({ 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey });
+    let res: Response;
+    try {
+      res = await this.authorizedFetch(this.buildUrl(endpoint), {
+        method,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        headers,
+      });
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        reportNetworkFailure();
+        return { kind: 'network' };
+      }
+      if (err instanceof ApiError) return { kind: 'transient', status: err.status, message: err.message };
+      throw err;
+    }
+    if (res.status >= 502 && res.status <= 504) reportNetworkFailure();
+    else reportServerReachable();
+    const text = await res.text().catch(() => '');
+    let data: any = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = { message: text };
+    }
+    return {
+      kind: 'response',
+      status: res.status,
+      ok: res.ok,
+      data,
+      replayed: res.headers.get('Idempotency-Replayed') === 'true',
+    };
+  }
+
   /** authorizedFetch + JSON error handling for multipart uploads. */
   private async uploadMultipart<T>(endpoint: string, file: File, fallbackError = 'Upload failed'): Promise<T> {
     if (isBrowserOffline()) {
@@ -376,13 +447,19 @@ class AdminApiClient {
    * is eligible for refresh; only login/refresh/logout & friends skip it.
    */
   private async request<T>(method: string, endpoint: string, data?: unknown, options?: RequestOptions): Promise<T> {
-    const { params, headers: extraHeaders, ...fetchOptions } = options || {};
+    const { params, headers: extraHeaders, offlineLabel, ...fetchOptions } = options || {};
     const url = this.buildUrl(endpoint, params);
-    const body = data !== undefined ? JSON.stringify(data) : undefined;
+    const isGet = method.toUpperCase() === 'GET';
+    // Offline-capable writes (lib/offline/outbox.ts allow-list) ALWAYS carry an
+    // Idempotency-Key — online too — and creates get a client id, so the same
+    // request can be queued and replayed safely if the connection drops.
+    const prepared = isGet ? null : prepareOfflineMutation(method, endpoint, data);
+    const sendData = prepared ? prepared.body : data;
+    const body = sendData !== undefined ? JSON.stringify(sendData) : undefined;
     const headers = new Headers(extraHeaders);
     if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    if (prepared) headers.set('Idempotency-Key', prepared.idempotencyKey);
 
-    const isGet = method.toUpperCase() === 'GET';
     // Offline read cache (Phase 1): key = scope (tenant|platform : user) + path incl. query.
     const cacheable = isGet && isCacheableEndpoint(endpoint);
     const cachePath = url.startsWith(this.baseUrl) ? url.slice(this.baseUrl.length) : url;
@@ -393,9 +470,10 @@ class AdminApiClient {
         if (cacheable) return this.serveFromCache<T>(cacheScope, cachePath);
         throw new ApiError(0, OFFLINE_READ_MESSAGE, 'OFFLINE');
       }
-      // Phase 3: enqueue here — if `endpoint` is on the offline allow-list, write
-      // { clientMutationId, method, path: endpoint, body: data, baseUpdatedAt, ... }
-      // to the IndexedDB `outbox`, call refreshCounts(), and return an optimistic result.
+      if (prepared) {
+        const queued = await this.enqueueOffline<T>(prepared, offlineLabel);
+        if (queued) return queued;
+      }
       throw new ApiError(0, OFFLINE_MUTATION_MESSAGE, 'OFFLINE');
     }
 
@@ -414,9 +492,19 @@ class AdminApiClient {
         if (cacheable) return this.serveFromCache<T>(cacheScope, cachePath);
         throw new ApiError(0, OFFLINE_READ_MESSAGE, 'OFFLINE');
       }
-      // Phase 3: enqueue here as well (request failed mid-flight). Replay must carry an
-      // Idempotency-Key so a request that did reach the server isn't applied twice.
+      // Failed mid-flight: queue it with the SAME Idempotency-Key, so if it did
+      // reach the server the replay returns the stored result instead of re-applying.
+      if (prepared) {
+        const queued = await this.enqueueOffline<T>(prepared, offlineLabel);
+        if (queued) return queued;
+      }
       throw new ApiError(0, OFFLINE_UNSAVED_MUTATION_MESSAGE, 'OFFLINE');
+    }
+    // Proxy up but API down (deploy/restart): queue offline-capable writes too.
+    if (prepared && response.status >= 502 && response.status <= 504) {
+      reportNetworkFailure();
+      const queued = await this.enqueueOffline<T>(prepared, offlineLabel);
+      if (queued) return queued;
     }
     reportServerReachable();
 
@@ -719,8 +807,13 @@ class AdminApiClient {
   getOrder(id: string) {
     return this.get<any>(`/orders/${id}`);
   }
-  updateOrderStatus(id: string, status: string) {
-    return this.patch<any>(`/orders/${id}/status`, { status });
+  /** `expectedStatus` (the status the operator saw) turns a concurrent change into a reviewable 409 CONFLICT. */
+  updateOrderStatus(id: string, status: string, expectedStatus?: string, offlineLabel?: string) {
+    return this.patch<any>(
+      `/orders/${id}/status`,
+      expectedStatus ? { status, expectedStatus } : { status },
+      offlineLabel ? { offlineLabel } : undefined,
+    );
   }
   getOrderStats() {
     return this.get<any>('/orders/stats');
@@ -746,8 +839,13 @@ class AdminApiClient {
   getRental(id: string) {
     return this.get<any>(`/rentals/${id}`);
   }
-  updateRentalStatus(id: string, status: string) {
-    return this.patch<any>(`/rentals/${id}/status`, { status });
+  /** `expectedStatus` (the status the operator saw) turns a concurrent change into a reviewable 409 CONFLICT. */
+  updateRentalStatus(id: string, status: string, expectedStatus?: string, offlineLabel?: string) {
+    return this.patch<any>(
+      `/rentals/${id}/status`,
+      expectedStatus ? { status, expectedStatus } : { status },
+      offlineLabel ? { offlineLabel } : undefined,
+    );
   }
   markRentalReady(id: string) {
     return this.patch<any>(`/rentals/${id}/ready`, {});
@@ -1369,6 +1467,10 @@ class AdminApiClient {
   posSearchProducts(q: string) {
     return this.get<any[]>('/pos/products/search', { params: { q } });
   }
+  /** Compact product + variant snapshot for offline POS search (kept in IndexedDB `meta`, not the response cache). */
+  posGetCatalog() {
+    return this.get<{ generatedAt: string; truncated: boolean; products: any[] }>('/pos/catalog');
+  }
   posLookupBarcode(code: string) {
     return this.get<any>(`/pos/products/barcode/${code}`);
   }
@@ -1383,8 +1485,9 @@ class AdminApiClient {
   }
 
   // ===== POS - Sales =====
-  posCreateSale(data: any) {
-    return this.post<any>('/pos/sales', data);
+  /** May return a queued result when offline — check `isQueuedResult()` from lib/offline/outbox. */
+  posCreateSale(data: any, offlineLabel?: string) {
+    return this.post<any>('/pos/sales', data, offlineLabel ? { offlineLabel } : undefined);
   }
   posGetSales(params?: Record<string, string>) {
     return this.get<any>('/pos/sales', { params });

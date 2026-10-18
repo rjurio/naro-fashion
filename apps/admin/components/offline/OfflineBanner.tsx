@@ -44,7 +44,7 @@ export default function OfflineBanner() {
     if (prevOnline.current === s.online) return;
     prevOnline.current = s.online;
     if (s.online) toast.success("You're back online.");
-    else toast.warning("You're offline. Showing data saved on this device; changes need internet.");
+    else toast.warning("You're offline. Showing data saved on this device; POS sales are saved here and sync automatically.");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.online, mounted]);
 
@@ -68,8 +68,8 @@ export default function OfflineBanner() {
     >
       <CloudOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       <p className="flex-1">
-        You&apos;re offline{since ? ` — showing data from ${formatClock(since)}` : ''}. Editing is disabled until you&apos;re back
-        online.
+        You&apos;re offline{since ? ` — showing data from ${formatClock(since)}` : ''}. Changes that work offline are saved on
+        this device and sync automatically; others need internet.
       </p>
       <button
         type="button"

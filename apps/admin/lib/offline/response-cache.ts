@@ -22,7 +22,8 @@ export const MAX_CACHED_RESPONSE_CHARS = 2 * 1024 * 1024;
 export const MAX_CACHED_RESPONSES = 500;
 
 /** Endpoints never cached: auth, sync bookkeeping, health, private files/exports. */
-const UNCACHEABLE_PREFIXES = ['/auth/', '/auth?', '/sync/', '/health', '/upload/', '/audit/export'];
+// `/pos/catalog` is kept in its own `meta` snapshot (lib/offline/pos-catalog.ts).
+const UNCACHEABLE_PREFIXES = ['/auth/', '/auth?', '/sync/', '/health', '/upload/', '/audit/export', '/pos/catalog'];
 
 export function isCacheableEndpoint(endpoint: string): boolean {
   const path = endpoint.split('?')[0];

@@ -1,9 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Plus, Barcode, Package, CheckCircle, XCircle, Volume2 } from 'lucide-react';
-import adminApi from '../../../../lib/api';
+import { Search, Plus, Barcode, Package, CheckCircle, XCircle, Volume2, CloudOff, RefreshCw } from 'lucide-react';
+import adminApi, { isOfflineError } from '../../../../lib/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
+import type { PosCatalogApi } from '../hooks/usePosCatalog';
+import type { PosCatalogProduct } from '@/lib/offline/pos-catalog';
 
 interface Variant {
   id: string;
@@ -44,6 +46,32 @@ interface CartItem {
 interface Props {
   onAddToCart: (item: CartItem) => void;
   categories: { id: string; name: string }[];
+  /** Local catalog used when offline (or when a search request can't reach the server). */
+  catalog: PosCatalogApi;
+  /** True when the API is unreachable — search/scan go straight to the local catalog. */
+  offline: boolean;
+}
+
+/** Local catalog row → the shape the server search returns. */
+function toSearchProduct(p: PosCatalogProduct): Product {
+  return {
+    id: p.id,
+    name: p.name,
+    basePrice: 0,
+    sku: p.sku,
+    variants: p.variants,
+    images: p.imageUrl ? [{ url: p.imageUrl, altText: null }] : [],
+    category: p.categoryId ? { id: p.categoryId, name: p.categoryName ?? '' } : null,
+  };
+}
+
+function formatTime(ms: number | null): string {
+  if (!ms) return '—';
+  try {
+    return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '—';
+  }
 }
 
 // Play a short beep for scan feedback
@@ -65,7 +93,7 @@ function playBeep(success: boolean) {
 
 type ScanFeedback = { type: 'success'; productName: string } | { type: 'error'; code: string } | null;
 
-export default function ProductSearch({ onAddToCart, categories }: Props) {
+export default function ProductSearch({ onAddToCart, categories, catalog, offline }: Props) {
   const [query, setQuery] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
@@ -76,22 +104,39 @@ export default function ProductSearch({ onAddToCart, categories }: Props) {
   const barcodeRef = useRef<HTMLInputElement>(null);
   const debounceTimer = useRef<NodeJS.Timeout>(null);
   const feedbackTimer = useRef<NodeJS.Timeout>(null);
+  // True when the results on screen came from the device catalog.
+  const [usingLocal, setUsingLocal] = useState(false);
+  // Latest catalog without re-running searches on every catalog change.
+  const catalogRef = useRef(catalog);
+  catalogRef.current = catalog;
 
   const searchProducts = useCallback(async (q: string) => {
     if (!q || q.length < 1) {
       setProducts([]);
+      setUsingLocal(false);
+      return;
+    }
+    if (offline) {
+      setProducts(catalogRef.current.search(q).map(toSearchProduct));
+      setUsingLocal(true);
       return;
     }
     setLoading(true);
     try {
       const results = await adminApi.posSearchProducts(q);
       setProducts(Array.isArray(results) ? results : []);
-    } catch {
-      setProducts([]);
+      setUsingLocal(false);
+    } catch (err) {
+      if (isOfflineError(err)) {
+        setProducts(catalogRef.current.search(q).map(toSearchProduct));
+        setUsingLocal(true);
+      } else {
+        setProducts([]);
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [offline]);
 
   useEffect(() => {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
@@ -99,14 +144,51 @@ export default function ProductSearch({ onAddToCart, categories }: Props) {
     return () => { if (debounceTimer.current) clearTimeout(debounceTimer.current); };
   }, [query, searchProducts]);
 
+  // Local results: re-run when queued sales change local stock.
+  useEffect(() => {
+    if (usingLocal && query) setProducts(catalog.search(query).map(toSearchProduct));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog.products]);
+
   const showFeedback = useCallback((fb: ScanFeedback) => {
     setScanFeedback(fb);
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     feedbackTimer.current = setTimeout(() => setScanFeedback(null), 2500);
   }, []);
 
+  const addLocalBarcode = useCallback((code: string): boolean => {
+    const hit = catalogRef.current.lookupBarcode(code);
+    if (!hit || hit.variant.stock <= 0) return false;
+    onAddToCart({
+      productId: hit.product.id,
+      variantId: hit.variant.id,
+      productName: hit.product.name,
+      variantName: hit.variant.name,
+      size: hit.variant.size,
+      color: hit.variant.color,
+      quantity: 1,
+      unitPrice: Number(hit.variant.price),
+      stock: hit.variant.stock,
+      imageUrl: hit.product.imageUrl ?? undefined,
+    });
+    playBeep(true);
+    showFeedback({ type: 'success', productName: hit.product.name });
+    return true;
+  }, [onAddToCart, showFeedback]);
+
   const handleBarcodeSubmit = useCallback(async (code: string) => {
     if (!code) return;
+    if (offline) {
+      if (!addLocalBarcode(code)) {
+        playBeep(false);
+        showFeedback({ type: 'error', code });
+      }
+      if (barcodeRef.current) {
+        barcodeRef.current.value = '';
+        barcodeRef.current.focus();
+      }
+      return;
+    }
     try {
       const variant = await adminApi.posLookupBarcode(code);
       if (variant) {
@@ -125,16 +207,19 @@ export default function ProductSearch({ onAddToCart, categories }: Props) {
         playBeep(true);
         showFeedback({ type: 'success', productName: variant.product.name });
       }
-    } catch {
-      playBeep(false);
-      showFeedback({ type: 'error', code });
+    } catch (err) {
+      // Server unreachable mid-scan → try the device catalog before failing.
+      if (!(isOfflineError(err) && addLocalBarcode(code))) {
+        playBeep(false);
+        showFeedback({ type: 'error', code });
+      }
     }
     // Clear manual barcode input if in barcode mode
     if (barcodeRef.current) {
       barcodeRef.current.value = '';
       barcodeRef.current.focus();
     }
-  }, [onAddToCart, showFeedback]);
+  }, [onAddToCart, showFeedback, offline, addLocalBarcode]);
 
   // Global barcode scanner detection (works without barcode mode toggled)
   useBarcodeScanner({
@@ -217,6 +302,30 @@ export default function ProductSearch({ onAddToCart, categories }: Props) {
           <Volume2 className="w-3 h-3" />
           <span>Barcode scanner auto-detected — just scan, no need to click</span>
         </div>
+
+        {/* Offline catalog status */}
+        {(offline || usingLocal) && (
+          <div
+            role="status"
+            className="flex items-center gap-1.5 mt-1.5 rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+          >
+            <CloudOff className="w-3 h-3 shrink-0" aria-hidden="true" />
+            {catalog.updatedAt ? (
+              <span>
+                Offline catalog · updated {formatTime(catalog.updatedAt)} · {catalog.products.length} products
+                {catalog.truncated ? ' (partial)' : ''}
+              </span>
+            ) : (
+              <span>No offline catalog on this device yet — open POS once while online.</span>
+            )}
+          </div>
+        )}
+        {!offline && !usingLocal && catalog.refreshing && (
+          <div className="flex items-center gap-1.5 mt-1 text-[10px] text-[hsl(var(--muted-foreground))]">
+            <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
+            <span>Updating offline catalog…</span>
+          </div>
+        )}
 
         {barcodeMode && (
           <div className="mt-2">

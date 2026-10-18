@@ -9,13 +9,14 @@
  *     cache hits, and successful own mutations
  *   - a remote-change poll: GET /sync/changes?since=… every 60s (tenant admins)
  *
- * Phase 3 hooks: `setSyncing()`, `refreshCounts()` (outbox/conflicts are
- * already read from IndexedDB, so queued writes show up with no UI changes).
+ * Phase 3 hooks: `setSyncing()`, `refreshCounts()`, `setNeedsLogin()` and
+ * `configureCountScope()` — the outbox (lib/offline/outbox.ts) and the sync
+ * engine (lib/offline/sync-engine.ts) drive these.
  *
  * SSR-safe: nothing touches window/navigator/indexedDB until start() runs in
  * the browser; getServerSnapshot() returns a static "online" snapshot.
  */
-import { idbGetAll, idbCount, metaGet, metaSet } from './db';
+import { idbGetAll, metaGet, metaSet } from './db';
 import { trimResponseCache } from './response-cache';
 
 export interface RemoteChanges {
@@ -40,14 +41,16 @@ export interface SyncSnapshot {
   showingCachedSince: number | null;
   /** Last time a GET succeeded from the network (epoch ms), persisted. */
   lastSyncAt: number | null;
-  /** Queued offline writes (Phase 3 — 0 for now). */
+  /** Queued offline writes for the signed-in user (outbox status pending/syncing). */
   pendingCount: number;
-  /** Writes the server refused with a conflict (Phase 3). */
+  /** Writes the server refused with a conflict (outbox status 'conflict'). */
   conflictCount: number;
-  /** Writes that failed validation and need a fix/discard (Phase 3). */
+  /** Writes that failed validation and need a fix/discard (outbox status 'failed'). */
   failedCount: number;
-  /** Outbox drain in progress (Phase 3). */
+  /** Outbox drain in progress. */
   syncing: boolean;
+  /** The session expired and couldn't be renewed — queued changes wait for a new sign-in. */
+  needsLogin: boolean;
   /** Newer records on the server since this page's data was loaded. */
   remoteChanges: RemoteChanges | null;
   /** A manual "Check now" is running. */
@@ -80,6 +83,7 @@ const SERVER_SNAPSHOT: SyncSnapshot = Object.freeze({
   conflictCount: 0,
   failedCount: 0,
   syncing: false,
+  needsLogin: false,
   remoteChanges: null,
   checking: false,
 }) as SyncSnapshot;
@@ -189,24 +193,40 @@ export function markPageLoad() {
   setState({ showingCachedSince: null, remoteChanges: null });
 }
 
-/** Phase 3: the sync engine toggles this while draining the outbox. */
+/** The sync engine toggles this while draining the outbox. */
 export function setSyncing(syncing: boolean) {
   setState({ syncing });
 }
 
-/** Re-read pending/conflict/failed counts from IndexedDB (Phase 3 calls this after queue changes). */
+/** The sync engine sets this when a 401 can't be fixed by a token refresh. */
+export function setNeedsLogin(needsLogin: boolean) {
+  setState({ needsLogin });
+}
+
+/**
+ * Outbox entries belong to one signed-in user (`tenant|platform:userId`).
+ * Counts only include the current user's entries; with no getter configured
+ * (or no signed-in user) nothing is counted.
+ */
+let countScopeGetter: (() => string | null) | null = null;
+export function configureCountScope(getter: (() => string | null) | null) {
+  countScopeGetter = getter;
+}
+
+/** Re-read pending/conflict/failed counts from IndexedDB (call after any outbox change). */
 export async function refreshCounts(): Promise<void> {
-  const [outbox, conflictCount] = await Promise.all([
-    idbGetAll<{ status?: string }>('outbox'),
-    idbCount('conflicts'),
-  ]);
+  const scope = countScopeGetter ? countScopeGetter() : null;
+  const outbox = scope ? await idbGetAll<{ status?: string; scope?: string }>('outbox') : [];
   let pending = 0;
   let failed = 0;
+  let conflicts = 0;
   for (const item of outbox) {
-    if (item?.status === 'failed') failed += 1;
-    else if (item?.status !== 'done') pending += 1;
+    if (!item || item.scope !== scope) continue;
+    if (item.status === 'failed') failed += 1;
+    else if (item.status === 'conflict') conflicts += 1;
+    else if (item.status === 'pending' || item.status === 'syncing') pending += 1;
   }
-  setState({ pendingCount: pending, failedCount: failed, conflictCount });
+  setState({ pendingCount: pending, failedCount: failed, conflictCount: conflicts });
 }
 
 /** Logout: forget everything user-specific held in memory. */
@@ -221,6 +241,7 @@ export function resetForLogout() {
     failedCount: 0,
     remoteChanges: null,
     syncing: false,
+    needsLogin: false,
   });
 }
 
