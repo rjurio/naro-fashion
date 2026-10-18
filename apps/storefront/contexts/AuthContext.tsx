@@ -43,6 +43,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // lib/api transparently refreshes the access token on 401 using the
       // stored refresh token; only a failed refresh lands here.
       const profile = await authApi.getProfile();
+      // Staff sessions don't belong on the storefront (sessions created
+      // before login became customer-only). Drop them locally.
+      if (profile?.isAdmin || profile?.isPlatformAdmin) {
+        tokenStore.clear();
+        setUser(null);
+        return;
+      }
       setUser(profile);
     } catch (err) {
       // Only an auth rejection ends the session; a network blip / 5xx keeps

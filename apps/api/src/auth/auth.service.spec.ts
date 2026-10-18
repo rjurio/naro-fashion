@@ -107,6 +107,27 @@ describe('AuthService (security regressions)', () => {
       await expect(service.validateUser('c@x.tz', 'Correct1pass', 't1')).rejects.toThrow(SUSPENDED_ACCOUNT_ERROR);
     });
 
+    it('customer-only (storefront) login never falls back to a staff account', async () => {
+      prisma.user.findFirst.mockResolvedValue(null);
+      prisma.adminUser.findUnique.mockResolvedValue({
+        id: 'a1', email: 'adm@x.tz', passwordHash: hash, tenantId: 't1', isActive: true,
+        deletedAt: null, lockedUntil: null, failedLoginAttempts: 0,
+      });
+      await expect(
+        service.validateUser('adm@x.tz', 'Correct1pass', 't1', undefined, { customerOnly: true }),
+      ).resolves.toBeNull();
+      expect(prisma.adminUser.findUnique).not.toHaveBeenCalled();
+      // and doesn't burn the staff account's lockout budget
+      expect(prisma.adminUser.update).not.toHaveBeenCalled();
+    });
+
+    it('customer-only login still accepts a real customer', async () => {
+      prisma.user.findFirst.mockResolvedValue({ id: 'u1', email: 'c@x.tz', tenantId: 't1', passwordHash: hash, isActive: true });
+      const res: any = await service.validateUser('c@x.tz', 'Correct1pass', 't1', undefined, { customerOnly: true });
+      expect(res.id).toBe('u1');
+      expect(res.isAdmin).toBeUndefined();
+    });
+
     it('resolveActiveTenantId rejects unknown / suspended tenants and non-strings', async () => {
       expect(await service.resolveActiveTenantId({ not: '' })).toBeNull();
       prisma.tenant.findUnique.mockResolvedValueOnce(null);

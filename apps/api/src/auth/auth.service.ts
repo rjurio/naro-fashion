@@ -308,8 +308,18 @@ export class AuthService {
    * - Admins are looked up globally (AdminUser.email is globally unique).
    * - Suspended customers (`isActive=false`) are rejected after a correct
    *   password; inactive / soft-deleted admins are rejected generically.
+   * - `opts.customerOnly` (storefront sends `audience: 'customer'`) skips the
+   *   AdminUser fallback entirely, so staff credentials typed on the
+   *   storefront fail like any wrong password instead of minting an admin
+   *   session on the public site.
    */
-  async validateUser(email: unknown, password: unknown, tenantId?: string | null, meta?: LoginMeta) {
+  async validateUser(
+    email: unknown,
+    password: unknown,
+    tenantId?: string | null,
+    meta?: LoginMeta,
+    opts?: { customerOnly?: boolean },
+  ) {
     if (!isCredentialShapeValid(email, password)) return null;
     const pwd = password as string;
 
@@ -323,6 +333,8 @@ export class AuthService {
         return result;
       }
     }
+
+    if (opts?.customerOnly) return null;
 
     // AdminUser — globally unique email, no tenant filter needed
     const admin = await this.prisma.adminUser.findUnique({ where: { email } });

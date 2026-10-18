@@ -28,10 +28,20 @@ export class LocalStrategy extends PassportStrategy(Strategy) {
     const rawTenant = (req as any).tenantId ?? req.headers?.['x-tenant-id'];
     const tenantId = await this.authService.resolveActiveTenantId(rawTenant);
 
-    const user = await this.authService.validateUser(email, password, tenantId, {
-      ipAddress: req.ip ?? null,
-      userAgent: (req.headers?.['user-agent'] as string | undefined) ?? null,
-    });
+    // The storefront sends `audience: 'customer'` — never fall back to a
+    // staff (AdminUser) account there. The admin app omits it.
+    const customerOnly = (req.body as any)?.audience === 'customer';
+
+    const user = await this.authService.validateUser(
+      email,
+      password,
+      tenantId,
+      {
+        ipAddress: req.ip ?? null,
+        userAgent: (req.headers?.['user-agent'] as string | undefined) ?? null,
+      },
+      { customerOnly },
+    );
     if (!user) {
       throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
     }

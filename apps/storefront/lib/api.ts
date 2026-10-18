@@ -335,8 +335,10 @@ export const newsletterApi = {
 };
 
 export const authApi = {
+  // `audience: 'customer'` tells the API never to fall back to a staff
+  // (AdminUser) account — staff credentials fail here like a wrong password.
   login: (data: { email: string; password: string }) =>
-    api.post<any>('/auth/login', data),
+    api.post<any>('/auth/login', { ...data, audience: 'customer' }),
   register: (data: { email: string; password: string; firstName: string; lastName: string; phone?: string }) =>
     api.post<any>('/auth/register', data),
   getProfile: () => api.get<any>('/auth/me'),
