@@ -266,7 +266,7 @@ export default function SyncStatusBadge({ compact = false, align = 'right', clas
                 </div>
               </div>
 
-              <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1.5 text-xs">
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
                 <dt className="text-[hsl(var(--muted-foreground))]">Connection</dt>
                 <dd className="text-right text-[hsl(var(--foreground))]">
                   {!status.browserOnline ? 'No internet' : status.serverReachable ? 'Connected' : 'Server unreachable'}
