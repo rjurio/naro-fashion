@@ -3,7 +3,7 @@
 # Sourced, never executed directly. Expects the caller to `cd "$APP_DIR"`.
 #
 # Artifact layout on the VPS (all gitignored):
-#   apps/<app>/.next          build PM2 serves (`next start` from apps/<app>)
+#   apps/<app>/.next          build PM2 serves (standalone server.js inside it)
 #   apps/<app>/.next-prev.pending  copy of the live .next taken before the
 #                             in-place build; restored if the build fails
 #   apps/<app>/.next-prev     build that was live before the last deploy
@@ -20,6 +20,13 @@
 
 NEXT_APPS=(storefront admin)
 DEPLOY_STATE_DIR=".deploy"
+
+# PM2 supervision guard (pm2_supervision_check). Every pm2 command in the
+# deploy/rollback scripts goes through reload_pm2 or pm2_diagnostics below,
+# both of which run the guard first — a bare `pm2 ...` would spawn an
+# unsupervised daemon if pm2-root.service's daemon were gone.
+# shellcheck source=scripts/ops/pm2-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pm2-guard.sh"
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 log() { echo "[$(ts)] $*"; }
@@ -122,41 +129,76 @@ missing_prev_artifacts() {
 swap_back_artifacts() {
   # Moves the *-prev builds back into the serving paths. The build being
   # replaced is kept as .next-failed / dist-failed for post-mortem.
-  local app d
+  # Returns 1 if ANY move failed (builds may then be mixed — caller must stop).
+  local app d rc=0
   for app in "${NEXT_APPS[@]}"; do
     d="apps/${app}"
     rm -rf "${d}/.next-failed"
-    if [ -d "${d}/.next" ]; then mv "${d}/.next" "${d}/.next-failed"; fi
-    mv "${d}/.next-prev" "${d}/.next"
-    log "↩ ${app}: .next-prev -> .next (BUILD_ID $(cat "${d}/.next/BUILD_ID"))"
+    if [ -d "${d}/.next" ]; then mv "${d}/.next" "${d}/.next-failed" || rc=1; fi
+    if mv "${d}/.next-prev" "${d}/.next"; then
+      log "↩ ${app}: .next-prev -> .next (BUILD_ID $(cat "${d}/.next/BUILD_ID" 2>/dev/null))"
+    else
+      warn "${app}: could not move .next-prev back to .next"; rc=1
+    fi
   done
   rm -rf apps/api/dist-failed
-  if [ -d apps/api/dist ]; then mv apps/api/dist apps/api/dist-failed; fi
-  mv apps/api/dist-prev apps/api/dist
-  log "↩ api: dist-prev -> dist"
+  if [ -d apps/api/dist ]; then mv apps/api/dist apps/api/dist-failed || rc=1; fi
+  if mv apps/api/dist-prev apps/api/dist; then log "↩ api: dist-prev -> dist"; else warn "api: could not move dist-prev back to dist"; rc=1; fi
+  return "$rc"
 }
+
+# Deploy tooling that must never be rolled back to a pre-guard version.
+DEPLOY_TOOLING=(deploy.sh scripts/ops/deploy-lib.sh scripts/ops/rollback.sh scripts/ops/pm2-guard.sh scripts/ops/tests/pm2-guard.test.sh)
+
+has_pm2_guard() { is_commit "${1:-}" && git cat-file -e "${1}:scripts/ops/pm2-guard.sh" 2>/dev/null; }
 
 restore_source_to() {
   # restore_source_to <sha> <sha-being-left>
   # Puts the working tree (and therefore ecosystem.config.js, node_modules
   # and the generated Prisma client) back in line with the build that is
-  # now in the serving paths.
-  local target="$1" leaving="${2:-}"
+  # now in the serving paths. Returns 1 if ANY step failed — the caller must
+  # then report the rollback as incomplete, never as successful.
+  #
+  # Rolling back APPLICATION code never removes the PM2 guard: if <sha>
+  # predates scripts/ops/pm2-guard.sh, the deploy tooling (DEPLOY_TOOLING) is
+  # re-checked-out from <sha-being-left>, so the next deploy/rollback is still
+  # guarded. `git status` then shows those files as modified on purpose
+  # (.deploy/tooling_from records where they came from); the next deploy's
+  # `git reset --hard origin/prod` clears it. Removing the guard itself is a
+  # separate, explicitly authorised procedure (docs/OPS/DEPLOY.md).
+  local target="$1" leaving="${2:-}" rc=0 f
   if ! is_commit "$target"; then
-    warn "previous SHA '${target}' is unknown — NOT resetting git. Source tree no longer matches the running build; fix by hand."
-    return 0
+    warn "previous SHA '${target}' is unknown — NOT resetting git. Source tree no longer matches the running build."
+    return 1
   fi
   log "↩ git reset --hard ${target:0:7}"
-  git reset --hard "$target"
+  git reset --hard "$target" || { warn "git reset --hard ${target:0:7} failed"; return 1; }
+  rm -f "${DEPLOY_STATE_DIR}/tooling_from"
+  if ! has_pm2_guard "$target"; then
+    if has_pm2_guard "$leaving"; then
+      for f in "${DEPLOY_TOOLING[@]}"; do
+        if git cat-file -e "${leaving}:${f}" 2>/dev/null; then
+          git checkout "$leaving" -- "$f" || { warn "could not keep guarded tooling ${f} from ${leaving:0:7}"; rc=1; }
+        fi
+      done
+      mkdir -p "$DEPLOY_STATE_DIR"
+      printf '%s\n' "$leaving" > "${DEPLOY_STATE_DIR}/tooling_from"
+      log "🛡  ${target:0:7} predates the PM2 guard: application code is ${target:0:7}, deploy tooling kept from ${leaving:0:7} (guard retained)"
+    else
+      warn "${target:0:7} predates the PM2 guard and no guarded tooling is available to keep — the checkout is now UNGUARDED"
+      rc=1
+    fi
+  fi
   if [ -n "$leaving" ] && is_commit "$leaving" && git diff --quiet "$leaving" "$target" -- pnpm-lock.yaml; then
     log "lockfile unchanged between ${leaving:0:7} and ${target:0:7} — skipping pnpm install"
   else
     log "↩ pnpm install --frozen-lockfile (dependencies of ${target:0:7})"
-    pnpm install --frozen-lockfile || warn "pnpm install failed during rollback — continuing"
+    pnpm install --frozen-lockfile || { warn "pnpm install failed during rollback"; rc=1; }
   fi
   # Regenerate the client from the OLD schema. Safe against the (newer)
   # migrated DB because migrations must be backward compatible (additive).
-  (cd packages/database && pnpm exec prisma generate) || warn "prisma generate failed during rollback — continuing"
+  (cd packages/database && pnpm exec prisma generate) || { warn "prisma generate failed during rollback"; rc=1; }
+  return "$rc"
 }
 
 reload_pm2() {
@@ -166,10 +208,71 @@ reload_pm2() {
   # cluster `reload` can leave the old worker serving from the moved dir
   # (2026-10-04: admin kept 404ing every asset until `pm2 restart`). The API
   # (dist/main.js, no dir swap) keeps the graceful reload.
+  # Only the three NARO apps are named — never 'all' (shared VPS).
+  # Returns 1 WITHOUT touching pm2 when supervision can't be verified, and
+  # stops at the first refused/failed pm2 command (caller reports it).
+  log "🛡  Verifying PM2 supervision immediately before the first pm2 command..."
+  if ! pm2_supervision_check; then
+    warn "PM2 NOT reloaded: supervision check failed (see above)"
+    return 1
+  fi
   log "♻️  Restarting PM2 processes (GIT_SHA=${1:0:7})..."
-  GIT_SHA="$1" pm2 reload ecosystem.config.js --only naro-api --update-env
-  GIT_SHA="$1" pm2 restart ecosystem.config.js --only naro-storefront,naro-admin --update-env
-  pm2 save || warn "pm2 save failed (non-fatal)"
+  GIT_SHA="$1" pm2_guarded reload ecosystem.config.js --only naro-api --update-env \
+    || { warn "PM2 NOT reloaded: 'pm2 reload naro-api' refused or failed"; return 1; }
+  GIT_SHA="$1" pm2_guarded restart ecosystem.config.js --only naro-storefront,naro-admin --update-env \
+    || { warn "PM2 only PARTLY reloaded: naro-api done, 'pm2 restart naro-storefront,naro-admin' refused or failed"; return 1; }
+  pm2_guarded save || warn "pm2 save failed or was refused (non-fatal)"
+}
+
+pm2_guarded() {
+  # pm2_guarded <pm2 args...>: the ONLY way these scripts run a mutating pm2
+  # command. Re-verifies supervision right before EACH call, so a daemon that
+  # vanished after the previous command can't be silently re-spawned by the
+  # next one. (A residual window of milliseconds between check and exec
+  # remains; pm2 has no "never spawn a daemon" switch.)
+  if ! pm2_supervision_check --quiet; then
+    warn "refusing 'pm2 $*': PM2 supervision check failed (see above)"
+    return 1
+  fi
+  pm2 "$@"
+}
+
+rollback_incomplete_notice() {
+  # rollback_incomplete_notice <rollback-target-sha> <what went wrong>
+  # A rollback did not fully succeed. Printed with echo (not a heredoc) so
+  # nothing in it can execute. Callers exit 3 after it.
+  local sha="${1:-<previous sha>}" reason="${2:-see above}"
+  {
+    echo "========================================================================"
+    echo "❌ ROLLBACK INCOMPLETE — OPERATOR INTERVENTION REQUIRED"
+    echo "Rollback target: ${sha:0:7}. Problem: ${reason}."
+    echo "What is serving traffic right now is NOT verified. Do not treat this"
+    echo "rollback as successful."
+    echo "  1. Do NOT re-run deploy.sh or rollback.sh: the *-prev builds were consumed."
+    echo "  2. cd /var/www/naro-fashion && bash scripts/ops/pm2-guard.sh   # must PASS"
+    echo "     If it fails: do NOT run pm2 from this shell; recover ${PM2_GUARD_UNIT}"
+    echo "     through systemd (docs/OPS/DEPLOY.md 'PM2 supervision guard')."
+    echo "  3. Fix the problem above (builds in apps/*/.next + apps/api/dist, git at"
+    echo "     ${sha:0:7}, pnpm install / prisma generate), then reload ONLY NARO:"
+    echo "     GIT_SHA=${sha} pm2 reload ecosystem.config.js --only naro-api --update-env"
+    echo "     GIT_SHA=${sha} pm2 restart ecosystem.config.js --only naro-storefront,naro-admin --update-env"
+    echo "     pm2 save        (never 'pm2 restart all' — other apps share this daemon)"
+    echo "  4. curl -s http://127.0.0.1:4000/api/v1/health   # 'commit' must be ${sha:0:7}"
+    echo "     + storefront (Host: narofashion.co.tz), admin /login, one /_next/static asset each."
+    echo "========================================================================"
+  } >&2
+}
+
+pm2_diagnostics() {
+  # `pm2 status` + recent logs for failure output — only when supervision is
+  # verified (these read-only commands would also spawn a daemon). Never fails.
+  if pm2_supervision_check --quiet 2>/dev/null; then
+    pm2 status || true
+    pm2 logs --nostream --lines 40 || true
+  else
+    warn "skipping 'pm2 status' / 'pm2 logs': PM2 supervision is not verified (running pm2 now could start an unsupervised daemon)"
+    pm2_supervision_check >/dev/null || true   # print the reason on stderr
+  fi
 }
 
 record_rollback_state() {
@@ -184,19 +287,23 @@ record_rollback_state() {
 
 print_db_rollback_help() {
   # print_db_rollback_help <dump-path>
+  # Unquoted heredoc (for ${1}): NEVER put backticks or $(...) in the text —
+  # they EXECUTE. Until 2026-11-09 a `pm2 restart all` here ran on every
+  # automatic rollback, restarting every app on the shared VPS.
   cat >&2 <<EOF
 ------------------------------------------------------------------------
 The DATABASE was NOT rolled back. Migrations are forward-only and must be
 backward compatible (expand/contract — docs/OPS/MIGRATIONS.md), so the
 previous code should run against the migrated schema.
 Only if it does not, restore the pre-deploy dump:
+  bash scripts/ops/pm2-guard.sh   # must PASS before any pm2 command
   pm2 stop naro-api naro-admin naro-storefront
   sudo -u postgres psql -c "DROP DATABASE naro_fashion;"
   sudo -u postgres psql -c "CREATE DATABASE naro_fashion OWNER naro_admin;"
   PGPASSFILE=/root/.pgpass pg_restore --clean --if-exists --no-owner --no-acl \\
     -h localhost -U naro_admin -d naro_fashion ${1:-<pre-deploy dump in /var/backups/naro/postgres/>}
   # re-apply table ownership (docs/OPS/BACKUPS.md "Restoring"), then
-  # (never `pm2 restart all` — the VPS also runs other apps)
+  # (never 'pm2 restart all' — the VPS also runs other apps)
   pm2 restart naro-api naro-admin naro-storefront
 ------------------------------------------------------------------------
 EOF

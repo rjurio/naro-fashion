@@ -31,6 +31,8 @@
 # automatically. See docs/OPS/DEPLOY.md.
 
 set -euo pipefail
+# The PM2 guard's test-only overrides must never apply to a real deploy.
+unset PM2_GUARD_TEST
 
 APP_DIR="/var/www/naro-fashion"
 cd "$APP_DIR"
@@ -75,27 +77,46 @@ auto_rollback() {
   PHASE="rolled-back"
   echo "" >&2
   echo "[$(ts)] 🚨🚨🚨 AUTOMATIC ROLLBACK: ${GIT_SHA:0:7} -> ${PREV_SHA:0:7} 🚨🚨🚨" >&2
-  local missing
+  # Exit codes: 1 = deploy failed, rollback COMPLETE and healthy;
+  #             3 = rollback incomplete / not performed (operator needed).
+  # Only a fully successful + healthy rollback is ever reported as such.
+  local missing problems=""
   if ! missing="$(missing_prev_artifacts)"; then
-    echo "[$(ts)] ❌ cannot roll back automatically — missing: ${missing//$'\n'/ }" >&2
-    pm2 status
-    pm2 logs --nostream --lines 40
+    echo "[$(ts)] ❌ ROLLBACK NOT PERFORMED — previous builds missing: ${missing//$'\n'/ }" >&2
+    echo "[$(ts)] ❌ The failed build ${GIT_SHA:0:7} is still in place. OPERATOR INTERVENTION REQUIRED." >&2
+    pm2_diagnostics
     print_db_rollback_help "$PREDEPLOY_DUMP"
-    exit 1
+    exit 3
   fi
-  swap_back_artifacts
-  restore_source_to "$PREV_SHA" "$GIT_SHA"
-  reload_pm2 "$PREV_SHA"
+  if ! swap_back_artifacts; then
+    rollback_incomplete_notice "$PREV_SHA" "moving the previous builds back into place failed (builds may be MIXED); pm2 was not touched"
+    print_db_rollback_help "$PREDEPLOY_DUMP"
+    exit 3
+  fi
+  restore_source_to "$PREV_SHA" "$GIT_SHA" || problems="source tree / dependencies not fully restored (see warnings above)"
   record_rollback_state "$PREV_SHA" "$GIT_SHA"
-  if run_health_checks; then
-    echo "[$(ts)] ↩ Rollback is healthy: ${PREV_SHA:0:7} is serving again." >&2
-  else
-    echo "[$(ts)] ❌❌ Rollback is ALSO unhealthy — manual intervention required NOW." >&2
-    pm2 status
-    pm2 logs --nostream --lines 40
+  if ! reload_pm2 "$PREV_SHA"; then
+    # Supervision broke (daemon gone / stray daemon / foreign listener) or a
+    # pm2 command failed. Builds are back on the previous version; no
+    # unguarded pm2 ran.
+    rollback_incomplete_notice "$PREV_SHA" "builds restored, but the PM2 reload was refused or failed${problems:+; also: $problems}"
+    print_db_rollback_help "$PREDEPLOY_DUMP"
+    exit 3
   fi
+  if ! run_health_checks; then
+    pm2_diagnostics
+    rollback_incomplete_notice "$PREV_SHA" "the restored build is NOT healthy${problems:+; also: $problems}"
+    print_db_rollback_help "$PREDEPLOY_DUMP"
+    exit 3
+  fi
+  if [ -n "$problems" ]; then
+    rollback_incomplete_notice "$PREV_SHA" "the restored build answers health checks, but: $problems"
+    print_db_rollback_help "$PREDEPLOY_DUMP"
+    exit 3
+  fi
+  echo "[$(ts)] ↩ Rollback COMPLETE and healthy: ${PREV_SHA:0:7} is serving again." >&2
   print_db_rollback_help "$PREDEPLOY_DUMP"
-  echo "[$(ts)] ❌ DEPLOY FAILED: ${GIT_SHA:0:7} was rolled back (see health-check output above)." >&2
+  echo "[$(ts)] ❌ DEPLOY FAILED: ${GIT_SHA:0:7} was rolled back to ${PREV_SHA:0:7} (rollback complete)." >&2
   exit 1
 }
 
@@ -116,6 +137,15 @@ trap on_exit EXIT
 trap 'echo "[$(ts)] ❌ DEPLOY FAILED at line $LINENO (exit $?) — see output above" >&2' ERR
 
 log "🚀 Deploying Naro Fashion..."
+
+# ---------------------------------------------------------------------------
+# 0. PM2 supervision preflight — BEFORE any change (git, deps, DB, builds).
+#    Read-only; never invokes pm2. Re-checked right before the swap and again
+#    inside reload_pm2, immediately before the first pm2 command.
+# ---------------------------------------------------------------------------
+[ -f "$APP_DIR/scripts/ops/pm2-guard.sh" ] || die "scripts/ops/pm2-guard.sh is missing — refusing to deploy without the PM2 supervision guard"
+bash "$APP_DIR/scripts/ops/pm2-guard.sh" \
+  || die "PM2 supervision check failed — nothing was changed. An administrator must recover pm2-root.service via systemd first."
 
 # ---------------------------------------------------------------------------
 # 1. Code
@@ -199,6 +229,7 @@ log "✔ Pre-deploy dump: ${PREDEPLOY_DUMP} ($(du -h "$PREDEPLOY_DUMP" | awk '{p
 cat <<EOF
 ------------------------------------------------------------------------
 To ROLL BACK the database to the state before this deploy:
+  bash scripts/ops/pm2-guard.sh   # must PASS before any pm2 command
   pm2 stop naro-api naro-admin naro-storefront
   sudo -u postgres psql -c "DROP DATABASE naro_fashion;"
   sudo -u postgres psql -c "CREATE DATABASE naro_fashion OWNER naro_admin;"
@@ -360,6 +391,13 @@ for app in "${NEXT_APPS[@]}"; do
   log "✔ ${app} static + public copied into the standalone server"
 done
 
+# Builds take minutes: re-verify PM2 supervision BEFORE swapping, while a
+# failure still restores the pre-build copies (PHASE=building) and leaves the
+# running processes untouched. reload_pm2 checks once more right before pm2.
+log "🛡  Re-checking PM2 supervision before the swap..."
+pm2_supervision_check \
+  || die "PM2 supervision check failed after the build — NOT swapping or reloading (pre-build copies restored). Recover pm2-root.service via systemd, then redeploy."
+
 # ---------------------------------------------------------------------------
 # 7. Swap + reload. Everything built and verified; from here on any failure
 #    triggers an automatic rollback (PHASE=swapped -> on_exit).
@@ -397,8 +435,7 @@ reload_pm2 "$GIT_SHA"
 # ---------------------------------------------------------------------------
 log "🩺 Running post-deploy health checks..."
 if ! run_health_checks; then
-  pm2 status || true
-  pm2 logs --nostream --lines 40 || true
+  pm2_diagnostics
   auto_rollback   # never returns; exits 1
 fi
 

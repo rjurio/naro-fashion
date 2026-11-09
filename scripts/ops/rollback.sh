@@ -11,6 +11,9 @@
 #      differs, + prisma generate) so source matches the running build
 #   4. pm2 reload ecosystem.config.js --update-env, then health checks
 #
+# Refuses up front (and again right before pm2) unless the PM2 supervision
+# guard passes — scripts/ops/pm2-guard.sh.
+#
 # It is one-shot: the *-prev dirs are consumed, so a second run refuses until
 # the next successful deploy. The DATABASE is never touched (migrations are
 # forward-only and backward compatible — docs/OPS/MIGRATIONS.md).
@@ -21,6 +24,8 @@
 # Options:  --yes   skip the interactive confirmation
 
 set -euo pipefail
+# The PM2 guard's test-only overrides must never apply to a real rollback.
+unset PM2_GUARD_TEST
 
 APP_DIR="${APP_DIR:-/var/www/naro-fashion}"
 cd "$APP_DIR"
@@ -44,12 +49,19 @@ is_commit "$PREV_SHA" || die "previous_sha '${PREV_SHA}' is not a known commit i
 if ! missing="$(missing_prev_artifacts)"; then
   die "previous build artifacts are missing: ${missing//$'\n'/ }. Refusing a partial rollback (it would mix builds from different commits)."
 fi
+# PM2 supervision must be intact BEFORE anything is swapped (read-only check,
+# never invokes pm2; reload_pm2 re-checks right before the first pm2 command).
+pm2_supervision_check \
+  || die "PM2 supervision check failed — nothing was changed. An administrator must recover ${PM2_GUARD_UNIT} via systemd first."
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   warn "tracked files are modified on the VPS — they will be DISCARDED by git reset --hard:"
   git status --short --untracked-files=no >&2
 fi
 
 log "Rollback plan: ${CUR_SHA:0:7} -> ${PREV_SHA:0:7} ($(git log -1 --pretty=%s "$PREV_SHA"))"
+if ! has_pm2_guard "$PREV_SHA"; then
+  log "🛡  ${PREV_SHA:0:7} predates the PM2 guard: application code will be ${PREV_SHA:0:7}, the guarded deploy tooling stays (from ${CUR_SHA:0:7})."
+fi
 for app in "${NEXT_APPS[@]}"; do
   log "  ${app}: .next-prev BUILD_ID $(cat "apps/${app}/.next-prev/BUILD_ID")"
 done
@@ -65,18 +77,30 @@ fi
 # --- Do it -----------------------------------------------------------------
 trap 'echo "[$(ts)] ❌ ROLLBACK FAILED at line $LINENO — state may be half-swapped; inspect apps/*/.next* and apps/api/dist*" >&2' ERR
 
-swap_back_artifacts
-restore_source_to "$PREV_SHA" "$CUR_SHA"
-reload_pm2 "$PREV_SHA"
+# Exit codes: 0 = rollback complete and healthy; 1 = refused, nothing
+# changed; 3 = rollback INCOMPLETE (operator intervention required).
+if ! swap_back_artifacts; then
+  rollback_incomplete_notice "$PREV_SHA" "moving the previous builds back into place failed (builds may be MIXED); pm2 was not touched"
+  exit 3
+fi
+problems=""
+restore_source_to "$PREV_SHA" "$CUR_SHA" || problems="source tree / dependencies not fully restored (see warnings above)"
 record_rollback_state "$PREV_SHA" "$CUR_SHA"
+if ! reload_pm2 "$PREV_SHA"; then
+  rollback_incomplete_notice "$PREV_SHA" "builds restored, but the PM2 reload was refused or failed${problems:+; also: $problems}"
+  exit 3
+fi
 
 log "🩺 Running health checks..."
-if run_health_checks; then
-  log "✅ Rolled back to ${PREV_SHA:0:7}. Database untouched."
-  log "Remember: the next push to prod redeploys — revert ${CUR_SHA:0:7} on prod first if it is the culprit."
-else
-  pm2 status || true
-  pm2 logs --nostream --lines 40 || true
+if ! run_health_checks; then
+  pm2_diagnostics
+  rollback_incomplete_notice "$PREV_SHA" "the restored build is NOT healthy${problems:+; also: $problems}"
   print_db_rollback_help ""
-  die "rolled back to ${PREV_SHA:0:7} but health checks FAIL — manual intervention required."
+  exit 3
 fi
+if [ -n "$problems" ]; then
+  rollback_incomplete_notice "$PREV_SHA" "the restored build answers health checks, but: $problems"
+  exit 3
+fi
+log "✅ Rollback COMPLETE and healthy: ${PREV_SHA:0:7}. Database untouched."
+log "Remember: the next push to prod redeploys — revert ${CUR_SHA:0:7} on prod first if it is the culprit."
