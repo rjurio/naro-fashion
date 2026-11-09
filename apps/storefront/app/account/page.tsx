@@ -17,6 +17,7 @@ import {
 import { formatPrice } from "@/lib/utils";
 import { authApi, ordersApi, rentalsApi, wishlistApi, tokenStore } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { listData, listTotal } from "@/lib/rental-ui";
 
 const statusColors: Record<string, string> = {
   Shipped: "bg-blue-100 text-blue-700",
@@ -68,9 +69,10 @@ export default function AccountPage() {
 
         if (ordersRes.status === "fulfilled") {
           const ordersData = ordersRes.value;
-          const ordersList = Array.isArray(ordersData) ? ordersData : (ordersData?.data || []);
+          const ordersList = listData<any>(ordersData);
           setRecentOrders(ordersList.slice(0, 3));
-          setStats((prev) => ({ ...prev, orders: ordersData?.total ?? ordersList.length }));
+          // Total lives in meta.total (a top-level `total` never existed).
+          setStats((prev) => ({ ...prev, orders: listTotal(ordersData, ordersList.length) }));
         }
 
         if (rentalsRes.status === "fulfilled") {

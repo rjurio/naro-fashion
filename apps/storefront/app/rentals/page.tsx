@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import {
   Crown,
@@ -13,10 +13,13 @@ import {
   Clock,
   CreditCard,
   Loader2,
+  AlertTriangle,
+  RotateCcw,
 } from "lucide-react";
 import ProductCard from "@/components/ui/ProductCard";
 import Button from "@/components/ui/Button";
-import { productsApi, categoriesApi } from "@/lib/api";
+import { productsApi } from "@/lib/api";
+import { listData, listTotal, rentalHref } from "@/lib/rental-ui";
 import { useTranslation } from "@/lib/i18n";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
@@ -28,10 +31,13 @@ function resolveImg(url?: string): string {
 }
 
 interface RentalCategory {
+  key: string;
   name: string;
-  slug?: string;
   count: number;
 }
+
+/** Filter value for "all categories" — independent of the UI language. */
+const ALL = "__all__";
 
 interface RentalProduct {
   id: string;
@@ -43,26 +49,23 @@ interface RentalProduct {
   reviewCount: number;
   isRentable: boolean;
   rentPrice?: number;
+  availabilityMode?: string;
   defaultVariantId?: string;
   categoryName?: string;
 }
 
 export default function RentalsPage() {
   const { t } = useTranslation();
-  const [selectedCategory, setSelectedCategory] = useState(() => "All");
+  const [selectedCategory, setSelectedCategory] = useState<string>(ALL);
   const [sortBy, setSortBy] = useState("popular");
-
-  // Keep the initial "All" selection in sync when locale changes
-  useEffect(() => {
-    setSelectedCategory((prev) => (prev === "All" || prev === t('rentals.all') ? t('rentals.all') : prev));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t]);
-  const [rentalCategories, setRentalCategories] = useState<RentalCategory[]>([]);
   const [rentalProducts, setRentalProducts] = useState<RentalProduct[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  // A failed request is NOT "no rental products" — say so and offer a retry.
+  const [loadError, setLoadError] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
   const PAGE_SIZE = 12;
 
   const mapProduct = (p: any): RentalProduct => {
@@ -77,66 +80,85 @@ export default function RentalsPage() {
       reviewCount: p.reviewCount ?? 0,
       isRentable: true,
       rentPrice: p.rentalPricePerDay ? Number(p.rentalPricePerDay) : undefined,
+      availabilityMode: p.availabilityMode,
       defaultVariantId: p.variants?.[0]?.id,
       categoryName: p.category?.name,
     };
   };
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [productsRes, categoriesRes] = await Promise.all([
-          productsApi.getAll({ availability_mode: "RENTAL_ONLY,BOTH", limit: String(PAGE_SIZE), page: "1" }).catch(() => ({ data: [], total: 0, page: 1, limit: PAGE_SIZE })),
-          categoriesApi.getAll().catch(() => []),
-        ]);
+  const fetchPage = (page: number) =>
+    productsApi.getAll({ availability_mode: "RENTAL_ONLY,BOTH", limit: String(PAGE_SIZE), page: String(page) });
 
-        const products = (productsRes?.data ?? []).map(mapProduct);
-        const total = productsRes?.total ?? 0;
-        setRentalProducts(products);
-        setCurrentPage(1);
-        setHasMore(products.length < total);
-
-        // Build category filter from actual products
-        const cats = Array.isArray(categoriesRes) ? categoriesRes : [];
-        const catCounts: Record<string, number> = {};
-        products.forEach((p) => { if (p.categoryName) catCounts[p.categoryName] = (catCounts[p.categoryName] || 0) + 1; });
-        const mappedCats: RentalCategory[] = [
-          { name: t('rentals.all'), count: total },
-          ...cats
-            .filter((c: any) => catCounts[c.name])
-            .map((c: any) => ({
-              name: c.name ?? "Unknown",
-              slug: c.slug,
-              count: catCounts[c.name] ?? 0,
-            })),
-        ];
-        setRentalCategories(mappedCats);
-      } catch {
-        setRentalProducts([]);
-        setRentalCategories([{ name: t('rentals.all'), count: 0 }]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchData();
+  const loadFirstPage = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
+    try {
+      const res = await fetchPage(1);
+      const products = listData(res).map(mapProduct);
+      setRentalProducts(products);
+      // The API returns { data, meta: { total } } — reading a top-level
+      // `total` showed "All (0)" and hid "Load more" (11 of 23 gowns).
+      setTotal(listTotal(res, products.length));
+      setCurrentPage(1);
+    } catch {
+      setRentalProducts([]);
+      setTotal(0);
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    loadFirstPage();
+  }, [loadFirstPage]);
+
   const handleLoadMore = async () => {
     setLoadingMore(true);
+    setLoadMoreError(false);
     try {
       const nextPage = currentPage + 1;
-      const res = await productsApi.getAll({ availability_mode: "RENTAL_ONLY,BOTH", limit: String(PAGE_SIZE), page: String(nextPage) });
-      const more = (res?.data ?? []).map(mapProduct);
-      setRentalProducts((prev) => [...prev, ...more]);
+      const res = await fetchPage(nextPage);
+      const more = listData(res).map(mapProduct);
+      setRentalProducts((prev) => {
+        const seen = new Set(prev.map((p) => p.id));
+        return [...prev, ...more.filter((p) => !seen.has(p.id))];
+      });
+      setTotal((prev) => listTotal(res, prev));
       setCurrentPage(nextPage);
-      setHasMore(rentalProducts.length + more.length < (res?.total ?? 0));
     } catch {
-      // silently fail
+      setLoadMoreError(true);
     } finally {
       setLoadingMore(false);
     }
   };
+
+  const hasMore = !loadError && rentalProducts.length < total;
+
+  // Category pills come from the loaded rental products themselves (so gowns
+  // in subcategories such as "Mermaid" get a pill too); "All" uses the total.
+  const rentalCategories: RentalCategory[] = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of rentalProducts) {
+      if (p.categoryName) counts.set(p.categoryName, (counts.get(p.categoryName) ?? 0) + 1);
+    }
+    return [
+      { key: ALL, name: t('rentals.all'), count: total },
+      ...[...counts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([name, count]) => ({ key: name, name, count })),
+    ];
+  }, [rentalProducts, total, t]);
+
+  const visibleProducts = rentalProducts
+    .filter((p) => selectedCategory === ALL || p.categoryName === selectedCategory)
+    .sort((a, b) => {
+      if (sortBy === "price-asc") return (a.rentPrice ?? a.price) - (b.rentPrice ?? b.price);
+      if (sortBy === "price-desc") return (b.rentPrice ?? b.price) - (a.rentPrice ?? a.price);
+      if (sortBy === "rating") return (b.rating ?? 0) - (a.rating ?? 0);
+      return (b.reviewCount ?? 0) - (a.reviewCount ?? 0); // popular
+    });
 
   return (
     <div className="bg-background min-h-screen">
@@ -206,13 +228,14 @@ export default function RentalsPage() {
         {/* Filters Bar */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
           <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 w-full sm:w-auto">
-            {rentalCategories.map((cat) => (
+            {!loadError && rentalCategories.map((cat) => (
               <button
                 type="button"
-                key={cat.name}
-                onClick={() => setSelectedCategory(cat.name)}
+                key={cat.key}
+                onClick={() => setSelectedCategory(cat.key)}
+                data-testid={cat.key === ALL ? "rental-filter-all" : undefined}
                 className={`whitespace-nowrap px-4 py-2 rounded-full text-sm font-medium transition-colors ${
-                  selectedCategory === cat.name
+                  selectedCategory === cat.key
                     ? "bg-gold-500 text-[#1A1A1A]"
                     : "bg-muted text-muted-foreground hover:bg-muted/80"
                 }`}
@@ -252,8 +275,21 @@ export default function RentalsPage() {
               </div>
             ))}
           </div>
+        ) : loadError ? (
+          <div className="text-center py-16" role="alert" data-testid="rentals-load-error">
+            <AlertTriangle className="h-12 w-12 text-amber-500 mx-auto mb-4" />
+            <h2 className="text-xl font-heading font-bold text-foreground mb-2">
+              {t('rentals.loadFailed')}
+            </h2>
+            <p className="text-muted-foreground mb-6">
+              {t('rentals.loadFailedDesc')}
+            </p>
+            <Button type="button" variant="outline" onClick={loadFirstPage} className="gap-2">
+              <RotateCcw className="h-4 w-4" /> {t('rentals.retry')}
+            </Button>
+          </div>
         ) : rentalProducts.length === 0 ? (
-          <div className="text-center py-16">
+          <div className="text-center py-16" data-testid="rentals-empty">
             <Crown className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
             <h2 className="text-xl font-heading font-bold text-foreground mb-2">
               {t('rentals.noRentalProducts')}
@@ -263,17 +299,14 @@ export default function RentalsPage() {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
-            {rentalProducts
-              .filter((p) => selectedCategory === t('rentals.all') || p.categoryName === selectedCategory)
-              .sort((a, b) => {
-                if (sortBy === "price-asc") return (a.rentPrice ?? a.price) - (b.rentPrice ?? b.price);
-                if (sortBy === "price-desc") return (b.rentPrice ?? b.price) - (a.rentPrice ?? a.price);
-                if (sortBy === "rating") return (b.rating ?? 0) - (a.rating ?? 0);
-                return (b.reviewCount ?? 0) - (a.reviewCount ?? 0); // popular
-              })
-              .map((product) => (
-              <ProductCard key={product.id} {...product} href={`/rentals/${product.slug}`} />
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6" data-testid="rentals-grid">
+            {visibleProducts.map((product) => (
+              <ProductCard
+                key={product.id}
+                {...product}
+                href={rentalHref(product.slug)}
+                context="rentals"
+              />
             ))}
           </div>
         )}
@@ -281,7 +314,10 @@ export default function RentalsPage() {
         {/* Load More */}
         {hasMore && (
           <div className="mt-12 text-center">
-            <Button type="button" variant="outline" size="lg" onClick={handleLoadMore} disabled={loadingMore}>
+            {loadMoreError && (
+              <p className="text-sm text-amber-600 mb-3" role="alert">{t('rentals.loadMoreFailed')}</p>
+            )}
+            <Button type="button" variant="outline" size="lg" onClick={handleLoadMore} disabled={loadingMore} data-testid="rentals-load-more">
               {loadingMore ? <><Loader2 className="inline h-4 w-4 animate-spin mr-2" />{t('rentals.loadingMore')}</> : t('rentals.loadMoreRentals')}
             </Button>
           </div>

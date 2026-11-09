@@ -22,6 +22,7 @@ import { productsApi, rentalsApi, ApiError } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTranslation } from "@/lib/i18n";
+import { autoSelectRentalVariantId, rentalQuote } from "@/lib/rental-ui";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -48,13 +49,20 @@ export default function RentalDetailPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [checking, setChecking] = useState(false);
-  const [available, setAvailable] = useState<boolean | null>(null);
+  // null = not checked; "error" = the check failed (told to the customer,
+  // never shown as available). The API re-checks on booking regardless.
+  const [available, setAvailable] = useState<boolean | null | "error">(null);
   const [booking, setBooking] = useState(false);
 
   useEffect(() => {
     setLoading(true);
     productsApi.getBySlug(slug)
-      .then((data) => setProduct(data))
+      .then((data) => {
+        setProduct(data);
+        // One active variant (e.g. "Standard") → preselect it so Book Now
+        // isn't blocked behind a choice with only one option.
+        setSelectedVariantId(autoSelectRentalVariantId(data?.variants));
+      })
       .catch(() => setProduct(null))
       .finally(() => setLoading(false));
   }, [slug]);
@@ -67,8 +75,8 @@ export default function RentalDetailPage() {
     }
     setChecking(true);
     rentalsApi.checkAvailability(product.id, startDate, endDate)
-      .then((res) => setAvailable(res.available))
-      .catch(() => setAvailable(null))
+      .then((res) => setAvailable(res.available === true ? true : res.available === false ? false : "error"))
+      .catch(() => setAvailable("error"))
       .finally(() => setChecking(false));
   }, [product?.id, startDate, endDate]);
 
@@ -154,9 +162,12 @@ export default function RentalDetailPage() {
   const features: string[] = Array.isArray(product.specifications) ? product.specifications : [];
   // Despite the column name, rentalPricePerDay is a FLAT price for the whole
   // rental (up to maxRentalDays) — see schema.prisma + RentalsService.create.
-  const rentalPrice = Number(product.rentalPricePerDay) || 0;
-  const depositAmount = Number(product.rentalDepositAmount) || 0;
-  const downPaymentPercent = product.rentalDownPaymentPct || 25;
+  // Same arithmetic as RentalsService.create (flat fee, % of the fee only,
+  // deposit separate and refundable) — see lib/rental-ui.ts.
+  const quote = rentalQuote(product);
+  const rentalPrice = quote.rentalFee;
+  const depositAmount = quote.deposit;
+  const downPaymentPercent = quote.downPaymentPct;
   const maxRentalDays = product.maxRentalDays || 7;
   const bufferDays = product.bufferDaysOverride || 7;
   const rating = product.avgRating || 0;
@@ -180,10 +191,10 @@ export default function RentalDetailPage() {
     return x.toISOString().split("T")[0];
   };
 
-  const rentalFee = rentalPrice;
-  const downPayment = Math.round(rentalFee * (downPaymentPercent / 100));
-  const totalCost = rentalFee + depositAmount;
-  const remainingPayment = totalCost - downPayment;
+  const rentalFee = quote.rentalFee;
+  const downPayment = quote.downPayment;
+  const totalCost = quote.total;
+  const remainingPayment = quote.remaining;
 
   return (
     <div className="bg-background min-h-screen">
@@ -383,7 +394,7 @@ export default function RentalDetailPage() {
                 <p className="text-xs text-gold-500 mt-1">{t('rentals.checkingAvailability')}</p>
               )}
               {available === false && (
-                <p className="text-xs text-red-500 mt-1">{t('rentals.notAvailable')}</p>
+                <p className="text-xs text-red-500 mt-1" data-testid="rental-not-available">{t('rentals.notAvailable')}</p>
               )}
               {rentalDays > maxRentalDays && (
                 <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
@@ -392,8 +403,13 @@ export default function RentalDetailPage() {
                 </p>
               )}
               {available === true && (
-                <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                <p className="text-xs text-green-600 mt-1 flex items-center gap-1" data-testid="rental-available">
                   <Check className="h-3 w-3" /> {t('rentals.availableForDates')}
+                </p>
+              )}
+              {available === "error" && (
+                <p className="text-xs text-amber-600 mt-1 flex items-center gap-1" data-testid="rental-availability-error">
+                  <AlertTriangle className="h-3 w-3" /> {t('rentals.availabilityCheckFailed')}
                 </p>
               )}
             </div>
@@ -467,16 +483,19 @@ export default function RentalDetailPage() {
                 size="lg"
                 className="w-full gap-2"
                 disabled={!selectedVariantId || !startDate || !endDate || available === false || booking}
+                data-testid="rental-book"
                 onClick={handleBookNow}
               >
                 <Crown className="h-5 w-5" />
-                {booking
-                  ? t('rentals.booking')
-                  : `${t('rentals.bookNowWithPay')}${rentalDays > 0 ? ` - ${t('rentals.payAmount').replace('{amount}', formatPrice(downPayment))}` : ""}`}
+                {booking ? t('rentals.booking') : t('rentals.requestBooking')}
               </Button>
-              {(!selectedVariantId || !startDate || !endDate) && (
+              {(!selectedVariantId || !startDate || !endDate) ? (
                 <p className="text-xs text-muted-foreground text-center mt-2">
-                  {t('rentals.selectSizeAndDates')}
+                  {selectedVariantId ? t('rentals.selectDatesToContinue') : t('rentals.selectSizeAndDates')}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground text-center mt-2" data-testid="rental-payment-note">
+                  {t('rentals.noOnlinePaymentNote').replace('{amount}', formatPrice(downPayment))}
                 </p>
               )}
             </div>

@@ -260,6 +260,7 @@ export default function ProductsPage() {
     isOnSale: p.isOnSale,
     isRentable: p.isRentable,
     rentPrice: p.rentPrice,
+    availabilityMode: p.availabilityMode,
     defaultVariantId: p.defaultVariantId,
   });
 

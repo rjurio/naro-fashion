@@ -391,8 +391,17 @@ export class RentalsService {
     endDate: Date,
   ) {
     const tenantId = this.tenantContext.requireId;
-    const product = await this.prisma.product.findUnique({
-      where: { id: productId, tenantId },
+    // Public endpoint: only active, rental-eligible products of THIS tenant.
+    // Anything else is the same 404 (no hint whether it exists/is hidden).
+    const product = await this.prisma.product.findFirst({
+      where: {
+        id: productId,
+        tenantId,
+        isActive: true,
+        deletedAt: null,
+        availabilityMode: { in: ['RENTAL_ONLY', 'BOTH'] },
+      },
+      select: { id: true, bufferDaysOverride: true },
     });
     if (!product) {
       throw new NotFoundException('Product not found');
@@ -400,6 +409,7 @@ export class RentalsService {
 
     const policy = await this.prisma.rentalPolicy.findFirst({
       where: { tenantId },
+      select: { bufferDaysBetweenRentals: true },
     });
     const bufferDays =
       product.bufferDaysOverride ?? policy?.bufferDaysBetweenRentals ?? 7;
@@ -411,7 +421,8 @@ export class RentalsService {
       bufferDays,
     );
 
-    return { productId, startDate, endDate, available, bufferDays };
+    // Minimal by design — this answer is visible to anonymous callers.
+    return { available };
   }
 
   async getUpcomingPickups(days: number) {

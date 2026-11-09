@@ -255,7 +255,17 @@
     "downloadSizeGuide": "Download Size Guide (PDF)",
     "rateStars": "Rate {n} star",
     "rateStarsPlural": "Rate {n} stars",
-    "perRental": " / rental"
+    "perRental": " / rental",
+    "buy": "Buy",
+    "rent": "Rent",
+    "buyOrRent": "Buy or rent",
+    "buyHint": "Yours to keep",
+    "rentHint": "Flat fee, up to {max} days",
+    "upToDays": "(up to {max} days)",
+    "rentalDepositLine": "Refundable security deposit: {amount}",
+    "rentalDownPaymentLine": "Down payment to confirm: {pct}% of the rental fee ({amount})",
+    "rentalDatesLine": "Choose your pickup and return dates on the next step — availability is checked straight away.",
+    "chooseRentalDates": "Rent — choose dates"
   },
   "cart": {
     "yourCart": "Shopping Cart",
@@ -364,7 +374,7 @@
     "selectDates": "Pick Your Dates",
     "startDate": "Start Date",
     "endDate": "End Date",
-    "downPayment": "Pay 25% Deposit",
+    "downPayment": "Pay 25% Down Payment",
     "totalCost": "Total Cost",
     "damageDeposit": "Damage Deposit",
     "idRequired": "ID Verification",
@@ -375,8 +385,8 @@
     "browseAndSelectDesc": "Choose from our curated collection of designer pieces",
     "pickYourDates": "Pick Your Dates",
     "pickYourDatesDesc": "Select your rental period with our date picker",
-    "payDeposit": "Pay 25% Deposit",
-    "payDepositDesc": "Secure with a down payment, full payment before dispatch",
+    "payDeposit": "Pay 25% Down Payment",
+    "payDepositDesc": "Secures your dates; the balance and the refundable deposit are paid before pickup",
     "idVerification": "ID Verification",
     "idVerificationDesc": "Quick national ID verification for security",
     "allGowns": "All Gowns",
@@ -416,8 +426,8 @@
     "daysLong": "days",
     "securityDeposit": "Security deposit (refundable)",
     "totalLabel": "Total",
-    "downPaymentLine": "Down payment ({pct}% - pay now)",
-    "remainingBeforeDispatch": "Remaining (pay before dispatch)",
+    "downPaymentLine": "Down payment ({pct}% of the rental fee) — due to confirm",
+    "remainingBeforeDispatch": "Balance incl. refundable deposit — due before pickup",
     "idVerificationRequired": "National ID Verification Required",
     "idVerificationRequiredDesc": "For security purposes, you will need to provide a valid National ID (NIDA) for verification before the rental is confirmed. This is a one-time process.",
     "booking": "Booking...",
@@ -434,7 +444,15 @@
     "perDay": "/ day",
     "perRental": "/ rental (up to {max} days)",
     "rentalFeeFlat": "Rental fee (up to {max} days)",
-    "lateFeeWarning": "Keeping it longer than {max} days adds a late fee per extra day."
+    "lateFeeWarning": "Keeping it longer than {max} days adds a late fee per extra day.",
+    "requestBooking": "Request booking",
+    "noOnlinePaymentNote": "No payment is taken online. After you book, the store will contact you to arrange the {amount} down payment. Unpaid bookings are released after a short hold period.",
+    "selectDatesToContinue": "Choose your pickup and return dates to continue",
+    "availabilityCheckFailed": "We couldn't check availability right now. You can still request the booking — the store confirms availability.",
+    "loadFailed": "We couldn't load the rental gowns",
+    "loadFailedDesc": "Please check your connection and try again.",
+    "loadMoreFailed": "Couldn't load more gowns. Please try again.",
+    "retry": "Try again"
   },
   "flashSales": {
     "title": "Flash Sale",
@@ -573,7 +591,10 @@
     "orderPlacedTitle": "Order placed successfully!",
     "orderPlacedMsg": "Thank you for your purchase. We'll send you an update as soon as your order ships.",
     "orderNotFound": "Order not found",
-    "orderNotFoundMsg": "We couldn't find that order — it may have been removed or belong to a different account."
+    "orderNotFoundMsg": "We couldn't find that order — it may have been removed or belong to a different account.",
+    "loadFailed": "We couldn't load your orders",
+    "loadFailedDesc": "Your orders are safe — this is a connection problem. Please try again.",
+    "retry": "Try again"
   },
   "auth": {
     "login": "Sign In",

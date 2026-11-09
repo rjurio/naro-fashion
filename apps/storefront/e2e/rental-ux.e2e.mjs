@@ -1,0 +1,298 @@
+/**
+ * Browser regression tests for the Nov 2026 rental-discoverability and
+ * order-history fixes. Runs against a LOCAL storefront wired to the mock API
+ * below — never production, no database, no real bookings or payments.
+ *
+ * Run (two terminals, from the repo root):
+ *   1) NEXT_PUBLIC_API_URL=http://localhost:4999/api/v1 NEXT_PUBLIC_TENANT_SLUG=naro-fashion \
+ *        pnpm --filter storefront exec next dev --port 3100
+ *   2) node apps/storefront/e2e/rental-ux.e2e.mjs            # STOREFRONT_URL defaults to http://localhost:3100
+ *
+ * Exit code 0 = all checks passed.
+ */
+import http from 'node:http';
+import { chromium, devices } from 'playwright';
+
+const MOCK_PORT = Number(process.env.MOCK_API_PORT || 4999);
+const SF = (process.env.STOREFRONT_URL || 'http://localhost:3100').replace(/\/$/, '');
+
+// ---------------------------------------------------------------- fixtures
+const TENANT = { id: 'tenant-e2e', slug: 'naro-fashion', name: 'Naro E2E', status: 'ACTIVE', domain: 'localhost' };
+const cat = (i) => (i < 10 ? { id: 'c-wed', name: 'Wedding Dresses', slug: 'wedding-dresses' } : { id: 'c-mer', name: 'Mermaid', slug: 'mermaid' });
+const RENTALS = Array.from({ length: 15 }, (_, k) => {
+  const i = k + 1;
+  const n = String(i).padStart(2, '0');
+  return {
+    id: `p-${n}`, slug: `rental-gown-${n}`, name: `Rental Gown ${n}`, description: 'E2E gown',
+    basePrice: '950000', compareAtPrice: null, availabilityMode: 'BOTH', isActive: true,
+    rentalPricePerDay: '140000', rentalDepositAmount: '350000', rentalDownPaymentPct: 25, maxRentalDays: 3,
+    categoryId: cat(k).id, category: { ...cat(k) }, images: [], reviews: [], reviewCount: 0, avgRating: 0,
+    variants: [{ id: `v-${n}`, name: 'Standard', size: null, color: null, stock: 1, isActive: true }],
+  };
+});
+const JEANS = {
+  id: 'p-jeans', slug: 'jeans', name: 'Jeans', description: 'E2E jeans', basePrice: '45000', compareAtPrice: null,
+  availabilityMode: 'PURCHASE_ONLY', isActive: true, rentalPricePerDay: null, categoryId: 'c-men',
+  category: { id: 'c-men', name: 'Men', slug: 'men' }, images: [], reviews: [], reviewCount: 0, avgRating: 0,
+  variants: [{ id: 'v-jeans', name: 'Standard', size: null, stock: 5, isActive: true }],
+};
+const ALL_PRODUCTS = [JEANS, ...RENTALS];
+const ORDER = {
+  id: 'o-1', orderNumber: 'NF-E2E-1', status: 'DELIVERED', paymentStatus: 'PAID', total: '45000', subtotal: '45000',
+  shippingFee: '0', createdAt: '2026-11-01T10:00:00Z', items: [{ id: 'oi-1', quantity: 1, unitPrice: '45000', totalPrice: '45000', product: { id: 'p-jeans', name: 'Jeans', slug: 'jeans' }, variant: { id: 'v-jeans', name: 'Standard' } }],
+};
+
+// ---------------------------------------------------------------- mock API
+const mode = { products: 'ok', availability: 'ok', orders: 'ok' };
+const seen = [];
+const page = (rows, q) => {
+  const limit = Number(q.get('limit') || 20);
+  const p = Number(q.get('page') || 1);
+  return { data: rows.slice((p - 1) * limit, p * limit), meta: { total: rows.length, page: p, limit, totalPages: Math.ceil(rows.length / limit) } };
+};
+
+function route(method, path, q) {
+  if (path === '/__mock/set') { for (const [k, v] of q) mode[k] = v; return [200, mode]; }
+  if (path === '/tenants/resolve') return [200, TENANT];
+  if (path === '/auth/me') return [200, { id: 'u-1', email: 'customer@example.com', firstName: 'Test', lastName: 'Customer', isAdmin: false }];
+  if (path === '/products' && method === 'GET') {
+    const am = q.get('availability_mode');
+    if (am) {
+      if (mode.products === 'error') return [500, { message: 'boom' }];
+      if (mode.products === 'empty') return [200, { data: [], meta: { total: 0, page: 1, limit: 12, totalPages: 0 } }];
+      return [200, page(RENTALS, q)];
+    }
+    const cs = q.get('categorySlug');
+    if (cs) return [200, page(ALL_PRODUCTS.filter((p) => p.category.slug === cs), q)];
+    return [200, page(ALL_PRODUCTS, q)];
+  }
+  const prod = path.match(/^\/products\/([^/]+)$/);
+  if (prod) {
+    const p = ALL_PRODUCTS.find((x) => x.slug === prod[1] || x.id === prod[1]);
+    return p ? [200, p] : [404, { message: 'Product not found' }];
+  }
+  if (path.startsWith('/rentals/availability/')) {
+    if (mode.availability === 'error') return [401, { message: 'Unauthorized', statusCode: 401 }];
+    return [200, { available: mode.availability !== 'taken' }];
+  }
+  if (path === '/orders' && method === 'GET') {
+    if (mode.orders === 'error') return [400, { message: ['property sort should not exist'], statusCode: 400 }];
+    return [200, { data: [ORDER], meta: { total: 1, page: 1, limit: 50, totalPages: 1 } }];
+  }
+  if (path === '/rentals') return [200, []];
+  if (path === '/cart') return [200, { items: [] }];
+  if (path === '/wishlist') return [200, []];
+  if (path.startsWith('/wishlist/check')) return [200, { inWishlist: false }];
+  if (path === '/events') return [200, { data: [], meta: { total: 0 } }];
+  if (path === '/cms/settings/business-profile') return [200, {}];
+  if (path === '/cms/storefront-stats') return [200, { productCount: 0, rentalCount: 0, customerCount: 0 }];
+  if (path === '/analytics/track') return [204, null];
+  return [200, []]; // categories, flash-sales, cms/*, payment-methods, reviews …
+}
+
+const server = http.createServer((req, res) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
+  }
+  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+  const u = new URL(req.url, `http://localhost:${MOCK_PORT}`);
+  const path = u.pathname.replace(/^\/api\/v1/, '');
+  seen.push(`${req.method} ${path}${u.search}`);
+  const [status, body] = route(req.method, path, u.searchParams);
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(body == null ? '' : JSON.stringify(body));
+});
+
+// ---------------------------------------------------------------- tiny test harness
+const results = [];
+async function check(name, fn) {
+  try { await fn(); results.push(['PASS', name]); console.log(`  ✔ ${name}`); }
+  catch (e) { results.push(['FAIL', name, e]); console.log(`  ✖ ${name}\n      ${String(e?.message || e).split('\n')[0]}`); }
+}
+const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
+const setMode = (m) => Object.assign(mode, { products: 'ok', availability: 'ok', orders: 'ok' }, m);
+const isoIn = (days) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+
+async function main() {
+  await new Promise((r) => server.listen(MOCK_PORT, r));
+  console.log(`mock API on :${MOCK_PORT}, storefront ${SF}`);
+  const browser = await chromium.launch();
+  const desktop = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const mobile = await browser.newContext({ ...devices['Pixel 7'] });
+
+  const open = async (ctx, path) => {
+    const p = await ctx.newPage();
+    await p.goto(SF + path, { waitUntil: 'networkidle', timeout: 120000 });
+    return p;
+  };
+
+  console.log('\n/rentals');
+  await check('lists the first page, "All" shows meta.total (15, not 0), Load more reveals the rest', async () => {
+    setMode({});
+    const p = await open(desktop, '/rentals');
+    await p.getByTestId('rentals-grid').waitFor();
+    assert((await p.getByTestId('rentals-grid').locator('a').count()) === 12, 'expected 12 cards on page 1');
+    const all = await p.getByTestId('rental-filter-all').innerText();
+    assert(/\(15\)/.test(all), `All filter shows "${all}"`);
+    await p.getByTestId('rentals-load-more').click();
+    await p.waitForFunction(() => document.querySelectorAll('[data-testid="rentals-grid"] > a').length === 15);
+    assert((await p.getByTestId('rentals-load-more').count()) === 0, 'Load more should disappear when all 15 are shown');
+    await p.close();
+  });
+  await check('cards on /rentals offer Rent and never Add to Cart; Rent opens the booking page', async () => {
+    setMode({});
+    const p = await open(desktop, '/rentals');
+    await p.getByTestId('rentals-grid').waitFor();
+    assert((await p.getByTestId('card-add-to-cart').count()) === 0, 'Add to Cart found on /rentals');
+    assert((await p.getByTestId('card-rent').count()) === 12, 'every card needs a Rent action');
+    await p.getByTestId('card-rent').first().click();
+    await p.waitForURL(/\/rentals\/rental-gown-\d\d$/);
+    await p.close();
+  });
+  await check('an API failure shows an error + Retry, not "No rental products available"', async () => {
+    setMode({ products: 'error' });
+    const p = await open(desktop, '/rentals');
+    await p.getByTestId('rentals-load-error').waitFor();
+    assert((await p.getByTestId('rentals-empty').count()) === 0, 'empty state shown on error');
+    setMode({});
+    await p.getByRole('button', { name: /try again/i }).click();
+    await p.getByTestId('rentals-grid').waitFor();
+    await p.close();
+  });
+  await check('a genuinely empty result still shows the empty state', async () => {
+    setMode({ products: 'empty' });
+    const p = await open(desktop, '/rentals');
+    await p.getByTestId('rentals-empty').waitFor();
+    assert((await p.getByTestId('rentals-load-error').count()) === 0, 'error state shown for an empty result');
+    await p.close();
+  });
+
+  console.log('\nproduct cards elsewhere');
+  await check('shop listing: purchase-only card = Add to Cart only; BOTH card = Buy + Rent', async () => {
+    setMode({});
+    const p = await open(desktop, '/products');
+    const jeans = p.locator('a[href="/products/jeans"]').first();
+    await jeans.waitFor();
+    assert((await jeans.getByTestId('card-add-to-cart').count()) === 1, 'jeans needs Add to Cart');
+    assert((await jeans.getByTestId('card-rent').count()) === 0, 'jeans must not offer Rent');
+    const gown = p.locator('a[href="/products/rental-gown-01"]').first();
+    assert((await gown.getByTestId('card-rent').count()) === 1, 'gown needs Rent');
+    assert((await gown.getByTestId('card-add-to-cart').count()) === 1, 'BOTH gown keeps Buy');
+    await p.close();
+  });
+
+  console.log('\ngown page (/products/rental-gown-01)');
+  await check('Buy / Rent choice sits under the price; Rent shows the rental terms and hides Add to Cart', async () => {
+    setMode({});
+    const p = await open(desktop, '/products/rental-gown-01');
+    await p.getByTestId('pdp-buy-rent').waitFor();
+    assert((await p.getByTestId('pdp-add-to-cart').count()) === 1, 'Buy is the default for BOTH');
+    await p.getByTestId('pdp-choose-rent').click();
+    const terms = await p.getByTestId('pdp-rental-terms').innerText();
+    assert(/140,000/.test(terms), `rental fee missing: ${terms}`);
+    assert(/350,000/.test(terms), `deposit missing: ${terms}`);
+    assert(/35,000/.test(terms), `25% down payment missing: ${terms}`);
+    assert(!/950,000/.test(terms), 'retail price must not appear as the rental amount');
+    assert((await p.getByTestId('pdp-add-to-cart').count()) === 0, 'Add to Cart still visible in Rent mode');
+    const href = await p.getByTestId('pdp-rent').getAttribute('href');
+    assert(href === '/rentals/rental-gown-01', `rent link ${href}`);
+    await p.close();
+  });
+  await check('related products show real prices (not TSh 0)', async () => {
+    setMode({});
+    const p = await open(desktop, '/products/rental-gown-01');
+    await p.getByText(/You May Also Like/i).waitFor();
+    const section = p.locator('section, div').filter({ has: p.getByText(/You May Also Like/i) }).last();
+    const txt = await section.innerText();
+    assert(/950,000/.test(txt), 'related card price missing');
+    assert(!/TSh\s*0(?![\d,])/.test(txt), `"TSh 0" still rendered: ${txt.slice(0, 200)}`);
+    await p.close();
+  });
+  await check('mobile: the Rent choice comes right after the price — above Quantity and Add to Cart', async () => {
+    setMode({});
+    const p = await open(mobile, '/products/rental-gown-01');
+    const rent = await p.getByTestId('pdp-choose-rent').boundingBox();
+    const cart = await p.getByTestId('pdp-add-to-cart').boundingBox();
+    const qty = await p.getByText(/^Quantity$/).first().boundingBox();
+    // Before the fix the only Rent button sat BELOW Add to Cart (y≈1161 on an 839px screen).
+    assert(rent && cart && rent.y < cart.y, `Rent choice y=${rent?.y} not above Add to Cart y=${cart?.y}`);
+    assert(qty && rent.y < qty.y, `Rent choice y=${rent?.y} not above Quantity y=${qty?.y}`);
+    await p.close();
+  });
+
+  console.log('\nbooking page (/rentals/rental-gown-01)');
+  await check('single variant is preselected; picking dates is enough; honest wording, no "Pay"', async () => {
+    setMode({});
+    const p = await open(desktop, '/rentals/rental-gown-01');
+    const book = p.getByTestId('rental-book');
+    await book.waitFor();
+    const dates = p.locator('input[type="date"]');
+    await dates.nth(0).fill(isoIn(30));
+    await dates.nth(1).fill(isoIn(32));
+    await p.getByTestId('rental-available').waitFor();
+    assert(await book.isEnabled(), 'Book should be enabled once dates are chosen (variant auto-selected)');
+    const label = await book.innerText();
+    assert(/request booking/i.test(label) && !/pay/i.test(label), `button label "${label}"`);
+    const note = await p.getByTestId('rental-payment-note').innerText();
+    assert(/no payment is taken online/i.test(note) && /35,000/.test(note), `note "${note}"`);
+    // Signed out → Book goes to login (no booking is created)
+    await book.click();
+    await p.waitForURL(/\/auth\/login\?redirect=/);
+    await p.close();
+  });
+  await check('dates taken → "not available" and Book disabled', async () => {
+    setMode({ availability: 'taken' });
+    const p = await open(desktop, '/rentals/rental-gown-01');
+    const dates = p.locator('input[type="date"]');
+    await dates.nth(0).fill(isoIn(30));
+    await dates.nth(1).fill(isoIn(32));
+    await p.getByTestId('rental-not-available').waitFor();
+    assert(!(await p.getByTestId('rental-book').isEnabled()), 'Book must be disabled for taken dates');
+    await p.close();
+  });
+  await check('a failed availability check is shown (not silently ignored)', async () => {
+    setMode({ availability: 'error' });
+    const p = await open(desktop, '/rentals/rental-gown-01');
+    const dates = p.locator('input[type="date"]');
+    await dates.nth(0).fill(isoIn(30));
+    await dates.nth(1).fill(isoIn(32));
+    await p.getByTestId('rental-availability-error').waitFor();
+    assert((await p.getByTestId('rental-available').count()) === 0, 'must not claim availability');
+    await p.close();
+  });
+
+  console.log('\norder history (/account/orders)');
+  const signedIn = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await signedIn.addInitScript(() => { localStorage.setItem('token', 'e2e-token'); });
+  await check('lists the customer\'s orders; the request carries sort=newest', async () => {
+    setMode({});
+    seen.length = 0;
+    const p = await open(signedIn, '/account/orders');
+    await p.getByText('NF-E2E-1').waitFor();
+    assert(seen.some((s) => /^GET \/orders\?.*sort=newest/.test(s)), `orders request: ${seen.filter((s) => s.includes('/orders')).join(', ')}`);
+    assert((await p.getByTestId('orders-empty').count()) === 0, '"No orders yet" shown although an order exists');
+    await p.close();
+  });
+  await check('a failed request shows an error + Retry, not "No orders yet"', async () => {
+    setMode({ orders: 'error' });
+    const p = await open(signedIn, '/account/orders');
+    await p.getByTestId('orders-load-error').waitFor();
+    assert((await p.getByTestId('orders-empty').count()) === 0, 'empty state shown on error');
+    setMode({});
+    await p.getByRole('button', { name: /try again/i }).click();
+    await p.getByText('NF-E2E-1').waitFor();
+    await p.close();
+  });
+
+  await browser.close();
+  server.close();
+  const failed = results.filter((r) => r[0] === 'FAIL');
+  console.log(`\n${results.length - failed.length}/${results.length} browser checks passed`);
+  process.exit(failed.length ? 1 : 0);
+}
+
+main().catch((e) => { console.error('FATAL', e); server.close(); process.exit(2); });

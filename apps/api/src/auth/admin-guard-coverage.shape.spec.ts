@@ -91,7 +91,6 @@ const CUSTOMER_ROUTE_ALLOWLIST: Record<string, string> = {
   'rentals.controller.ts#create': 'customer creates own rental',
   'rentals.controller.ts#findAll': 'returns customer\'s own rentals (scoped by userId)',
   'rentals.controller.ts#findOne': 'ownerScope(user) enforced in service',
-  'rentals.controller.ts#getAvailability': 'product-availability lookup, no PII',
 
   // --- reviews.controller.ts (customers own their reviews) ---
   'reviews.controller.ts#create': 'customer creates review under own userId',
