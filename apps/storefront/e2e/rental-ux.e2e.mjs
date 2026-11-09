@@ -36,7 +36,12 @@ const JEANS = {
   category: { id: 'c-men', name: 'Men', slug: 'men' }, images: [], reviews: [], reviewCount: 0, avgRating: 0,
   variants: [{ id: 'v-jeans', name: 'Standard', size: null, stock: 5, isActive: true }],
 };
-const ALL_PRODUCTS = [JEANS, ...RENTALS];
+const RENTAL_ONLY = {
+  ...RENTALS[0], id: 'p-ro', slug: 'rental-only-gown', name: 'Rental Only Gown', availabilityMode: 'RENTAL_ONLY',
+  variants: [{ id: 'v-ro', name: 'Standard', size: null, color: null, stock: 1, isActive: true }],
+};
+const RENTABLE = [...RENTALS, RENTAL_ONLY]; // what availability_mode=RENTAL_ONLY,BOTH returns (16)
+const ALL_PRODUCTS = [JEANS, RENTAL_ONLY, ...RENTALS]; // shop page 1 (12/page) includes the rental-only gown
 const ORDER = {
   id: 'o-1', orderNumber: 'NF-E2E-1', status: 'DELIVERED', paymentStatus: 'PAID', total: '45000', subtotal: '45000',
   shippingFee: '0', createdAt: '2026-11-01T10:00:00Z', items: [{ id: 'oi-1', quantity: 1, unitPrice: '45000', totalPrice: '45000', product: { id: 'p-jeans', name: 'Jeans', slug: 'jeans' }, variant: { id: 'v-jeans', name: 'Standard' } }],
@@ -44,6 +49,8 @@ const ORDER = {
 
 // ---------------------------------------------------------------- mock API
 const mode = { products: 'ok', availability: 'ok', orders: 'ok' };
+let pendingBody = null;
+let lastRentalPost = null;
 const seen = [];
 const page = (rows, q) => {
   const limit = Number(q.get('limit') || 20);
@@ -60,7 +67,7 @@ function route(method, path, q) {
     if (am) {
       if (mode.products === 'error') return [500, { message: 'boom' }];
       if (mode.products === 'empty') return [200, { data: [], meta: { total: 0, page: 1, limit: 12, totalPages: 0 } }];
-      return [200, page(RENTALS, q)];
+      return [200, page(RENTABLE, q)];
     }
     const cs = q.get('categorySlug');
     if (cs) return [200, page(ALL_PRODUCTS.filter((p) => p.category.slug === cs), q)];
@@ -79,6 +86,7 @@ function route(method, path, q) {
     if (mode.orders === 'error') return [400, { message: ['property sort should not exist'], statusCode: 400 }];
     return [200, { data: [ORDER], meta: { total: 1, page: 1, limit: 50, totalPages: 1 } }];
   }
+  if (path === '/rentals' && method === 'POST') { lastRentalPost = pendingBody; return [201, { id: 'r-1', rentalNumber: 'RNT-E2E-1' }]; }
   if (path === '/rentals') return [200, []];
   if (path === '/cart') return [200, { items: [] }];
   if (path === '/wishlist') return [200, []];
@@ -102,9 +110,14 @@ const server = http.createServer((req, res) => {
   const u = new URL(req.url, `http://localhost:${MOCK_PORT}`);
   const path = u.pathname.replace(/^\/api\/v1/, '');
   seen.push(`${req.method} ${path}${u.search}`);
-  const [status, body] = route(req.method, path, u.searchParams);
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(body == null ? '' : JSON.stringify(body));
+  let raw = '';
+  req.on('data', (c) => { raw += c; });
+  req.on('end', () => {
+    try { pendingBody = raw ? JSON.parse(raw) : null; } catch { pendingBody = raw; }
+    const [status, body] = route(req.method, path, u.searchParams);
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(body == null ? '' : JSON.stringify(body));
+  });
 });
 
 // ---------------------------------------------------------------- tiny test harness
@@ -131,16 +144,16 @@ async function main() {
   };
 
   console.log('\n/rentals');
-  await check('lists the first page, "All" shows meta.total (15, not 0), Load more reveals the rest', async () => {
+  await check('lists the first page, "All" shows meta.total (16, not 0), Load more reveals the rest', async () => {
     setMode({});
     const p = await open(desktop, '/rentals');
     await p.getByTestId('rentals-grid').waitFor();
     assert((await p.getByTestId('rentals-grid').locator('a').count()) === 12, 'expected 12 cards on page 1');
     const all = await p.getByTestId('rental-filter-all').innerText();
-    assert(/\(15\)/.test(all), `All filter shows "${all}"`);
+    assert(/\(16\)/.test(all), `All filter shows "${all}"`);
     await p.getByTestId('rentals-load-more').click();
-    await p.waitForFunction(() => document.querySelectorAll('[data-testid="rentals-grid"] > a').length === 15);
-    assert((await p.getByTestId('rentals-load-more').count()) === 0, 'Load more should disappear when all 15 are shown');
+    await p.waitForFunction(() => document.querySelectorAll('[data-testid="rentals-grid"] > a').length === 16);
+    assert((await p.getByTestId('rentals-load-more').count()) === 0, 'Load more should disappear when all 16 are shown');
     await p.close();
   });
   await check('cards on /rentals offer Rent and never Add to Cart; Rent opens the booking page', async () => {
@@ -262,6 +275,80 @@ async function main() {
     await dates.nth(1).fill(isoIn(32));
     await p.getByTestId('rental-availability-error').waitFor();
     assert((await p.getByTestId('rental-available').count()) === 0, 'must not claim availability');
+    await p.close();
+  });
+
+  console.log('\nrental-only and sale-only products');
+  await check('shop listing: RENTAL_ONLY card = Rent only (never Add to Cart)', async () => {
+    setMode({});
+    const p = await open(desktop, '/products');
+    const ro = p.locator('a[href="/products/rental-only-gown"]').first();
+    await ro.waitFor();
+    assert((await ro.getByTestId('card-rent').count()) === 1, 'rental-only card needs Rent');
+    assert((await ro.getByTestId('card-add-to-cart').count()) === 0, 'rental-only card offers Add to Cart');
+    await p.close();
+  });
+  await check('RENTAL_ONLY gown page: rental terms + Rent link, no Buy choice, no Add to Cart', async () => {
+    setMode({});
+    const p = await open(desktop, '/products/rental-only-gown');
+    await p.getByTestId('pdp-rental-terms').waitFor();
+    assert((await p.getByTestId('pdp-buy-rent').count()) === 0, 'no Buy/Rent choice for rental-only');
+    assert((await p.getByTestId('pdp-add-to-cart').count()) === 0, 'Add to Cart on a rental-only gown');
+    assert((await p.getByTestId('pdp-rent').getAttribute('href')) === '/rentals/rental-only-gown', 'rent link');
+    await p.close();
+  });
+  await check('SALE_ONLY product page is unchanged: Add to Cart, no Rent anywhere', async () => {
+    setMode({});
+    const p = await open(desktop, '/products/jeans');
+    await p.getByTestId('pdp-add-to-cart').waitFor();
+    assert((await p.getByTestId('pdp-buy-rent').count()) === 0, 'Buy/Rent choice on a sale-only product');
+    assert((await p.getByTestId('pdp-rent').count()) === 0, 'Rent link on a sale-only product');
+    assert((await p.getByTestId('pdp-rental-terms').count()) === 0, 'rental terms on a sale-only product');
+    await p.close();
+  });
+
+  console.log('\nsigned-in booking');
+  const shopper = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await shopper.addInitScript(() => { localStorage.setItem('token', 'e2e-token'); });
+  await check('signed-in shopper books: exact CreateRentalDto payload (auto-selected variant), then My Rentals', async () => {
+    setMode({});
+    lastRentalPost = null;
+    const p = await open(shopper, '/rentals/rental-gown-03');
+    const dates = p.locator('input[type="date"]');
+    await dates.nth(0).fill(isoIn(40));
+    await dates.nth(1).fill(isoIn(42));
+    await p.getByTestId('rental-available').waitFor();
+    await p.getByTestId('rental-book').click();
+    await p.waitForURL(/\/account\/rentals/);
+    const b = lastRentalPost || {};
+    assert(JSON.stringify(Object.keys(b).sort()) === JSON.stringify(['pickupDate', 'productId', 'returnDate', 'startDate', 'variantId']),
+      `payload keys ${JSON.stringify(Object.keys(b))}`);
+    assert(b.productId === 'p-03' && b.variantId === 'v-03', `ids ${b.productId}/${b.variantId}`);
+    assert(b.startDate === isoIn(40) && b.returnDate === isoIn(42) && b.pickupDate === isoIn(40), `dates ${JSON.stringify(b)}`);
+    await p.close();
+  });
+
+  console.log('\nSwahili');
+  const sw = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await sw.addCookies([{ name: 'locale', value: 'sw', url: SF }]);
+  await sw.addInitScript(() => { localStorage.setItem('locale', 'sw'); });
+  await check('Swahili: Buy/Rent choice, booking wording and the error state are translated', async () => {
+    setMode({});
+    const p = await open(sw, '/products/rental-gown-01');
+    const choice = await p.getByTestId('pdp-buy-rent').innerText();
+    assert(/Nunua/.test(choice) && /Kodisha/.test(choice), `choice: ${choice}`);
+    await p.goto(SF + '/rentals/rental-gown-01', { waitUntil: 'networkidle' });
+    const dates = p.locator('input[type="date"]');
+    await dates.nth(0).fill(isoIn(30));
+    await dates.nth(1).fill(isoIn(32));
+    await p.getByTestId('rental-available').waitFor();
+    const label = await p.getByTestId('rental-book').innerText();
+    assert(/Omba kuhifadhi/.test(label), `button: ${label}`);
+    assert(/Hakuna malipo/.test(await p.getByTestId('rental-payment-note').innerText()), 'payment note not Swahili');
+    setMode({ products: 'error' });
+    await p.goto(SF + '/rentals', { waitUntil: 'networkidle' });
+    await p.getByTestId('rentals-load-error').waitFor();
+    assert(/Jaribu tena/.test(await p.getByTestId('rentals-load-error').innerText()), 'retry not Swahili');
     await p.close();
   });
 
