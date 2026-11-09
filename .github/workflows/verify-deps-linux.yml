@@ -103,8 +103,9 @@ jobs:
         run: |
           sa=apps/admin/.next/standalone/apps/admin
           (cd "$sa" && PORT=3998 HOSTNAME=127.0.0.1 NODE_ENV=production node server.js > /tmp/ad.log 2>&1 &)
-          for i in $(seq 1 30); do c=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3998/login); [ "$c" != 000 ] && break; sleep 1; done
-          echo "admin /login: $c"; test "$c" = 200
+          c=000
+          for i in $(seq 1 45); do c=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3998/login || true); [ "$c" != 000 ] && break; sleep 1; done
+          echo "admin /login: $c"; tail -5 /tmp/ad.log; test "$c" = 200
 
       - name: Barcode PDF (BarcodeModal's exact jsPDF calls) + DOMPurify path unreachable
         working-directory: apps/admin
