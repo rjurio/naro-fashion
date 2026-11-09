@@ -1,0 +1,124 @@
+# VERIFICATION ONLY — lives on branch verify/deps-next-15.5.28, never merged.
+# Extra Linux checks for the dependency-security release (3d95365) that the
+# regular verify job does not do: standalone Next.js builds, resolved
+# versions inside the standalone bundles, image optimizer (raster + SVG),
+# barcode PDF generation. No secrets, no deploy, no network to the VPS.
+name: Verify deps release (Linux)
+
+on:
+  push:
+    branches: [verify/deps-next-15.5.28]
+
+permissions:
+  contents: read
+
+jobs:
+  linux-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Frozen-lockfile install
+        run: pnpm install --frozen-lockfile
+
+      - name: Critical production audit (same gate as CI, not weakened)
+        run: |
+          pnpm audit --prod --audit-level=critical
+          pnpm audit --prod --json > audit.json || true
+          node -e "const d=require('./audit.json'); console.log('severity counts:', JSON.stringify(d.metadata.vulnerabilities))"
+
+      - name: Resolved versions (storefront/admin -> next, next -> sharp, jspdf -> dompurify)
+        run: |
+          node -e '
+            const fs=require("fs"), path=require("path");
+            const ver=(p)=>JSON.parse(fs.readFileSync(p,"utf8")).version;
+            const real=(p)=>fs.realpathSync(p);
+            for (const app of ["storefront","admin"]) {
+              const n=real(`apps/${app}/node_modules/next`);
+              const sharp=path.join(path.dirname(n),"sharp","package.json");
+              console.log(app, "next", ver(path.join(n,"package.json")), "-> sharp", ver(sharp));
+            }
+            const j=real("apps/admin/node_modules/jspdf");
+            console.log("admin jspdf", ver(path.join(j,"package.json")), "-> dompurify", ver(path.join(path.dirname(j),"dompurify","package.json")));
+          '
+          test "$(node -p "require('fs').realpathSync('apps/storefront/node_modules/next').includes('next@15.5.28')")" = true
+          test "$(node -p "require('fs').realpathSync('apps/admin/node_modules/next').includes('next@15.5.28')")" = true
+
+      - name: Prisma generate + validate
+        run: |
+          pnpm --filter @naro/database exec prisma generate
+          pnpm --filter @naro/database exec prisma validate
+        env:
+          DATABASE_URL: postgresql://u:p@localhost:5432/x
+
+      - name: Typecheck api / storefront / admin
+        run: |
+          npx tsc --noEmit -p apps/api/tsconfig.json
+          npx tsc --noEmit -p apps/storefront/tsconfig.json
+          npx tsc --noEmit -p apps/admin/tsconfig.json
+
+      - name: API tests
+        run: pnpm --filter api exec jest --ci
+
+      - name: PM2 guard regression tests
+        run: bash scripts/ops/tests/pm2-guard.test.sh
+
+      - name: Standalone builds (storefront, admin) — same steps as deploy.sh
+        run: |
+          for app in storefront admin; do
+            pnpm --filter "$app" build
+            d="apps/$app"; sa="$d/.next/standalone/apps/$app"
+            test -s "$d/.next/BUILD_ID" && test -s "$d/.next/routes-manifest.json" && test -f "$sa/server.js"
+            cp -a "$d/.next/static" "$sa/.next/static"
+            [ -d "$d/public" ] && cp -a "$d/public" "$sa/public"
+            echo "$app standalone OK (BUILD_ID $(cat $d/.next/BUILD_ID))"
+            n=$(find "$d/.next/standalone" -path '*/node_modules/next/package.json' | head -1)
+            echo "$app next inside standalone:  $(node -p "require('$(realpath "$n")').version")"
+            test "$(node -p "require('$(realpath "$n")').version")" = "15.5.28"
+            s=$(find "$d/.next/standalone" -path '*sharp/package.json' | head -1)
+            echo "$app sharp inside standalone: $( [ -n "$s" ] && node -p "require('$(realpath "$s")').version" || echo none)"
+            test -n "$s" && test "$(node -p "require('$(realpath "$s")').version")" = "0.35.5"
+          done
+
+      - name: Image optimizer on the storefront standalone server (raster 200, SVG refused)
+        run: |
+          sa=apps/storefront/.next/standalone/apps/storefront
+          printf '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>' > "$sa/public/zz-probe.svg"
+          (cd "$sa" && PORT=3999 HOSTNAME=127.0.0.1 NODE_ENV=production node server.js > /tmp/sf.log 2>&1 &)
+          for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:3999/favicon.jpg && break; sleep 1; done
+          code=$(curl -s -o /tmp/img -w '%{http_code}' 'http://127.0.0.1:3999/_next/image?url=%2Ffavicon.jpg&w=640&q=75')
+          type=$(curl -s -o /dev/null -w '%{content_type}' 'http://127.0.0.1:3999/_next/image?url=%2Ffavicon.jpg&w=640&q=75')
+          echo "raster: $code $type ($(stat -c %s /tmp/img) bytes)"; test "$code" = 200; case "$type" in image/*) ;; *) exit 1;; esac
+          svg=$(curl -s -o /tmp/svg -w '%{http_code}' 'http://127.0.0.1:3999/_next/image?url=%2Fzz-probe.svg&w=64&q=75')
+          echo "svg: $svg $(head -c 120 /tmp/svg)"; test "$svg" = 400
+          echo "sharp loaded by the server: $(grep -ci sharp /tmp/sf.log || true) log lines mention sharp"; cat /tmp/sf.log | tail -5
+
+      - name: Admin standalone server answers /login
+        run: |
+          sa=apps/admin/.next/standalone/apps/admin
+          (cd "$sa" && PORT=3998 HOSTNAME=127.0.0.1 NODE_ENV=production node server.js > /tmp/ad.log 2>&1 &)
+          for i in $(seq 1 30); do c=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3998/login); [ "$c" != 000 ] && break; sleep 1; done
+          echo "admin /login: $c"; test "$c" = 200
+
+      - name: Barcode PDF (BarcodeModal's exact jsPDF calls) + DOMPurify path unreachable
+        working-directory: apps/admin
+        run: |
+          ! grep -rnE '\.html\(' --include=*.ts --include=*.tsx components app lib 2>/dev/null | grep -i pdf
+          node -e '
+            const { jsPDF } = require("jspdf");
+            const png="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+            const doc=new jsPDF({unit:"mm",format:"a4"});
+            for (let i=0;i<30;i++){ const x=10+(i%3)*65, y=10+Math.floor((i%24)/3)*35; if(i===24) doc.addPage();
+              doc.setDrawColor(200); doc.rect(x,y,60,30); doc.setFontSize(7); doc.setFont("helvetica","bold"); doc.text("Gown "+i,x+30,y+4,{align:"center"});
+              doc.setFontSize(6); doc.setFont("helvetica","normal"); doc.text("Size M",x+30,y+7,{align:"center"}); doc.addImage(png,"PNG",x+10,y+9,40,6);
+              doc.text("NARO"+i,x+30,y+16,{align:"center"}); doc.setFontSize(9); doc.text("150,000 TZS",x+30,y+27,{align:"center"}); }
+            const out=Buffer.from(doc.output("arraybuffer"));
+            if (out.slice(0,5).toString()!=="%PDF-" || doc.getNumberOfPages()!==2) process.exit(1);
+            console.log("barcode PDF OK:", out.length, "bytes,", doc.getNumberOfPages(), "pages");
+          '
