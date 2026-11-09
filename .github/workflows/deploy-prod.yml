@@ -36,8 +36,13 @@ jobs:
       # errors and serious ShellCheck findings before they get there.
       - name: Shell script checks
         run: |
-          for f in deploy.sh scripts/ops/*.sh; do bash -n "$f"; done
-          shellcheck --severity=error deploy.sh scripts/ops/*.sh
+          for f in deploy.sh scripts/ops/*.sh scripts/ops/tests/*.sh; do bash -n "$f"; done
+          shellcheck --severity=error deploy.sh scripts/ops/*.sh scripts/ops/tests/*.sh
+
+      # PM2 supervision guard: refuses on a missing/stray/unsupervised daemon
+      # and never runs pm2 itself; every deploy pm2 call is behind it.
+      - name: PM2 guard self-test
+        run: bash scripts/ops/tests/pm2-guard.test.sh
 
       # Version comes from root package.json "packageManager" (pnpm@10.12.1).
       - name: Setup pnpm
@@ -113,6 +118,15 @@ jobs:
           script: |
             set -e
             cd /var/www/naro-fashion
+            # PM2 supervision preflight BEFORE touching the tree (read-only,
+            # never runs pm2; uses the guard already on the VPS). Skipped
+            # only on the first rollout, before the guard exists there —
+            # deploy.sh runs it again either way.
+            if [ -f scripts/ops/pm2-guard.sh ]; then
+              bash scripts/ops/pm2-guard.sh
+            else
+              echo "pm2-guard.sh not on the VPS yet (first rollout) - deploy.sh will run it"
+            fi
             # Refresh deploy.sh itself first so this run uses the committed
             # version (deploy.sh does the authoritative reset + SHA check).
             git fetch origin prod
