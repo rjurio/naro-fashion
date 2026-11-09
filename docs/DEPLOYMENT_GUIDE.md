@@ -115,6 +115,8 @@ Removed as obsolete: the old `deploy.sh` listing and `.env` backup/restore trick
 
 > **The VPS is shared.** PM2 on the same box also runs other applications (e.g. `sportflow-web` on port 3200, and others under `/var/www/`), and Nginx has other sites enabled (`jumuiya`, `kiuruwi`, `sportflow`). Two consequences you must respect: **never run `pm2 restart all` / `pm2 stop all` / `pm2 delete all`** (always use `--only <name>` or the `naro-*` names), and **never run a Naro deploy while another app is building** on the 2GB box (OOM). `pm2 jlist` (or `pm2 list`) is the source of truth for what is running.
 
+> **Before ANY `pm2` command on this VPS** (even `pm2 list`), run `bash /var/www/naro-fashion/scripts/ops/pm2-guard.sh`. Root PM2 is supervised by `pm2-root.service`, and any pm2 call starts a new, unsupervised daemon when it can't reach that one. If the guard fails, run no pm2 command: recover through systemd (`docs/OPS/DEPLOY.md`, "PM2 supervision guard"). Never use `systemctl reload pm2-root` (its `ExecReload` is `pm2 reload all`).
+
 ---
 
 ## Prerequisites
@@ -923,23 +925,33 @@ Covered by `deploy.sh` on every deploy, and by Part 3.7 on a first install. If y
 
 ### 5.3 Start the Applications (first install only)
 
+Root PM2 must run **under `pm2-root.service`**, never inside your SSH
+session. So create and start the systemd unit **before** starting any app:
+
 ```bash
 cd /var/www/naro-fashion
 
-# Start the three Naro apps (never a bare `pm2 start` of everything)
+# 1. Once per server: create + enable pm2-root.service, then start it.
+#    (starts the daemon in system.slice/pm2-root.service, via `pm2 resurrect`)
+pm2 startup systemd -u root --hp /root
+systemctl start pm2-root.service
+systemctl status pm2-root.service --no-pager      # active (running)
+
+# 2. Confirm supervision before any further pm2 command
+bash scripts/ops/pm2-guard.sh                       # must PASS (apps not running yet = warnings only)
+
+# 3. Start the three Naro apps (never a bare `pm2 start` of everything)
 GIT_SHA=$(git rev-parse HEAD) pm2 start ecosystem.config.js --only naro-api,naro-storefront,naro-admin
 
-# Save the process list (so PM2 restores it on reboot)
+# 4. Save the process list (pm2-root.service resurrects it on boot)
 pm2 save
-
-# Enable PM2 to start on boot (once per server)
-pm2 startup
-# This prints a command like:
-#   sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root
-# Copy and run that exact command!
+bash scripts/ops/pm2-guard.sh                       # must PASS with the apps running
 ```
 
-After this, `deploy.sh` manages the processes; you should not need `pm2 start` again.
+If `pm2 start` is run first, from an SSH shell, the daemon it spawns belongs
+to that session, not to systemd. That is the unsupervised state recovered on
+2026-11-09. After this, `deploy.sh` manages the processes; you should not
+need `pm2 start` again.
 
 ### 5.4 Verify the Apps Are Running
 
@@ -976,7 +988,10 @@ pm2 jlist | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for
 
 ### 5.5 Common PM2 Commands
 
+> **Before ANY `pm2` command on this VPS** (even `pm2 list`), run `bash /var/www/naro-fashion/scripts/ops/pm2-guard.sh`. Root PM2 is supervised by `pm2-root.service`, and any pm2 call starts a new, unsupervised daemon when it can't reach that one. If the guard fails, run no pm2 command: recover through systemd (`docs/OPS/DEPLOY.md`, "PM2 supervision guard"). Never use `systemctl reload pm2-root` (its `ExecReload` is `pm2 reload all`).
+
 ```bash
+bash scripts/ops/pm2-guard.sh              # FIRST: read-only supervision check (must PASS)
 pm2 list                                   # Status of all processes (Naro + others)
 pm2 logs naro-api                          # Stream API logs (Ctrl+C to stop)
 pm2 logs naro-api --lines 100 --nostream   # Last 100 lines, no streaming
@@ -1774,7 +1789,8 @@ chmod 0644 /etc/cron.d/naro-offsite-backup
 Use a local dump (`/var/backups/naro/postgres/`) when the server is intact; otherwise download and decrypt an off-site copy first (12.6).
 
 ```bash
-# 1. Stop writers (Naro processes only)
+# 1. Stop writers (Naro processes only) — after the supervision check passes
+bash /var/www/naro-fashion/scripts/ops/pm2-guard.sh
 pm2 stop naro-api naro-admin naro-storefront
 
 # 2. Optional but recommended: dump the current state first
@@ -1796,13 +1812,16 @@ PGPASSFILE=/root/.pgpass pg_restore --clean --if-exists --no-owner --no-acl \
 #    (bash scripts/ops/rollback.sh --yes, or check out + redeploy the matching commit).
 cd /var/www/naro-fashion/packages/database && pnpm exec prisma migrate status
 
-# 7. Bring the Naro apps back
+# 7. Bring the Naro apps back (Naro only — never `all`)
+bash /var/www/naro-fashion/scripts/ops/pm2-guard.sh
 pm2 restart naro-api naro-admin naro-storefront
 ```
 
 Smoke test: `curl -s https://api.narofashion.co.tz/api/v1/health` must report `"db":"ok"`, then log in to the admin and check recent orders.
 
-> `deploy.sh` and `scripts/ops/deploy-lib.sh` print a ready-made version of these commands (with the exact pre-deploy dump path) whenever a deploy fails. Note that their printed text ends with `pm2 restart all` — on this shared VPS use `pm2 restart naro-api naro-admin naro-storefront` instead.
+> `deploy.sh` and `scripts/ops/deploy-lib.sh` print a ready-made version of these commands (with the exact pre-deploy dump path) whenever a deploy fails.
+>
+> **Corrected 2026-11-09.** Between 2026-10-18 (`55b7da2`) and that fix, the help text contained a backtick-quoted `` `pm2 restart all` `` inside an unquoted heredoc. That was not just printed: **bash executed it**, restarting every app on the shared daemon whenever the help ran (automatic rollback, failed manual rollback). It never fired in production. The text now names only the Naro apps, and the self-test forbids command substitution in unquoted heredocs.
 
 ### 12.6 Rebuilding the Server from the Off-site Backup
 
@@ -2462,6 +2481,7 @@ gh run view <run-id> --log-failed                                  # (local mach
 ### PM2 (Process Manager) — Naro processes only
 
 ```bash
+bash scripts/ops/pm2-guard.sh              # FIRST, every time: must PASS before any pm2 command
 pm2 list                                   # All processes (Naro + other apps on this VPS)
 pm2 jlist                                  # Source of truth: script, cwd, exec mode, env
 pm2 logs naro-api --lines 50 --nostream    # Last 50 lines of API logs
@@ -2473,6 +2493,7 @@ pm2 reset naro-api                         # Reset restart counter
 pm2 monit                                  # Live CPU/memory monitor
 pm2 save                                   # Save current process list
 # NEVER on this server: pm2 restart all | pm2 stop all | pm2 delete all | pm2 flush (no name)
+#                       systemctl reload pm2-root (= pm2 reload all) | any pm2 command when the guard FAILS
 ```
 
 ### Backups

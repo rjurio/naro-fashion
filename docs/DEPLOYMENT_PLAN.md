@@ -1,5 +1,7 @@
 # Naro Fashion - Production Deployment Plan
 
+> **HISTORICAL PLAN. DO NOT FOLLOW.** This is the original March 2026 plan. Its commands are **unsafe on today's shared VPS**: `pm2 restart all` restarts other tenants' apps, `git pull origin master` pulls the wrong branch, `prisma db push` can drop data, and a parallel `pnpm build` OOMs the box. Current procedures: `docs/OPS/DEPLOY.md` and `docs/DEPLOYMENT_GUIDE.md`.
+
 ## Context
 The Naro Fashion monorepo (3 apps + shared packages) needs to go from localhost development to a production deployment accessible at **narofashion.co.tz**. This plan covers domain registration, hosting selection, server setup, deployment automation, and security hardening.
 
@@ -444,7 +446,7 @@ jobs:
             pnpm install --frozen-lockfile
             cd packages/database && pnpm db:generate && pnpm db:push && cd ../..
             pnpm build
-            pm2 restart all
+            pm2 restart all   # UNSAFE (historical): restarts every app on the shared daemon
             echo "Deployment successful at $(date)"
 ```
 
@@ -476,7 +478,7 @@ echo "Building all apps..."
 pnpm build
 
 echo "Restarting services..."
-pm2 restart all
+pm2 restart all   # UNSAFE (historical): restarts every app on the shared daemon
 
 echo "Deployment complete!"
 ```

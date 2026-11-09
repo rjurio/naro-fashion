@@ -1,5 +1,7 @@
 # Production Deployment Plan — narofashion.co.tz
 
+> **HISTORICAL PLAN. DO NOT FOLLOW.** This is the original March 2026 plan. Its commands are **unsafe on today's shared VPS**: `pm2 restart all` restarts other tenants' apps, `git pull origin master` pulls the wrong branch, `prisma db push` can drop data, and a parallel `pnpm build` OOMs the box. Current procedures: `docs/OPS/DEPLOY.md` and `docs/DEPLOYMENT_GUIDE.md`.
+
 ## Context
 
 Deploy the Naro Fashion multi-tenant SaaS platform to production. Domain `narofashion.co.tz` is already secured. The platform consists of 3 apps (storefront, admin, API) + PostgreSQL database, all running on a single VPS behind Nginx with SSL.

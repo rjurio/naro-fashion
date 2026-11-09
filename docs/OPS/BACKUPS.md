@@ -52,8 +52,12 @@ A healthy log line looks like:
 **Stop the API + admin first** so no writes hit the DB while you restore:
 
 ```bash
+bash /var/www/naro-fashion/scripts/ops/pm2-guard.sh   # must PASS before any pm2 command
 pm2 stop naro-api naro-admin
 ```
+
+If the guard fails, run **no** pm2 command. Recover `pm2-root.service` first
+(`docs/OPS/DEPLOY.md`, "PM2 supervision guard").
 
 **Restore from a specific backup**:
 
@@ -71,7 +75,8 @@ PGPASSFILE=/root/.pgpass pg_restore \
 # Re-apply table ownership (see packages/database/CLAUDE.md "PostgreSQL ownership")
 sudo -u postgres psql -d naro_fashion -c "DO \$\$ DECLARE r RECORD; BEGIN FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP EXECUTE format('ALTER TABLE public.%I OWNER TO naro_admin', r.tablename); END LOOP; END \$\$;"
 
-# Bring services back
+# Bring services back (Naro only — never `all`; the daemon is shared)
+bash /var/www/naro-fashion/scripts/ops/pm2-guard.sh
 pm2 restart naro-api naro-admin
 ```
 
