@@ -5,6 +5,7 @@ import { X, ArrowLeftRight, Search, Plus, Minus, Trash2 } from 'lucide-react';
 import adminApi from '../../../../lib/api';
 import { useToast } from '@/contexts/ToastContext';
 import { PAYMENT_METHOD_LABELS } from '@naro/shared';
+import { isSellableAtPos } from '@/lib/pos-sale-eligibility';
 
 interface ReturnItem {
   orderItemId: string;
@@ -107,6 +108,8 @@ export default function ExchangeModal({ onClose, onComplete }: Props) {
   };
 
   const addNewItem = (product: any, variant: any) => {
+    // Replacement items are a sale — a rental-only product can't be one (the API also rejects it).
+    if (!isSellableAtPos(product?.availabilityMode)) return;
     const existing = newItems.find((i) => i.variantId === variant.id);
     if (existing) {
       setNewItems(newItems.map((i) =>
@@ -271,18 +274,23 @@ export default function ExchangeModal({ onClose, onComplete }: Props) {
               {/* Search Results */}
               {searchResults.map((product) => (
                 <div key={product.id} className="border border-[hsl(var(--border))] rounded-lg p-2">
-                  <p className="text-sm font-medium text-[hsl(var(--foreground))] mb-1">{product.name}</p>
+                  <p className="text-sm font-medium text-[hsl(var(--foreground))] mb-1">
+                    {product.name}
+                    {!isSellableAtPos(product.availabilityMode) && (
+                      <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800">Rental only — not for sale</span>
+                    )}
+                  </p>
                   {product.variants?.map((v: any) => (
                     <button
                       key={v.id}
                       onClick={() => addNewItem(product, v)}
-                      disabled={v.stock <= 0}
+                      disabled={v.stock <= 0 || !isSellableAtPos(product.availabilityMode)}
                       className="w-full flex items-center justify-between px-2 py-1 text-xs hover:bg-[hsl(var(--accent))] rounded disabled:opacity-30"
                     >
                       <span>{v.name} ({v.stock})</span>
                       <span className="flex items-center gap-1">
                         {Number(v.price).toLocaleString()} TZS
-                        {v.stock > 0 && <Plus className="w-3 h-3 text-brand-gold" />}
+                        {v.stock > 0 && isSellableAtPos(product.availabilityMode) && <Plus className="w-3 h-3 text-brand-gold" />}
                       </span>
                     </button>
                   ))}
