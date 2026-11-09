@@ -40,6 +40,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AdminGuard } from './guards/admin.guard';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { CredentialAttemptGuard, CredentialLimit } from './guards/credential-attempt.guard';
 
 // Fallback maxAge if the configured JWT expiration string is somehow unparseable
 // (shouldn't happen — defaults are valid — but cookies need a number).
@@ -99,7 +100,9 @@ export class AuthController {
 
   @Public()
   @Throttle({ default: { limit: 5, ttl: ONE_MINUTE_MS } })
-  @UseGuards(LocalAuthGuard)
+  // Per-account limit first: it must count the attempt BEFORE LocalAuthGuard checks the password.
+  @CredentialLimit({ name: 'login', field: 'email', limit: 10, windowMs: 15 * ONE_MINUTE_MS })
+  @UseGuards(CredentialAttemptGuard, LocalAuthGuard)
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(
@@ -191,6 +194,8 @@ export class AuthController {
 
   @Public()
   @Throttle({ default: { limit: 5, ttl: ONE_MINUTE_MS } })
+  @CredentialLimit({ name: 'platform-login', field: 'email', limit: 10, windowMs: 15 * ONE_MINUTE_MS })
+  @UseGuards(CredentialAttemptGuard)
   @Post('platform-login')
   @HttpCode(HttpStatus.OK)
   async platformLogin(
@@ -355,6 +360,8 @@ export class AuthController {
    */
   @Public()
   @Throttle({ default: { limit: 5, ttl: ONE_MINUTE_MS } })
+  @CredentialLimit({ name: '2fa-verify', field: 'challengeToken', hash: true, limit: 10, windowMs: 15 * ONE_MINUTE_MS })
+  @UseGuards(CredentialAttemptGuard)
   @Post('2fa/verify')
   @HttpCode(HttpStatus.OK)
   async verify2FA(
@@ -375,6 +382,8 @@ export class AuthController {
 
   @Public()
   @Throttle({ default: { limit: 3, ttl: ONE_MINUTE_MS } })
+  @CredentialLimit({ name: 'forgot-password', field: 'email', limit: 5, windowMs: 60 * ONE_MINUTE_MS })
+  @UseGuards(CredentialAttemptGuard)
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   forgotPassword(@Body() body: ForgotPasswordDto, @Req() req: Request) {
@@ -386,6 +395,8 @@ export class AuthController {
 
   @Public()
   @Throttle({ default: { limit: 5, ttl: ONE_MINUTE_MS } })
+  @CredentialLimit({ name: 'reset-password', field: 'token', hash: true, limit: 10, windowMs: 15 * ONE_MINUTE_MS })
+  @UseGuards(CredentialAttemptGuard)
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
   resetPassword(@Body() body: ResetPasswordDto) {
