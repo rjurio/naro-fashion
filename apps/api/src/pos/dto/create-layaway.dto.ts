@@ -22,6 +22,11 @@ export class CreateLayawayDto {
   @IsString()
   depositTransactionRef?: string;
 
+  /** Card deposit only: terminal approval code (P0c). */
+  @IsOptional()
+  @IsString()
+  depositApprovalCode?: string;
+
   @IsString()
   dueDate: string; // ISO date string
 
@@ -50,6 +55,11 @@ export class LayawayPaymentDto {
   @IsOptional()
   @IsString()
   transactionRef?: string;
+
+  /** Card only: terminal approval code (P0c). */
+  @IsOptional()
+  @IsString()
+  approvalCode?: string;
 
   @IsOptional()
   @IsString()

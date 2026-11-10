@@ -113,8 +113,10 @@ export class PosController {
   // ============================================================
 
   @Post('sales')
-  createSale(@Body() dto: CreatePosSaleDto, @CurrentUser('id') cashierId: string) {
-    return this.posService.createSale(dto, cashierId);
+  createSale(@Body() dto: CreatePosSaleDto, @CurrentUser() user: any) {
+    // The JWT user (role refreshed from the DB by the strategy) decides whether
+    // non-cash tenders may be manually confirmed (payments:confirm-manual).
+    return this.posService.createSale(dto, user.id, user);
   }
 
   @Get('sales')
@@ -175,8 +177,8 @@ export class PosController {
   // ============================================================
 
   @Post('layaways')
-  createLayaway(@Body() dto: CreateLayawayDto, @CurrentUser('id') cashierId: string) {
-    return this.posService.createLayaway(dto, cashierId);
+  createLayaway(@Body() dto: CreateLayawayDto, @CurrentUser() user: any) {
+    return this.posService.createLayaway(dto, user.id, user);
   }
 
   @Get('layaways')
@@ -197,9 +199,9 @@ export class PosController {
   layawayPayment(
     @Param('id') id: string,
     @Body() dto: LayawayPaymentDto,
-    @CurrentUser('id') cashierId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.posService.layawayPayment(id, dto, cashierId);
+    return this.posService.layawayPayment(id, dto, user.id, user);
   }
 
   @Post('layaways/:id/complete')
@@ -218,8 +220,24 @@ export class PosController {
 
   @Post('exchanges')
   @RequiresPermission('pos:refund')
-  createExchange(@Body() dto: CreateExchangeDto, @CurrentUser('id') cashierId: string) {
-    return this.posService.createExchange(dto, cashierId);
+  createExchange(@Body() dto: CreateExchangeDto, @CurrentUser() user: any) {
+    return this.posService.createExchange(dto, user.id, user);
+  }
+
+  // ============================================================
+  // PAYMENT REVERSAL (P0c) — a manually confirmed card / mobile-money
+  // payment found invalid at reconciliation. Finance control: SUPER_ADMIN
+  // by default (MANAGER excluded), audited.
+  // ============================================================
+
+  @Post('payments/:id/reverse')
+  @RequiresPermission('payments:reverse')
+  reversePayment(
+    @Param('id') id: string,
+    @Body('reason') reason: string,
+    @CurrentUser('id') actorId: string,
+  ) {
+    return this.posService.reversePayment(id, reason, actorId);
   }
 
   @Get('exchanges')

@@ -93,6 +93,8 @@ const PERMISSIONS = [
   { code: 'payments:manage', name: 'Manage Payments (manual confirm / refund)', module: 'payments', action: 'manage' },
   { code: 'payment-methods:manage', name: 'Manage Payment Methods & Gateway Credentials', module: 'payment-methods', action: 'manage' },
   { code: 'pos:refund', name: 'Issue POS Refunds', module: 'pos', action: 'refund' },
+  { code: 'payments:confirm-manual', name: 'Confirm card / mobile-money payments manually (terminal slip / SMS evidence)', module: 'payments', action: 'confirm-manual' },
+  { code: 'payments:reverse', name: 'Reverse a manually confirmed payment', module: 'payments', action: 'reverse' },
   { code: 'finance:close', name: 'Close Financial Periods', module: 'finance', action: 'close' },
   { code: 'recycle-bin:purge', name: 'Permanently Purge Recycle Bin Items', module: 'recycle-bin', action: 'purge' },
   { code: 'newsletter:send', name: 'Send Newsletter Campaigns', module: 'newsletter', action: 'send' },
@@ -113,6 +115,8 @@ const PERMISSIONS = [
  */
 export const MANAGER_DEFAULT_GRANTS = [
   'pos:refund',
+  // P0c: managers may confirm card / mobile-money tenders manually (STAFF only if granted).
+  'payments:confirm-manual',
   'expenses:manage',
   'newsletter:send',
   'customers:suspend',

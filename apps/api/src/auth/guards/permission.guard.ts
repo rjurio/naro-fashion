@@ -7,6 +7,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PERMISSIONS_KEY } from '../decorators/requires-permission.decorator';
+import { effectivePermissionCodes } from '../util/permission-check';
 
 /**
  * PermissionGuard — enforces RBAC permission codes declared via
@@ -83,32 +84,7 @@ export class PermissionGuard implements CanActivate {
     const cached = this.cache.get(cacheKey);
     if (cached && cached.expires > Date.now()) return cached.codes;
 
-    const tenantScope = tenantId
-      ? [{ tenantId }, { tenantId: null, isSystem: true }]
-      : [{ tenantId: null, isSystem: true }];
-
-    const rows = await this.prisma.adminUserRole.findMany({
-      where: {
-        adminUserId,
-        role: { deletedAt: null, isActive: true, OR: tenantScope },
-      },
-      select: {
-        role: {
-          select: {
-            permissions: {
-              select: { permission: { select: { code: true } } },
-            },
-          },
-        },
-      },
-    });
-
-    const codes = new Set<string>();
-    for (const r of rows) {
-      for (const rp of r.role.permissions) {
-        codes.add(rp.permission.code);
-      }
-    }
+    const codes = await effectivePermissionCodes(this.prisma, adminUserId, tenantId);
     this.cache.set(cacheKey, { codes, expires: Date.now() + this.ttlMs });
     return codes;
   }

@@ -233,13 +233,30 @@ describe('PosService.createSale — offline sales', () => {
       );
     });
 
-    it('card is still fine ONLINE', async () => {
-      const { service, tx } = makeService({ stock: 10 });
+    it('card is fine ONLINE with terminal evidence from an authorised cashier (P0c)', async () => {
+      const { service, tx, prisma } = makeService({ stock: 10 });
+      prisma.payment = { findFirst: jest.fn().mockResolvedValue(null) };
       await service.createSale(
-        sale({ payments: [{ method: 'CARD', amount: 3000, transactionRef: 'X1' }] }) as any,
+        sale({ payments: [{ method: 'CARD', amount: 3000, transactionRef: 'RRN-0001', approvalCode: 'A1B2C3' }] }) as any,
         'cashier-1',
+        { id: 'cashier-1', role: 'SUPER_ADMIN', isAdmin: true },
       );
       expect(tx.payment.create).toHaveBeenCalledTimes(1);
+      expect(tx.payment.create.mock.calls[0][0].data.gatewayResponse.verification).toMatchObject({
+        method: 'MANUAL_TERMINAL', providerVerified: false, approvalCode: 'A1B2C3', reference: 'RRN-0001',
+      });
+    });
+
+    it('card ONLINE without the approval code is NOT recorded as paid (P0c)', async () => {
+      const { service, tx } = makeService({ stock: 10 });
+      await expect(
+        service.createSale(
+          sale({ payments: [{ method: 'CARD', amount: 3000, transactionRef: 'RRN-0002' }] }) as any,
+          'cashier-1',
+          { id: 'cashier-1', role: 'SUPER_ADMIN', isAdmin: true },
+        ),
+      ).rejects.toThrow(/approval code/);
+      expect(tx.payment.create).not.toHaveBeenCalled();
     });
   });
 

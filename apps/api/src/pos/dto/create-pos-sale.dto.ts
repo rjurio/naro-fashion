@@ -43,6 +43,11 @@ export class PosPaymentDto {
   @IsOptional()
   @IsString()
   transactionRef?: string;
+
+  /** Card only: the approval code printed on the terminal slip (P0c). */
+  @IsOptional()
+  @IsString()
+  approvalCode?: string;
 }
 
 export class CreatePosSaleDto {
