@@ -146,26 +146,24 @@ interface RentTxLike {
  * RENTAL_ONLY products are never sold, so none of this applies to them.
  * Never changes stock or any data.
  */
-export async function assertBothGownStillRentable(
+export type BothGownBlockReason = 'SOLD_OUT' | 'SOLD_SINCE_LAST_RESTOCK' | 'SOLD_NO_VERIFIED_RESTOCK' | 'ON_LAYAWAY';
+
+/** Same rules as assertBothGownStillRentable, returning the reason (or null) instead of throwing. */
+export async function findBothGownRentalBlock(
   tx: RentTxLike,
   tenantId: string,
   productId: string,
-): Promise<void> {
-  const refuse = (why: string) =>
-    new ConflictException({
-      statusCode: 409,
-      error: 'Conflict',
-      code: NOT_AVAILABLE_FOR_RENTAL,
-      reason: why,
-      message: 'This gown is not available to rent.',
-    });
-
+): Promise<BothGownBlockReason | null> {
   const stock = await tx.productVariant.aggregate({
     where: { productId, tenantId, isActive: true },
     _sum: { stock: true },
   });
-  if ((stock?._sum?.stock ?? 0) <= 0) throw refuse('SOLD_OUT');
+  if ((stock?._sum?.stock ?? 0) <= 0) return 'SOLD_OUT';
 
+  // Only an admin RESTOCK (Inventory -> adjust: validated type, variant of
+  // this product, reason note, performedBy + audit log) counts. ADJUSTMENT,
+  // order-cancel / refund restorations and product-edit stock changes never
+  // clear the restriction.
   const lastRestock = await tx.inventoryTransaction.findFirst({
     where: { tenantId, productId, type: 'RESTOCK', quantityChange: { gt: 0 } },
     orderBy: { createdAt: 'desc' },
@@ -184,11 +182,32 @@ export async function assertBothGownStillRentable(
     take: 50,
   });
   if (sold.some((l) => (l.refundedQuantity ?? 0) < l.quantity)) {
-    throw refuse(lastRestock ? 'SOLD_SINCE_LAST_RESTOCK' : 'SOLD_NO_VERIFIED_RESTOCK');
+    return lastRestock ? 'SOLD_SINCE_LAST_RESTOCK' : 'SOLD_NO_VERIFIED_RESTOCK';
   }
 
   const variantIds = new Set((await tx.productVariant.findMany({ where: { productId, tenantId }, select: { id: true } })).map((v) => v.id));
   const layaways = await tx.layaway.findMany({ where: { tenantId, status: 'ACTIVE' }, select: { items: true }, take: 500 });
   const held = layaways.some((l) => Array.isArray(l.items) && (l.items as any[]).some((it) => it && variantIds.has(String(it.variantId))));
-  if (held) throw refuse('ON_LAYAWAY');
+  if (held) return 'ON_LAYAWAY';
+  return null;
+}
+
+/** 409 NOT_AVAILABLE_FOR_RENTAL with a neutral customer message. */
+export function notAvailableForRental(reason: string): ConflictException {
+  return new ConflictException({
+    statusCode: 409,
+    error: 'Conflict',
+    code: NOT_AVAILABLE_FOR_RENTAL,
+    reason,
+    message: 'This gown is not available to rent.',
+  });
+}
+
+export async function assertBothGownStillRentable(
+  tx: RentTxLike,
+  tenantId: string,
+  productId: string,
+): Promise<void> {
+  const why = await findBothGownRentalBlock(tx, tenantId, productId);
+  if (why) throw notAvailableForRental(why);
 }

@@ -14,6 +14,8 @@ export interface CartItem {
   stock: number;
   imageUrl?: string;
   itemDiscount?: number;
+  /** PURCHASE_ONLY | BOTH (RENTAL_ONLY never reaches the cart). */
+  availabilityMode?: string;
 }
 
 interface Props {

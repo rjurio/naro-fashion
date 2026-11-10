@@ -58,7 +58,11 @@ function makeDb(opts: { mode?: string; stock?: number; rentals?: any[]; restockA
       }),
       rentalOrder: {
         findMany: jest.fn(async ({ where }: any) =>
-          state.rentals.filter((r) => r.tenantId === where.tenantId && where.productId.in.includes(r.productId) && matchStatus(r, where))),
+          state.rentals.filter((r) =>
+            r.tenantId === where.tenantId &&
+            (typeof where.productId === 'string' ? r.productId === where.productId : where.productId.in.includes(r.productId)) &&
+            (!where.id?.not || r.id !== where.id.not) &&
+            matchStatus(r, where))),
         count: jest.fn(async ({ where }: any) =>
           state.rentals.filter((r) => r.productId === where.productId && matchStatus(r, where) && r.startDate < where.startDate.lt && r.returnDate > where.returnDate.gt).length),
         create: jest.fn(async ({ data }: any) => { const r = { id: `r${state.rentals.length + 1}`, ...data }; state.rentals.push(r); return r; }),
@@ -123,6 +127,13 @@ function makeDb(opts: { mode?: string; stock?: number; rentals?: any[]; restockA
     customerIDDocument: { findFirst: jest.fn(async () => null) },
     posSession: { findFirst: jest.fn(async () => ({ id: 's1', adminUserId: 'cashier-1', status: 'OPEN', tenantId: T, openedAt: new Date(Date.now() - 3600_000), closedAt: null })) },
   };
+  // Reads made OUTSIDE a transaction (availability endpoint, booking pre-check).
+  const reads = makeTx([]);
+  prisma.rentalOrder.findMany = reads.rentalOrder.findMany;
+  prisma.productVariant.aggregate = reads.productVariant.aggregate;
+  prisma.inventoryTransaction = reads.inventoryTransaction;
+  prisma.orderItem = reads.orderItem;
+  prisma.layaway = reads.layaway;
   const tenant = { requireId: T } as any;
   return {
     state,

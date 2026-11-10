@@ -195,11 +195,11 @@ describe('catalog + UI wiring', () => {
       expect(ui.isSellableAtPos(m)).toBe(isSellableAtPos(m));
     }
   });
-  it('POS search/scan and the exchange picker both check isSellableAtPos', () => {
+  it('POS search/scan and the exchange picker both check the sale rule', () => {
     const search = readFileSync(join(ADMIN, 'app/dashboard/pos/components/ProductSearch.tsx'), 'utf8');
-    expect(search).toMatch(/!isSellableAtPos\(product\.availabilityMode\)\) return;/); // add-by-click
-    expect(search).toMatch(/isSellableAtPos\(hit\.product\.availabilityMode\)/); // offline scan
-    expect(search).toMatch(/isSellableAtPos\(variant\.product\?\.availabilityMode\)/); // online scan
+    expect(search).toMatch(/posSaleBlock\(product\.availabilityMode, offline \|\| usingLocal\)\) return;/); // add-by-click
+    expect(search).toMatch(/posSaleBlock\(hit\.product\.availabilityMode, true\)/); // device-catalog scan = offline
+    expect(search).toMatch(/posSaleBlock\(variant\.product\?\.availabilityMode\) === 'RENTAL_ONLY'/); // online scan
     const exchange = readFileSync(join(ADMIN, 'app/dashboard/pos/components/ExchangeModal.tsx'), 'utf8');
     expect(exchange).toMatch(/if \(!isSellableAtPos\(product\?\.availabilityMode\)\) return;/);
   });
