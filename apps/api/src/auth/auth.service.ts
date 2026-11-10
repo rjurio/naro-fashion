@@ -50,6 +50,19 @@ export const MIN_ACCESS_EXPIRES_MS = 30 * 1000; // 30s — anything shorter just
  * email belongs to an admin / platform admin.
  */
 export const GENERIC_LOGIN_ERROR = 'Invalid credentials or account temporarily locked';
+
+/**
+ * Timing: every failed sign-in must cost ONE bcrypt comparison, whether the
+ * email is unknown, the password is wrong or the account is locked.
+ * Otherwise "no account" answers ~100 ms faster than "wrong password", and
+ * the response time reveals which emails have accounts. The dummy hash uses
+ * the app's write cost (12) and a random secret nobody knows.
+ */
+let dummyPasswordHash: string | undefined;
+export async function equalizeLoginTiming(password: string): Promise<void> {
+  dummyPasswordHash ??= bcrypt.hashSync(crypto.randomBytes(18).toString('hex'), 12);
+  await bcrypt.compare(password, dummyPasswordHash);
+}
 export const SUSPENDED_ACCOUNT_ERROR = 'This account has been suspended. Please contact support.';
 /** Legacy `PATCH /auth/2fa` — enabling / disabling a real enrolment moved to dedicated endpoints. */
 export const TWO_FA_USE_NEW_ENDPOINTS_ERROR =
@@ -323,22 +336,32 @@ export class AuthService {
     if (!isCredentialShapeValid(email, password)) return null;
     const pwd = password as string;
 
+    let compared = false;
     if (tenantId) {
       const user = await this.prisma.user.findFirst({ where: { email, tenantId } });
-      if (user && user.passwordHash && (await bcrypt.compare(pwd, user.passwordHash))) {
-        if (!user.isActive) {
-          throw new UnauthorizedException(SUSPENDED_ACCOUNT_ERROR);
+      if (user && user.passwordHash) {
+        compared = true;
+        if (await bcrypt.compare(pwd, user.passwordHash)) {
+          if (!user.isActive) {
+            throw new UnauthorizedException(SUSPENDED_ACCOUNT_ERROR);
+          }
+          const { passwordHash: _, ...result } = user;
+          return result;
         }
-        const { passwordHash: _, ...result } = user;
-        return result;
       }
     }
 
-    if (opts?.customerOnly) return null;
+    if (opts?.customerOnly) {
+      if (!compared) await equalizeLoginTiming(pwd);
+      return null;
+    }
 
     // AdminUser — globally unique email, no tenant filter needed
     const admin = await this.prisma.adminUser.findUnique({ where: { email } });
-    if (!admin) return null;
+    if (!admin) {
+      if (!compared) await equalizeLoginTiming(pwd);
+      return null;
+    }
 
     // With TOTP enrolled, a correct password is only half a login: the
     // failed-attempt counter is NOT reset here (only after the code is
@@ -366,7 +389,10 @@ export class AuthService {
     if (!isCredentialShapeValid(email, password)) return null;
 
     const admin = await this.prisma.platformAdmin.findUnique({ where: { email } });
-    if (!admin) return null;
+    if (!admin) {
+      await equalizeLoginTiming(password as string);
+      return null;
+    }
 
     const ok = await this.verifyWithLockout('platform', admin, password as string, meta, {
       deferSuccess: adminRequiresTwoFactor(admin),
@@ -405,6 +431,7 @@ export class AuthService {
     const now = new Date();
 
     if (row.lockedUntil && row.lockedUntil > now) {
+      await equalizeLoginTiming(password);
       await this.logLoginAttempt(row.email, false, tenantId, meta);
       throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
     }
@@ -425,6 +452,7 @@ export class AuthService {
     });
 
     if (reserved.failedLoginAttempts > MAX_FAILED_LOGIN_ATTEMPTS) {
+      await equalizeLoginTiming(password);
       await delegate.update({
         where: { id: row.id },
         data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
