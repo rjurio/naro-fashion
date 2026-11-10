@@ -70,4 +70,57 @@ describe('storefront rental wiring', () => {
     expect(sw.rentals.noOnlinePaymentNote).toContain('{amount}');
     expect(sw.product.rentalDownPaymentLine).toMatch(/\{pct\}.*\{amount\}/);
   });
+
+  // Owner decisions, 2026-11-10 (round 7). Row 7 (payDeposit) is the "How it
+  // works" step whose description says it SECURES THE DATES, i.e. the 25%
+  // down payment, so it uses "kianzio", never "amana" (the refundable deposit).
+  const APPROVED_SW: Record<string, string> = {
+    'product.rent': 'Kodi',
+    'product.buyOrRent': 'Nunua au kodi',
+    'product.rentHint': 'Ada ya mara moja, hadi siku {max}',
+    'product.rentalDownPaymentLine': 'Malipo ya awali (kianzio): {pct}% ya ada ya kukodi ({amount})',
+    'product.chooseRentalDates': 'Kodi — chagua tarehe',
+    'rentals.downPayment': 'Lipa kianzio cha 25%',
+    'rentals.payDeposit': 'Lipa kianzio cha 25%',
+    'rentals.downPaymentLine': 'Kianzio ({pct}% ya ada ya kukodi) — kinahitajika kuthibitisha nafasi',
+    'rentals.remainingBeforeDispatch': 'Lipa salio na amana inayorejeshwa kabla ya kuchukua gauni',
+  };
+  const at = (o: any, k: string) => k.split('.').reduce((a, b) => a?.[b], o);
+  const placeholders = (s: string) => (s.match(/\{[a-zA-Z]+\}/g) ?? []).sort();
+
+  it('the approved Swahili rental strings are in place', () => {
+    const sw = JSON.parse(read('messages/sw.json'));
+    for (const [k, v] of Object.entries(APPROVED_SW)) expect([k, at(sw, k)]).toEqual([k, v]);
+  });
+
+  it('every Swahili string keeps exactly the placeholders of its English original (whole file)', () => {
+    const en = JSON.parse(read('messages/en.json'));
+    const sw = JSON.parse(read('messages/sw.json'));
+    const walk = (e: any, s: any, path: string[]) => {
+      for (const k of Object.keys(e)) {
+        const p = [...path, k];
+        if (typeof e[k] === 'string') {
+          if (typeof s?.[k] === 'string') expect([p.join('.'), placeholders(s[k])]).toEqual([p.join('.'), placeholders(e[k])]);
+        } else walk(e[k], s?.[k], p);
+      }
+    };
+    walk(en, sw, []);
+  });
+
+  it('down payment (kianzio) and refundable deposit (amana) are never swapped', () => {
+    const sw = JSON.parse(read('messages/sw.json'));
+    for (const k of ['rentals.downPayment', 'rentals.payDeposit', 'rentals.downPaymentLine', 'product.rentalDownPaymentLine']) {
+      expect([k, /kianzio/i.test(at(sw, k)), /amana/i.test(at(sw, k))]).toEqual([k, true, false]);
+    }
+    expect(at(sw, 'product.rentalDepositLine')).toMatch(/amana/i);
+    expect(at(sw, 'rentals.remainingBeforeDispatch')).toMatch(/amana inayorejeshwa/);
+    // the step's own description confirms it is the down payment that secures the dates
+    expect(at(JSON.parse(read('messages/en.json')), 'rentals.payDepositDesc')).toMatch(/^Secures your dates/);
+  });
+
+  it('no Swahili rental string implies an online payment (none is taken online)', () => {
+    const sw = JSON.parse(read('messages/sw.json'));
+    for (const k of Object.keys(APPROVED_SW)) expect([k, /mtandaoni|online|kadi/i.test(at(sw, k))]).toEqual([k, false]);
+    expect(at(sw, 'rentals.noOnlinePaymentNote')).toMatch(/^Hakuna malipo yanayofanywa mtandaoni/);
+  });
 });

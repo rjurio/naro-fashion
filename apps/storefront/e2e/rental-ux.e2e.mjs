@@ -335,8 +335,10 @@ async function main() {
   await check('Swahili: Buy/Rent choice, booking wording and the error state are translated', async () => {
     setMode({});
     const p = await open(sw, '/products/rental-gown-01');
+    // wait for BOTH options (the rent option renders once the rental quote is known)
+    await p.getByTestId('pdp-choose-rent').waitFor();
     const choice = await p.getByTestId('pdp-buy-rent').innerText();
-    assert(/Nunua/.test(choice) && /Kodisha/.test(choice), `choice: ${choice}`);
+    assert(/Nunua/.test(choice) && /\bKodi\b/.test(choice) && !/Kodisha/.test(choice), `choice: ${JSON.stringify(choice)}`);
     await p.goto(SF + '/rentals/rental-gown-01', { waitUntil: 'networkidle' });
     const dates = p.locator('input[type="date"]');
     await dates.nth(0).fill(isoIn(30));
