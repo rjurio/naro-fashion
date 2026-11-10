@@ -259,8 +259,9 @@ describe('route + permission wiring', () => {
   it('the reversal route requires payments:reverse', () => {
     expect(Reflect.getMetadata(PERMISSIONS_KEY, PosController.prototype.reversePayment)).toEqual(['payments:reverse']);
   });
-  it('defaults: MANAGER may confirm manually but not reverse; STAFF neither (grant per person)', () => {
-    expect(MANAGER_DEFAULT_GRANTS).toContain('payments:confirm-manual');
+  it('defaults: nobody but SUPER_ADMIN may confirm or reverse until the owner grants it per person', () => {
+    expect(MANAGER_DEFAULT_GRANTS).not.toContain('payments:confirm-manual');
+    expect(MANAGER_EXCLUDED).toContain('payments:confirm-manual');
     expect(MANAGER_EXCLUDED).toContain('payments:reverse');
     expect(STAFF_CODES).not.toContain('payments:confirm-manual');
     expect(STAFF_CODES).not.toContain('payments:reverse');

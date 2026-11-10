@@ -115,8 +115,9 @@ const PERMISSIONS = [
  */
 export const MANAGER_DEFAULT_GRANTS = [
   'pos:refund',
-  // P0c: managers may confirm card / mobile-money tenders manually (STAFF only if granted).
-  'payments:confirm-manual',
+  // P0c: payments:confirm-manual is deliberately NOT a default. Nobody but
+  // SUPER_ADMIN gets it automatically: the owner grants it per person
+  // (Admin -> Roles) after the POS-user inventory and cashier training.
   'expenses:manage',
   'newsletter:send',
   'customers:suspend',
