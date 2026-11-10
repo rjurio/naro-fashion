@@ -28,6 +28,9 @@ function makeService(opts: { stock?: number; session?: any; sessionById?: any } 
   };
 
   const tx: any = {
+    // P0b: product lock + open-rental lookup inside sale transactions.
+    $executeRaw: jest.fn().mockResolvedValue(1),
+    rentalOrder: { findMany: jest.fn().mockResolvedValue([]) },
     order: {
       create: jest.fn(async ({ data }: any) => ({
         id: 'o1',

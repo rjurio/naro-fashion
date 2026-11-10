@@ -22,6 +22,7 @@ import {
 import { QueryOrdersDto, AdminQueryOrdersDto } from './dto/query-orders.dto';
 import { ownerScope, isAdminUser } from '../auth/util/ownership';
 import { Prisma } from '@prisma/client';
+import { assertNotReservedForRental } from '../rentals/rental-sale-guard';
 
 @Injectable()
 export class OrdersService {
@@ -124,6 +125,14 @@ export class OrdersService {
           throw new BadRequestException('Invalid quantity in cart');
         }
       }
+
+      // P0b: a gown committed to a rental can't be bought (same lock as bookings).
+      await assertNotReservedForRental(
+        tx as any,
+        tenantId,
+        cartItems.map((i) => ({ id: i.variant.productId, name: i.variant.product.name })),
+        'customer',
+      );
 
       // Active flash-sale prices (lowest active salePrice per product). The
       // FlashSaleItem model has no per-item stock limit, so there is nothing
