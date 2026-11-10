@@ -7,6 +7,11 @@ import { PrismaService } from '../prisma/prisma.service';
 export const MANAGER_EXCLUDED = [
   'admins:create', 'admins:delete', 'roles:manage', 'settings:manage', 'audit:export',
   'payments:manage', 'payment-methods:manage', 'recycle-bin:purge',
+  // P0c: reversing a confirmed payment is a finance control — SUPER_ADMIN by default.
+  'payments:reverse',
+  // P0c: confirming card / mobile money manually is granted per person by the
+  // owner, never automatically (not even to MANAGER on a fresh install).
+  'payments:confirm-manual',
 ];
 
 export const STAFF_CODES = [

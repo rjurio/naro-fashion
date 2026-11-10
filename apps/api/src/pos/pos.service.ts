@@ -19,6 +19,28 @@ import {
   CreateExchangeDto,
 } from './dto';
 import { eatDayBounds } from '../reports/eat-time.util';
+import { Optional } from '@nestjs/common';
+import { AuditService } from '../audit/audit.service';
+import { userHasPermission } from '../auth/util/permission-check';
+import {
+  CONFIRM_MANUAL_PERMISSION,
+  PAYMENT_STATES,
+  PaymentVerification,
+  TenderInput,
+  VerifiedTender,
+  canTransitionPayment,
+  duplicateReferenceError,
+  isNonCash,
+  verifyTenders,
+} from './payment-verification';
+import { withConfirmation } from '../payments/payment-confirmation';
+export interface PosActor {
+  id: string;
+  role?: string;
+  isAdmin?: boolean;
+  isPlatformAdmin?: boolean;
+  tenantId?: string | null;
+}
 
 // ============================================================
 // Pure money helpers (exported for unit tests)
@@ -239,7 +261,133 @@ export class PosService {
   constructor(
     private prisma: PrismaService,
     private readonly tenantContext: TenantContext,
+    @Optional() private readonly audit?: AuditService,
   ) {}
+
+  // ---------------------------------------------------------------- P0c
+  /** The acting admin (JWT user from the controller, else looked up). */
+  private async posActor(cashierId: string, actor?: PosActor | null): Promise<PosActor | null> {
+    if (actor?.id) return actor;
+    const admin = await (this.prisma as any).adminUser?.findFirst?.({
+      where: { id: cashierId },
+      select: { id: true, role: true, tenantId: true },
+    });
+    return admin ? { ...admin, isAdmin: true } : null;
+  }
+
+  /**
+   * Evidence + authorisation for the tenders of one POS operation, and a
+   * duplicate-reference check against what is already recorded.
+   */
+  private async verifyPosTenders(
+    tenders: TenderInput[],
+    cashierId: string,
+    actor?: PosActor | null,
+  ): Promise<VerifiedTender[]> {
+    const tenantId = this.tenantContext.requireId;
+    const nonCash = tenders.some((t) => isNonCash(t.method));
+    const canConfirmManually = nonCash
+      ? await userHasPermission(this.prisma as any, await this.posActor(cashierId, actor), CONFIRM_MANUAL_PERMISSION)
+      : false;
+    const verified = verifyTenders(tenders, { canConfirmManually, actorAdminId: cashierId });
+    const refs = verified.filter((v) => v.verification).map((v) => v.transactionRef!) ;
+    if (refs.length) {
+      const dup = await this.prisma.payment.findFirst({
+        where: { tenantId, transactionRef: { in: refs } },
+        select: { transactionRef: true },
+      });
+      if (dup?.transactionRef) throw duplicateReferenceError([dup.transactionRef]);
+    }
+    return verified;
+  }
+
+  /** P2002 on Payment(tenantId, transactionRef) → clean 409 (concurrent reuse). */
+  private rethrowDuplicateRef(e: unknown): never {
+    const err = e as any;
+    if (err?.code === 'P2002' && JSON.stringify(err?.meta?.target ?? '').includes('transactionRef')) {
+      throw duplicateReferenceError(['(reference already used)']);
+    }
+    throw e;
+  }
+
+  private async auditManualConfirmations(rows: Array<{ id: string; verification: PaymentVerification | null; amount: number; method: string }>, context: Record<string, any>) {
+    for (const r of rows) {
+      if (!r.verification) continue;
+      try {
+        await this.audit?.log('PAYMENT_MANUALLY_CONFIRMED', 'Payment', r.id, {
+          ...context,
+          method: r.method,
+          amount: r.amount,
+          confirmation: r.verification.method,
+          reference: r.verification.reference,
+          approvalCode: r.verification.approvalCode,
+          providerVerified: false,
+        });
+      } catch {
+        // audit must never undo a recorded payment
+      }
+    }
+  }
+
+  async getCapabilities(actor: PosActor | null) {
+    const [confirm, reverse] = await Promise.all([
+      userHasPermission(this.prisma as any, actor, CONFIRM_MANUAL_PERMISSION),
+      userHasPermission(this.prisma as any, actor, 'payments:reverse'),
+    ]);
+    return { canConfirmManualPayments: confirm, canReversePayments: reverse };
+  }
+
+  /**
+   * Reverse a MANUALLY confirmed non-cash POS payment found invalid at
+   * reconciliation (e.g. the terminal settlement report doesn't show it).
+   * COMPLETED → REVERSED only (never cash, never provider-verified, never
+   * refunds). The order is flagged PAYMENT_REVERSED for follow-up; a layaway
+   * gets the amount back on its balance while still ACTIVE.
+   */
+  async reversePayment(paymentId: string, reason: string, actorId: string) {
+    const tenantId = this.tenantContext.requireId;
+    if (!reason || reason.trim().length < 5) {
+      throw new BadRequestException('A reversal needs a reason (at least 5 characters).');
+    }
+    const result = await this.prisma.$transaction(async (tx) => {
+      const p = await tx.payment.findFirst({ where: { id: paymentId, tenantId } });
+      if (!p) throw new NotFoundException('Payment not found.');
+      const gr: any = p.gatewayResponse ?? {};
+      if (!isNonCash(p.method) || gr?.verification?.evidence !== 'manual') {
+        throw new BadRequestException('Only manually confirmed card / mobile-money POS payments can be reversed here.');
+      }
+      if (!canTransitionPayment(p.status, PAYMENT_STATES.REVERSED)) {
+        throw new ConflictException(`Payment is ${p.status}; only a COMPLETED payment can be reversed.`);
+      }
+      const claimed = await tx.payment.updateMany({
+        where: { id: p.id, tenantId, status: 'COMPLETED' },
+        data: {
+          status: PAYMENT_STATES.REVERSED,
+          gatewayResponse: { ...gr, reversal: { byAdminId: actorId, at: new Date().toISOString(), reason: reason.trim() } },
+        },
+      });
+      if (claimed.count !== 1) throw new ConflictException('Payment was changed by someone else — reload and try again.');
+      if (p.orderId) {
+        await tx.order.updateMany({ where: { id: p.orderId, tenantId }, data: { paymentStatus: 'PAYMENT_REVERSED' } });
+      }
+      if (p.layawayId) {
+        const lay = await tx.layaway.updateMany({
+          where: { id: p.layawayId, tenantId, status: 'ACTIVE' },
+          data: { depositPaid: { decrement: Number(p.amount) }, balanceDue: { increment: Number(p.amount) } },
+        });
+        if (lay.count !== 1) {
+          throw new ConflictException('The layaway is no longer active — reverse this payment manually with the manager.');
+        }
+      }
+      return { id: p.id, orderId: p.orderId, layawayId: p.layawayId, amount: Number(p.amount), method: p.method };
+    });
+    try {
+      await this.audit?.log('PAYMENT_REVERSED', 'Payment', result.id, { ...result, reason: reason.trim() });
+    } catch {
+      /* never undo the reversal for an audit failure */
+    }
+    return { ...result, status: PAYMENT_STATES.REVERSED };
+  }
 
   // ============================================================
   // SESSION MANAGEMENT
@@ -614,7 +762,7 @@ export class PosService {
   // POS SALES
   // ============================================================
 
-  async createSale(dto: CreatePosSaleDto, cashierId: string) {
+  async createSale(dto: CreatePosSaleDto, cashierId: string, actor?: PosActor | null) {
     const tenantId = this.tenantContext.requireId;
     const offline = dto.offline === true;
     const now = new Date();
@@ -661,6 +809,9 @@ export class PosService {
     // variantId and decrement that tenant's stock (and blend their product
     // into this sale). Out-of-tenant ids simply won't appear in variantMap
     // and are rejected as "not found" below.
+    // P0c: non-cash tenders need evidence + `payments:confirm-manual`.
+    const verifiedTenders = await this.verifyPosTenders(dto.payments ?? [], cashierId, actor);
+
     const variantIds = dto.items.map((i) => i.variantId);
     const variants = await this.prisma.productVariant.findMany({
       where: { id: { in: variantIds }, tenantId },
@@ -715,6 +866,7 @@ export class PosService {
     // 5. Create everything in a transaction
     const orderNumber = `POS-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
+    const recordedTenders: Array<{ id: string; verification: PaymentVerification | null; amount: number; method: string }> = [];
     const order = await this.prisma.$transaction(async (tx) => {
       // Create order
       const newOrder = await tx.order.create({
@@ -760,24 +912,28 @@ export class PosService {
       // Create payments — amount is the NET amount kept (tendered − change);
       // tendered/change are preserved in gatewayResponse for the receipt.
       for (const [idx, payment] of dto.payments.entries()) {
-        await tx.payment.create({
+        const v = verifiedTenders[idx];
+        const row = await tx.payment.create({
           data: {
             tenantId,
             orderId: newOrder.id,
             amount: net[idx],
             method: payment.method,
+            // Cash counted, or non-cash with authorised manual evidence (verifyPosTenders).
             status: 'COMPLETED',
-            transactionRef: payment.transactionRef ?? null,
+            transactionRef: v?.transactionRef ?? null,
             ...(offline ? { createdAt: saleAt } : {}),
             gatewayResponse: {
               posSessionId: session.id,
               cashierId,
               tendered: payment.amount,
               change: change[idx],
+              ...(v?.verification ? { verification: v.verification as any } : {}),
               ...(offline ? { offline: true, clientCreatedAt: saleAt.toISOString() } : {}),
             },
           },
         });
+        recordedTenders.push({ id: row?.id, verification: v?.verification ?? null, amount: net[idx], method: payment.method });
       }
 
       const oversoldLines: OversoldLine[] = [];
@@ -868,7 +1024,9 @@ export class PosService {
       });
 
       return newOrder;
-    });
+    }).catch((e) => this.rethrowDuplicateRef(e));
+
+    await this.auditManualConfirmations(recordedTenders, { kind: 'POS_SALE', orderId: order.id, posSessionId: session.id });
 
     return {
       order,
@@ -1006,11 +1164,16 @@ export class PosService {
       subtotal: Number(order.subtotal),
       discount: Number(order.discount),
       total: Number(order.total),
-      payments: completed.map((p) => ({
-        method: p.method,
-        amount: Number(meta(p).tendered ?? p.amount),
-        transactionRef: p.transactionRef,
-      })),
+      payments: completed.map((p) => {
+        const c = withConfirmation(p);
+        return {
+          method: p.method,
+          amount: Number(meta(p).tendered ?? p.amount),
+          transactionRef: p.transactionRef,
+          confirmationState: c.confirmationState,
+          confirmationLabel: c.confirmationLabel,
+        };
+      }),
       changeDue: changeDue > 0 ? changeDue : 0,
     };
   }
@@ -1168,7 +1331,16 @@ export class PosService {
       // Cumulative cash cap (defence-in-depth; the transaction rolls back the
       // restocks above if this trips). Sub-shilling rounding residue on the
       // final refund is clamped to exactly what's left.
-      const remainingPaid = round2(Number(order.total) - alreadyRefundedAmount);
+      // P0c: once a payment on this sale has been REVERSED, cap refunds at the
+      // money actually RECEIVED (still-confirmed payments), not the order total
+      // — a reversed card payment must never be paid back out in cash.
+      const salePayments = (order.payments ?? []) as any[];
+      const hasReversal = salePayments.some((p) => p.status === 'REVERSED');
+      const receivedAmount = salePayments
+        .filter((p) => p.status === 'COMPLETED')
+        .reduce((sum: number, p) => sum + Number(p.amount), 0);
+      const refundBase = hasReversal ? Math.min(Number(order.total), receivedAmount) : Number(order.total);
+      const remainingPaid = round2(refundBase - alreadyRefundedAmount);
       if (refundAmount > remainingPaid + 0.01) {
         throw new BadRequestException('Refund would exceed the amount paid for this sale.');
       }
@@ -1249,7 +1421,7 @@ export class PosService {
   // LAYAWAY
   // ============================================================
 
-  async createLayaway(dto: CreateLayawayDto, cashierId: string) {
+  async createLayaway(dto: CreateLayawayDto, cashierId: string, actor?: PosActor | null) {
     const tenantId = this.tenantContext.requireId;
     const session = await this.prisma.posSession.findFirst({
       where: { adminUserId: cashierId, status: 'OPEN', tenantId },
@@ -1283,6 +1455,16 @@ export class PosService {
       throw new BadRequestException('Deposit cannot exceed total amount.');
     }
 
+    // P0c: a non-cash deposit needs evidence + `payments:confirm-manual`.
+    const [depositTender] = dto.depositAmount > 0
+      ? await this.verifyPosTenders(
+          [{ method: dto.depositMethod, amount: dto.depositAmount, transactionRef: dto.depositTransactionRef, approvalCode: dto.depositApprovalCode }],
+          cashierId,
+          actor,
+        )
+      : [null];
+    let depositPaymentId: string | null = null;
+
     const layawayNumber = `LAY-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     return this.prisma.$transaction(async (tx) => {
@@ -1308,19 +1490,32 @@ export class PosService {
 
       // Record deposit payment
       if (dto.depositAmount > 0) {
-        await tx.payment.create({
+        const row = await tx.payment.create({
           data: {
             tenantId,
             layawayId: layaway.id,
             amount: dto.depositAmount,
             method: dto.depositMethod,
             status: 'COMPLETED',
-            transactionRef: dto.depositTransactionRef,
-            gatewayResponse: { posSessionId: session?.id ?? null, cashierId },
+            transactionRef: depositTender?.transactionRef ?? null,
+            gatewayResponse: {
+              posSessionId: session?.id ?? null,
+              cashierId,
+              ...(depositTender?.verification ? { verification: depositTender.verification as any } : {}),
+            },
           },
         });
+        depositPaymentId = row?.id ?? null;
       }
 
+      return layaway;
+    }).catch((e) => this.rethrowDuplicateRef(e)).then(async (layaway) => {
+      if (depositPaymentId && depositTender?.verification) {
+        await this.auditManualConfirmations(
+          [{ id: depositPaymentId, verification: depositTender.verification, amount: dto.depositAmount, method: dto.depositMethod }],
+          { kind: 'LAYAWAY_DEPOSIT', layawayId: layaway.id },
+        );
+      }
       return layaway;
     });
   }
@@ -1363,7 +1558,7 @@ export class PosService {
     return layaway;
   }
 
-  async layawayPayment(id: string, dto: LayawayPaymentDto, cashierId: string) {
+  async layawayPayment(id: string, dto: LayawayPaymentDto, cashierId: string, actor?: PosActor | null) {
     const tenantId = this.tenantContext.requireId;
     if (!(dto.amount > 0)) {
       throw new BadRequestException('Payment amount must be greater than zero.');
@@ -1374,6 +1569,13 @@ export class PosService {
     if (dto.method === 'CASH' && !session) {
       throw new BadRequestException('Open a shift before taking a cash payment.');
     }
+    // P0c: non-cash instalments need evidence + `payments:confirm-manual`.
+    const [tender] = await this.verifyPosTenders(
+      [{ method: dto.method, amount: dto.amount, transactionRef: dto.transactionRef, approvalCode: dto.approvalCode }],
+      cashierId,
+      actor,
+    );
+    let paymentId: string | null = null;
 
     return this.prisma.$transaction(async (tx) => {
       // Atomic claim: only an ACTIVE layaway with enough balance left can take
@@ -1397,22 +1599,35 @@ export class PosService {
         throw new BadRequestException('Payment exceeds balance due.');
       }
 
-      await tx.payment.create({
+      const row = await tx.payment.create({
         data: {
           tenantId,
           layawayId: id,
           amount: dto.amount,
           method: dto.method,
           status: 'COMPLETED',
-          transactionRef: dto.transactionRef,
-          gatewayResponse: { posSessionId: session?.id ?? null, cashierId },
+          transactionRef: tender?.transactionRef ?? null,
+          gatewayResponse: {
+            posSessionId: session?.id ?? null,
+            cashierId,
+            ...(tender?.verification ? { verification: tender.verification as any } : {}),
+          },
         },
       });
+      paymentId = row?.id ?? null;
 
       return tx.layaway.findFirst({
         where: { id, tenantId },
         include: { payments: true },
       });
+    }).catch((e) => this.rethrowDuplicateRef(e)).then(async (res) => {
+      if (paymentId && tender?.verification) {
+        await this.auditManualConfirmations(
+          [{ id: paymentId, verification: tender.verification, amount: dto.amount, method: dto.method }],
+          { kind: 'LAYAWAY_PAYMENT', layawayId: id },
+        );
+      }
+      return res;
     });
   }
 
@@ -1555,7 +1770,7 @@ export class PosService {
   // EXCHANGE
   // ============================================================
 
-  async createExchange(dto: CreateExchangeDto, cashierId: string) {
+  async createExchange(dto: CreateExchangeDto, cashierId: string, actor?: PosActor | null) {
     const tenantId = this.tenantContext.requireId;
     if (!dto.returnedItems || dto.returnedItems.length === 0) {
       throw new BadRequestException('An exchange must return at least one item.');
@@ -1591,6 +1806,7 @@ export class PosService {
 
     const exchangeNumber = `EXC-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
+    const exchangeTenders: Array<{ id: string; verification: PaymentVerification | null; amount: number; method: string }> = [];
     return this.prisma.$transaction(async (tx) => {
       // Original order read INSIDE the tx.
       const originalOrder = await tx.order.findFirst({
@@ -1753,28 +1969,41 @@ export class PosService {
       //   customer is owed → REFUNDED payment on the ORIGINAL order (also counts
       //   toward that order's cumulative refund cap in refundSale).
       const tag = { posSessionId: session?.id ?? null, cashierId, exchangeNumber };
+      // P0c: a non-cash settlement (either direction) needs evidence + `payments:confirm-manual`.
+      const [settle] = priceDifference !== 0
+        ? await this.verifyPosTenders(
+            [{ method: dto.settlementMethod!, amount: Math.abs(priceDifference), transactionRef: dto.settlementRef, approvalCode: dto.settlementApprovalCode }],
+            cashierId,
+            actor,
+          )
+        : [null];
+      const settleTag = settle?.verification ? { ...tag, verification: settle.verification as any } : tag;
       if (priceDifference > 0) {
-        await tx.payment.create({
+        const row = await tx.payment.create({
           data: {
             tenantId,
             orderId: newOrderId,
             amount: priceDifference,
             method: dto.settlementMethod!,
             status: 'COMPLETED',
-            gatewayResponse: tag,
+            transactionRef: settle?.transactionRef ?? null,
+            gatewayResponse: settleTag,
           },
         });
+        if (settle?.verification) exchangeTenders.push({ id: row?.id, verification: settle.verification, amount: priceDifference, method: dto.settlementMethod! });
       } else if (priceDifference < 0) {
-        await tx.payment.create({
+        const row = await tx.payment.create({
           data: {
             tenantId,
             orderId: originalOrder.id,
             amount: Math.abs(priceDifference),
             method: dto.settlementMethod!,
             status: 'REFUNDED',
-            gatewayResponse: tag,
+            transactionRef: settle?.transactionRef ?? null,
+            gatewayResponse: settleTag,
           },
         });
+        if (settle?.verification) exchangeTenders.push({ id: row?.id, verification: settle.verification, amount: Math.abs(priceDifference), method: dto.settlementMethod! });
       }
 
       // Original order bookkeeping: fully returned → REFUNDED, else PARTIAL.
@@ -1813,6 +2042,9 @@ export class PosService {
         },
       });
 
+      return exchange;
+    }).catch((e) => this.rethrowDuplicateRef(e)).then(async (exchange) => {
+      await this.auditManualConfirmations(exchangeTenders, { kind: 'POS_EXCHANGE', exchangeNumber });
       return exchange;
     });
   }

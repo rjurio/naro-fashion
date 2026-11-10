@@ -11,7 +11,16 @@ interface PaymentEntry {
   method: string;
   amount: number;
   transactionRef?: string;
+  /** Card only: approval code from the terminal slip (P0c — the API refuses card without it). */
+  approvalCode?: string;
 }
+
+// P0c: the API marks a non-cash tender paid ONLY with evidence — the customer's
+// transaction reference (mobile money) or the terminal receipt reference +
+// approval code (card) — entered by someone with payments:confirm-manual.
+const REF_MIN = 4;
+const refOk = (v: string) => v.replace(/\s+/g, '').length >= REF_MIN;
+const approvalOk = (v: string) => /^[A-Za-z0-9]{4,12}$/.test(v.replace(/\s+/g, ''));
 
 // Realistic brand logo SVGs for Tanzanian payment providers
 const CashIcon = ({ className }: { className?: string }) => (
@@ -94,9 +103,21 @@ interface Props {
   disabled?: boolean;
   /** Offline: card is disabled and mobile money needs a transaction reference. */
   offline?: boolean;
+  /**
+   * P0c: may this operator confirm card / mobile-money payments
+   * (`payments:confirm-manual`)? false → only cash, with an explanation —
+   * BEFORE any money is taken (the API enforces it regardless). null/undefined
+   * = unknown: online the API decides; offline it is treated as false so an
+   * offline sale can never show "saved" and then fail to sync with 403.
+   */
+  canConfirmManual?: boolean | null;
 }
 
-export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, offline = false }: Props) {
+export const NEEDS_CONFIRM_PERMISSION =
+  'Card and mobile-money payments need the "Confirm payments manually" permission. Take cash, or ask a manager to record it.';
+
+export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, offline = false, canConfirmManual }: Props) {
+  const manualAllowed = canConfirmManual === true || (canConfirmManual == null && !offline);
   const [mode, setMode] = useState<'single' | 'split'>('single');
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
   const [transactionRef, setTransactionRef] = useState('');
@@ -105,18 +126,21 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, off
   const [splitMethod, setSplitMethod] = useState<string | null>(null);
   const [splitAmount, setSplitAmount] = useState<number>(0);
   const [splitRef, setSplitRef] = useState('');
+  const [approvalCode, setApprovalCode] = useState('');
+  const [splitApproval, setSplitApproval] = useState('');
 
   const requiresRef = PAYMENT_METHODS.find((m) => m.key === selectedMethod)?.requiresRef;
   const changeDue = selectedMethod === 'CASH' ? Math.max(0, cashReceived - total) : 0;
   const methodAllowed = (key: string | null) => !offline || !!PAYMENT_METHODS.find((m) => m.key === key)?.offlineOk;
-  // Offline, a mobile-money payment can only be recorded with the customer's reference.
-  const refMissing = offline && !!requiresRef && !transactionRef.trim();
+  // Online AND offline: a non-cash payment needs its evidence (P0c).
+  const isCard = selectedMethod === 'CARD';
+  const refMissing = !!requiresRef && (!refOk(transactionRef) || (isCard && !approvalOk(approvalCode)));
 
   const splitTotal = splitPayments.reduce((s, p) => s + p.amount, 0);
   const splitRemaining = total - splitTotal;
   const splitRequiresRef = !!PAYMENT_METHODS.find((m) => m.key === splitMethod)?.requiresRef;
-  const splitRefMissing = offline && splitRequiresRef && !splitRef.trim();
-  const splitHasBlocked = offline && splitPayments.some((p) => !methodAllowed(p.method) || (PAYMENT_METHODS.find((m) => m.key === p.method)?.requiresRef && !p.transactionRef?.trim()));
+  const splitRefMissing = splitRequiresRef && (!refOk(splitRef) || (splitMethod === 'CARD' && !approvalOk(splitApproval)));
+  const splitHasBlocked = splitPayments.some((p) => !methodAllowed(p.method) || (PAYMENT_METHODS.find((m) => m.key === p.method)?.requiresRef && !refOk(p.transactionRef ?? '')));
 
   const handleSinglePay = () => {
     if (!selectedMethod || disabled) return;
@@ -130,6 +154,7 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, off
           method: selectedMethod,
           amount: selectedMethod === 'CASH' ? total : total,
           transactionRef: requiresRef ? transactionRef.trim() || undefined : undefined,
+          approvalCode: isCard ? approvalCode.trim() || undefined : undefined,
         },
       ],
       selectedMethod === 'CASH' ? { cashReceived } : undefined,
@@ -138,6 +163,7 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, off
     // Reset
     setSelectedMethod(null);
     setTransactionRef('');
+    setApprovalCode('');
     setCashReceived(0);
   };
 
@@ -152,11 +178,13 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, off
         method: splitMethod,
         amount: splitAmount,
         transactionRef: methodInfo?.requiresRef ? splitRef.trim() || undefined : undefined,
+        approvalCode: splitMethod === 'CARD' ? splitApproval.trim() || undefined : undefined,
       },
     ]);
     setSplitMethod(null);
     setSplitAmount(0);
     setSplitRef('');
+    setSplitApproval('');
   };
 
   const removeSplitPayment = (index: number) => {
@@ -206,16 +234,23 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, off
               Offline: cash, or mobile money with the customer&apos;s transaction reference. Card needs internet.
             </p>
           )}
+          {!manualAllowed && (
+            <p className="text-[11px] text-amber-600" role="note" data-testid="pos-cash-only-note">
+              {NEEDS_CONFIRM_PERMISSION}
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-2">
             {PAYMENT_METHODS.map(({ key, label, icon: Icon, offlineOk }) => {
-              const blocked = offline && !offlineOk;
+              const noPermission = key !== 'CASH' && !manualAllowed;
+              const blocked = (offline && !offlineOk) || noPermission;
+              const why = noPermission ? NEEDS_CONFIRM_PERMISSION : NEEDS_INTERNET;
               return (
                 <button
                   key={key}
                   type="button"
                   disabled={blocked}
-                  title={blocked ? NEEDS_INTERNET : undefined}
-                  aria-label={blocked ? `${label} (${NEEDS_INTERNET})` : label}
+                  title={blocked ? why : undefined}
+                  aria-label={blocked ? `${label} (${why})` : label}
                   onClick={() => {
                     setSelectedMethod(key);
                     if (key === 'CASH') setCashReceived(total);
@@ -263,18 +298,38 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, off
           {selectedMethod && requiresRef && (
             <div>
               <label htmlFor="pos-txn-ref" className="text-xs text-[hsl(var(--muted-foreground))]">
-                Transaction Reference{offline ? ' (required offline)' : ''}
+                {isCard ? 'Terminal receipt reference (RRN / receipt no.) — required' : 'Customer\'s transaction reference (from the SMS) — required'}
               </label>
               <input
                 id="pos-txn-ref"
                 type="text"
                 value={transactionRef}
                 onChange={(e) => setTransactionRef(e.target.value)}
-                required={offline}
-                aria-invalid={refMissing || undefined}
+                required
+                aria-invalid={(!!transactionRef && !refOk(transactionRef)) || undefined}
                 className="w-full mt-1 px-3 py-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))] text-sm"
-                placeholder="Enter transaction ref..."
+                placeholder={isCard ? 'e.g. 123456789012' : 'e.g. QK12AB34'}
               />
+              {isCard && (
+                <>
+                  <label htmlFor="pos-approval-code" className="block mt-2 text-xs text-[hsl(var(--muted-foreground))]">
+                    Approval code on the terminal slip — required
+                  </label>
+                  <input
+                    id="pos-approval-code"
+                    type="text"
+                    value={approvalCode}
+                    onChange={(e) => setApprovalCode(e.target.value)}
+                    required
+                    aria-invalid={(!!approvalCode && !approvalOk(approvalCode)) || undefined}
+                    className="w-full mt-1 px-3 py-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))] text-sm"
+                    placeholder="e.g. A1B2C3"
+                  />
+                </>
+              )}
+              <p className="mt-1 text-[10px] text-[hsl(var(--muted-foreground))]">
+                Selecting a method doesn't mark the sale paid. You confirm the payment with this evidence, and the confirmation is recorded under your name.
+              </p>
             </div>
           )}
 
@@ -330,8 +385,8 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, off
                 <button
                   key={key}
                   type="button"
-                  disabled={splitRemaining <= 0 || (offline && !offlineOk)}
-                  title={offline && !offlineOk ? NEEDS_INTERNET : undefined}
+                  disabled={splitRemaining <= 0 || (offline && !offlineOk) || (key !== 'CASH' && !manualAllowed)}
+                  title={key !== 'CASH' && !manualAllowed ? NEEDS_CONFIRM_PERMISSION : offline && !offlineOk ? NEEDS_INTERNET : undefined}
                   onClick={() => {
                     setSplitMethod(key);
                     setSplitAmount(Math.max(0, splitRemaining));
@@ -379,8 +434,18 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, off
                     value={splitRef}
                     onChange={(e) => setSplitRef(e.target.value)}
                     className="w-full px-3 py-2 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))] text-sm"
-                    placeholder={offline ? 'Transaction ref (required offline)...' : 'Transaction ref...'}
+                    placeholder={splitMethod === 'CARD' ? 'Terminal receipt ref (required)...' : 'Transaction ref (required)...'}
                     aria-invalid={splitRefMissing || undefined}
+                  />
+                )}
+                {splitMethod === 'CARD' && (
+                  <input
+                    type="text"
+                    value={splitApproval}
+                    onChange={(e) => setSplitApproval(e.target.value)}
+                    className="w-full px-3 py-2 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))] text-sm"
+                    placeholder="Approval code on the slip (required)..."
+                    aria-label="Card approval code"
                   />
                 )}
                 <button
