@@ -258,4 +258,14 @@ export class PosController {
   getDailySummary(@Query('date') date?: string) {
     return this.posService.getDailySummary(date);
   }
+
+  /**
+   * P0c: what THIS operator may confirm, so the POS can say so BEFORE money
+   * is taken — and keep saying so offline (it caches the answer). The API
+   * still enforces every payment; this is only for a clear explanation.
+   */
+  @Get('capabilities')
+  getCapabilities(@CurrentUser() user: any) {
+    return this.posService.getCapabilities(user);
+  }
 }

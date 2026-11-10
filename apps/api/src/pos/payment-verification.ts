@@ -35,9 +35,12 @@ export const PAYMENT_STATES = {
 
 /** Allowed status changes (forward only; COMPLETED is never downgraded to PENDING/FAILED). */
 export const PAYMENT_TRANSITIONS: Record<string, string[]> = {
-  PENDING: ['COMPLETED', 'FAILED'],
+  PENDING: ['PROCESSING', 'COMPLETED', 'FAILED', 'CANCELLED'],
+  // PROCESSING = gateway short-amount / under review (PaymentSettlementService)
+  PROCESSING: ['COMPLETED', 'FAILED', 'CANCELLED'],
   COMPLETED: ['REVERSED', 'REFUNDED'],
   FAILED: [],
+  CANCELLED: [],
   REVERSED: [],
   REFUNDED: [],
 };

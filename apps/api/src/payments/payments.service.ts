@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -22,6 +23,7 @@ import {
   sha256Hex,
 } from './payment-settlement.service';
 import { ownerScope, isAdminUser } from '../auth/util/ownership';
+import { canTransitionPayment } from '../pos/payment-verification';
 
 /** Order statuses that can never take a new payment. */
 const UNPAYABLE_ORDER_STATUSES = ['CANCELLED', 'REFUNDED'];
@@ -703,17 +705,45 @@ export class PaymentsService {
       throw new NotFoundException('Payment not found');
     }
 
-    const updated = await this.prisma.payment.update({
-      where: { id },
-      data: {
-        status: dto.status,
-        gatewayResponse: dto.gatewayResponse ?? undefined,
-      },
+    // P0c: this manual endpoint can no longer rewrite payment history.
+    //  - POS payments (shift-tagged / manual evidence) are managed only by the
+    //    POS flows (refund, reverse) — never edited here.
+    //  - REVERSED is only reachable through POST /pos/payments/:id/reverse.
+    //  - Status moves forward only (PENDING → PROCESSING/COMPLETED/FAILED…;
+    //    COMPLETED → REFUNDED), as a compare-and-swap on the status read.
+    //  - Supplied gatewayResponse is MERGED into the existing record, so
+    //    provider / verification evidence is never overwritten.
+    const existing: any = payment.gatewayResponse ?? {};
+    if (existing && typeof existing === 'object' && ('posSessionId' in existing || existing.verification)) {
+      throw new BadRequestException('POS payments are managed from the POS (refund or reverse), not edited here.');
+    }
+    // REVERSED isn't in the DTO's PaymentStatus enum, so the ValidationPipe already refuses it here.
+    if (dto.status !== payment.status && !canTransitionPayment(payment.status, dto.status)) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        code: 'INVALID_PAYMENT_TRANSITION',
+        message: `A ${payment.status} payment can't be changed to ${dto.status}.`,
+      });
+    }
+    const merged =
+      dto.gatewayResponse && typeof dto.gatewayResponse === 'object'
+        ? { ...existing, ...(dto.gatewayResponse as any) }
+        : undefined;
+    const claimed = await this.prisma.payment.updateMany({
+      where: { id, tenantId, status: payment.status },
+      data: { status: dto.status, ...(merged ? { gatewayResponse: merged } : {}) },
+    });
+    if (claimed.count !== 1) {
+      throw new ConflictException('Payment was changed by someone else — reload and try again.');
+    }
+    const updated = (await this.prisma.payment.findFirst({
+      where: { id, tenantId },
       include: {
         order: { select: { id: true, orderNumber: true } },
         rentalOrder: { select: { id: true, rentalNumber: true } },
       },
-    });
+    }))!;
 
     if (dto.status === 'COMPLETED') {
       // Shared roll-up: never flips a CANCELLED order to PAID, and advances

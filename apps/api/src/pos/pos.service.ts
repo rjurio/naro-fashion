@@ -328,6 +328,14 @@ export class PosService {
     }
   }
 
+  async getCapabilities(actor: PosActor | null) {
+    const [confirm, reverse] = await Promise.all([
+      userHasPermission(this.prisma as any, actor, CONFIRM_MANUAL_PERMISSION),
+      userHasPermission(this.prisma as any, actor, 'payments:reverse'),
+    ]);
+    return { canConfirmManualPayments: confirm, canReversePayments: reverse };
+  }
+
   /**
    * Reverse a MANUALLY confirmed non-cash POS payment found invalid at
    * reconciliation (e.g. the terminal settlement report doesn't show it).
@@ -1317,7 +1325,16 @@ export class PosService {
       // Cumulative cash cap (defence-in-depth; the transaction rolls back the
       // restocks above if this trips). Sub-shilling rounding residue on the
       // final refund is clamped to exactly what's left.
-      const remainingPaid = round2(Number(order.total) - alreadyRefundedAmount);
+      // P0c: once a payment on this sale has been REVERSED, cap refunds at the
+      // money actually RECEIVED (still-confirmed payments), not the order total
+      // — a reversed card payment must never be paid back out in cash.
+      const salePayments = (order.payments ?? []) as any[];
+      const hasReversal = salePayments.some((p) => p.status === 'REVERSED');
+      const receivedAmount = salePayments
+        .filter((p) => p.status === 'COMPLETED')
+        .reduce((sum: number, p) => sum + Number(p.amount), 0);
+      const refundBase = hasReversal ? Math.min(Number(order.total), receivedAmount) : Number(order.total);
+      const remainingPaid = round2(refundBase - alreadyRefundedAmount);
       if (refundAmount > remainingPaid + 0.01) {
         throw new BadRequestException('Refund would exceed the amount paid for this sale.');
       }

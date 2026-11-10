@@ -103,9 +103,21 @@ interface Props {
   disabled?: boolean;
   /** Offline: card is disabled and mobile money needs a transaction reference. */
   offline?: boolean;
+  /**
+   * P0c: may this operator confirm card / mobile-money payments
+   * (`payments:confirm-manual`)? false → only cash, with an explanation —
+   * BEFORE any money is taken (the API enforces it regardless). null/undefined
+   * = unknown: online the API decides; offline it is treated as false so an
+   * offline sale can never show "saved" and then fail to sync with 403.
+   */
+  canConfirmManual?: boolean | null;
 }
 
-export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, offline = false }: Props) {
+export const NEEDS_CONFIRM_PERMISSION =
+  'Card and mobile-money payments need the "Confirm payments manually" permission. Take cash, or ask a manager to record it.';
+
+export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, offline = false, canConfirmManual }: Props) {
+  const manualAllowed = canConfirmManual === true || (canConfirmManual == null && !offline);
   const [mode, setMode] = useState<'single' | 'split'>('single');
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
   const [transactionRef, setTransactionRef] = useState('');
@@ -222,16 +234,23 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, off
               Offline: cash, or mobile money with the customer&apos;s transaction reference. Card needs internet.
             </p>
           )}
+          {!manualAllowed && (
+            <p className="text-[11px] text-amber-600" role="note" data-testid="pos-cash-only-note">
+              {NEEDS_CONFIRM_PERMISSION}
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-2">
             {PAYMENT_METHODS.map(({ key, label, icon: Icon, offlineOk }) => {
-              const blocked = offline && !offlineOk;
+              const noPermission = key !== 'CASH' && !manualAllowed;
+              const blocked = (offline && !offlineOk) || noPermission;
+              const why = noPermission ? NEEDS_CONFIRM_PERMISSION : NEEDS_INTERNET;
               return (
                 <button
                   key={key}
                   type="button"
                   disabled={blocked}
-                  title={blocked ? NEEDS_INTERNET : undefined}
-                  aria-label={blocked ? `${label} (${NEEDS_INTERNET})` : label}
+                  title={blocked ? why : undefined}
+                  aria-label={blocked ? `${label} (${why})` : label}
                   onClick={() => {
                     setSelectedMethod(key);
                     if (key === 'CASH') setCashReceived(total);
@@ -366,8 +385,8 @@ export default function PaymentPanel({ total, onPaymentsConfirmed, disabled, off
                 <button
                   key={key}
                   type="button"
-                  disabled={splitRemaining <= 0 || (offline && !offlineOk)}
-                  title={offline && !offlineOk ? NEEDS_INTERNET : undefined}
+                  disabled={splitRemaining <= 0 || (offline && !offlineOk) || (key !== 'CASH' && !manualAllowed)}
+                  title={key !== 'CASH' && !manualAllowed ? NEEDS_CONFIRM_PERMISSION : offline && !offlineOk ? NEEDS_INTERNET : undefined}
                   onClick={() => {
                     setSplitMethod(key);
                     setSplitAmount(Math.max(0, splitRemaining));
