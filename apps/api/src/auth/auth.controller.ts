@@ -101,7 +101,7 @@ export class AuthController {
   @Public()
   @Throttle({ default: { limit: 5, ttl: ONE_MINUTE_MS } })
   // Per-account limit first: it must count the attempt BEFORE LocalAuthGuard checks the password.
-  @CredentialLimit({ name: 'login', field: 'email', limit: 10, windowMs: 15 * ONE_MINUTE_MS })
+  @CredentialLimit({ name: 'login', field: 'email', perClient: true, limit: 10, accountLimit: 60, windowMs: 15 * ONE_MINUTE_MS })
   @UseGuards(CredentialAttemptGuard, LocalAuthGuard)
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -194,7 +194,7 @@ export class AuthController {
 
   @Public()
   @Throttle({ default: { limit: 5, ttl: ONE_MINUTE_MS } })
-  @CredentialLimit({ name: 'platform-login', field: 'email', limit: 10, windowMs: 15 * ONE_MINUTE_MS })
+  @CredentialLimit({ name: 'platform-login', field: 'email', perClient: true, limit: 10, accountLimit: 60, windowMs: 15 * ONE_MINUTE_MS })
   @UseGuards(CredentialAttemptGuard)
   @Post('platform-login')
   @HttpCode(HttpStatus.OK)

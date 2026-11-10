@@ -18,10 +18,26 @@ import { createHash } from 'crypto';
  * PlatformAdmin do). This adds a limit keyed by the TARGET identity
  * (tenant + normalised email, or a hash of a token), independent of IP.
  *
- * Counts attempts (successful or not) in a fixed window. In-memory, single
- * API instance (same assumption as the 2FA replay cache). A victim's
- * account can be temporarily rate-limited by someone hammering it — the
- * same trade-off as the existing admin lockout, but shorter.
+ * Two tiers for sign-in (login / platform-login):
+ *  - STRICT per account + client IP (`limit`, e.g. 10 / 15 min): someone
+ *    hammering a victim's email from their own IP is stopped there, and the
+ *    real customer — on a different IP — can still sign in.
+ *  - GENEROUS per account, any IP (`accountLimit`, e.g. 60 / 15 min): bounds
+ *    guessing spread over many IPs, or a local process forging
+ *    X-Forwarded-For (which defeats per-IP keys but not this one).
+ * A request blocked by the strict tier does not consume the account tier.
+ * Token-keyed endpoints (2FA challenge, reset token) and forgot-password use
+ * a single key.
+ *
+ * Anti-enumeration: keys are built from the SUBMITTED identifier without any
+ * lookup, so a blocked request looks identical whether or not the account
+ * exists. Counts attempts (success or failure) in a fixed window; in-memory,
+ * single API instance (same assumption as the 2FA replay cache).
+ *
+ * Residual (documented): an attacker controlling enough IPs can still use up
+ * one victim's account tier for a window (60 attempts / 15 min). That is far
+ * weaker than the admin lockout (5 failures → 30 min) and costs the attacker
+ * many IPs; without it, customer passwords had no per-account protection.
  */
 export interface CredentialLimitConfig {
   /** Bucket namespace, e.g. 'login'. */
@@ -30,8 +46,13 @@ export interface CredentialLimitConfig {
   field: string;
   /** Hash the value (tokens) instead of storing it. */
   hash?: boolean;
+  /** Limit for the key (per account + client IP when `perClient`). */
   limit: number;
   windowMs: number;
+  /** Key the strict tier by account AND client IP. */
+  perClient?: boolean;
+  /** Generous per-account ceiling across all IPs (with `perClient`). */
+  accountLimit?: number;
 }
 
 export const CREDENTIAL_LIMIT_KEY = 'credentialLimit';
@@ -94,18 +115,25 @@ export class CredentialAttemptGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const cfg = this.reflector.get<CredentialLimitConfig | undefined>(CREDENTIAL_LIMIT_KEY, context.getHandler());
     if (!cfg) return true;
-    const key = credentialKey(cfg, context.switchToHttp().getRequest());
+    const req = context.switchToHttp().getRequest();
+    const key = credentialKey(cfg, req);
     if (!key) return true;
-    if (!this.limiter.hit(key, cfg.limit, cfg.windowMs)) {
-      throw new HttpException(
+    const tooMany = () =>
+      new HttpException(
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,
           code: 'TOO_MANY_ATTEMPTS',
-          message: 'Too many attempts for this account. Please wait a few minutes and try again.',
+          message: 'Too many attempts. Please wait a few minutes and try again.',
         },
         HttpStatus.TOO_MANY_REQUESTS,
       );
+    if (cfg.perClient) {
+      const client = String(req?.ip ?? req?.socket?.remoteAddress ?? '-');
+      if (!this.limiter.hit(`${key}|ip:${client}`, cfg.limit, cfg.windowMs)) throw tooMany();
+      if (cfg.accountLimit && !this.limiter.hit(key, cfg.accountLimit, cfg.windowMs)) throw tooMany();
+      return true;
     }
+    if (!this.limiter.hit(key, cfg.limit, cfg.windowMs)) throw tooMany();
     return true;
   }
 }
