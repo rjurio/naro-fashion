@@ -99,6 +99,9 @@ describe('explicit payment states', () => {
 function makePos(opts: { grantedCodes?: string[]; existingRef?: string | null; p2002?: boolean; payment?: any; layawayActive?: boolean } = {}) {
   const audit = { log: jest.fn().mockResolvedValue(undefined) };
   const tx: any = {
+    // Forward-compatible with P0b (reserved-gown guard): product lock + open-rental lookup.
+    $executeRaw: jest.fn().mockResolvedValue(1),
+    rentalOrder: { findMany: jest.fn().mockResolvedValue([]) },
     order: { create: jest.fn(async ({ data }: any) => ({ id: 'o1', ...data, items: [] })), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     payment: {
       create: jest.fn(async ({ data }: any) => {
