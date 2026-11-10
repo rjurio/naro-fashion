@@ -29,6 +29,9 @@ function makeService(modes: Record<string, Mode>) {
     product: { id: `p-${k}`, name: `Gown ${k}`, availabilityMode: mode },
   }));
   const tx: any = {
+    // P0b: product lock + open-rental lookup inside sale transactions.
+    $executeRaw: jest.fn().mockResolvedValue(1),
+    rentalOrder: { findMany: jest.fn().mockResolvedValue([]) },
     order: {
       create: jest.fn(async ({ data }: any) => ({ id: 'o1', ...data, items: [] })),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),

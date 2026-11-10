@@ -19,6 +19,7 @@ import {
   computeLateFee,
   resolveReturnedAt,
 } from './rental-rules';
+import { assertBothGownStillRentable } from './rental-sale-guard';
 
 @Injectable()
 export class RentalsService {
@@ -178,6 +179,13 @@ export class RentalsService {
         throw new ConflictException(
           'Product is not available for the selected dates',
         );
+      }
+
+      // P0b (reverse direction): a buy-or-rent gown that has been sold (since
+      // the last verified restock), is on an active layaway, or has no stock
+      // left can't be rented. Same product lock as every sale path.
+      if (product.availabilityMode === 'BOTH') {
+        await assertBothGownStillRentable(tx as any, tenantId, dto.productId);
       }
 
       return tx.rentalOrder.create({

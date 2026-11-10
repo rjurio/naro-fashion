@@ -20,6 +20,7 @@ import {
 } from './dto';
 import { eatDayBounds } from '../reports/eat-time.util';
 import { assertSellableAtPos } from './pos-sale-eligibility';
+import { assertNotReservedForRental } from '../rentals/rental-sale-guard';
 
 // ============================================================
 // Pure money helpers (exported for unit tests)
@@ -727,6 +728,13 @@ export class PosService {
     const orderNumber = `POS-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     const order = await this.prisma.$transaction(async (tx) => {
+      // P0b: never sell a gown committed to a rental (locks like a booking does).
+      await assertNotReservedForRental(
+        tx as any,
+        tenantId,
+        dto.items.map((i) => ({ id: variantMap.get(i.variantId)!.product.id, name: variantMap.get(i.variantId)!.product.name })),
+        'staff',
+      );
       // Create order
       const newOrder = await tx.order.create({
         data: {
@@ -1278,7 +1286,7 @@ export class PosService {
     const variantIds = [...new Set(dto.items.map((i) => i.variantId))];
     const found = await this.prisma.productVariant.findMany({
       where: { id: { in: variantIds }, tenantId },
-      select: { id: true, product: { select: { name: true, availabilityMode: true } } },
+      select: { id: true, productId: true, product: { select: { name: true, availabilityMode: true } } },
     });
     if (found.length !== variantIds.length) {
       throw new BadRequestException('One or more layaway items were not found.');
@@ -1300,6 +1308,13 @@ export class PosService {
     const layawayNumber = `LAY-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     return this.prisma.$transaction(async (tx) => {
+      // P0b: a layaway promises the gown to a buyer — not while it is rented out / booked.
+      await assertNotReservedForRental(
+        tx as any,
+        tenantId,
+        found.map((v) => ({ id: v.productId, name: v.product.name })),
+        'staff',
+      );
       const layaway = await tx.layaway.create({
         data: {
           tenantId,
@@ -1475,6 +1490,16 @@ export class PosService {
           );
         }
       }
+      // P0b: handing a layaway gown over is a sale — refuse if it has since been booked.
+      await assertNotReservedForRental(
+        tx as any,
+        tenantId,
+        [...new Set(variants.map((v: any) => v.productId as string))].map((pid) => ({
+          id: pid,
+          name: items.find((it: any) => productOf.get(it.variantId) === pid)?.productName ?? null,
+        })),
+        'staff',
+      );
 
       const order = await tx.order.create({
         data: {
@@ -1586,7 +1611,7 @@ export class PosService {
     const newVariants = newVariantIds.length
       ? await this.prisma.productVariant.findMany({
           where: { id: { in: newVariantIds }, tenantId },
-          include: { product: { select: { name: true, availabilityMode: true } } },
+          include: { product: { select: { id: true, name: true, availabilityMode: true } } },
         })
       : [];
     const newVariantMap = new Map(newVariants.map((v) => [v.id, v]));
@@ -1610,6 +1635,15 @@ export class PosService {
     const exchangeNumber = `EXC-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     return this.prisma.$transaction(async (tx) => {
+      // P0b: replacement items are sold — not gowns committed to a rental.
+      if (newVariants.length) {
+        await assertNotReservedForRental(
+          tx as any,
+          tenantId,
+          newVariants.map((v) => ({ id: v.product.id, name: v.product.name })),
+          'staff',
+        );
+      }
       // Original order read INSIDE the tx.
       const originalOrder = await tx.order.findFirst({
         where: { id: dto.originalOrderId, tenantId },
