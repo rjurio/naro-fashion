@@ -24,11 +24,13 @@ const FUTURE = (d: number) => new Date(Date.now() + d * 86_400_000);
  * that calls pg_advisory_xact_lock(hashtext(key)) waits until no other
  * open transaction holds that key; locks release when the tx callback ends.
  */
-function makeDb(opts: { mode?: string; stock?: number; rentals?: any[] } = {}) {
+function makeDb(opts: { mode?: string; stock?: number; rentals?: any[]; restockAt?: Date | null; layaways?: any[] } = {}) {
   const state = {
     rentals: [...(opts.rentals ?? [])] as any[],
     stock: opts.stock ?? 1,
     orders: [] as any[],
+    restockAt: opts.restockAt ?? null as Date | null,
+    layaways: [...(opts.layaways ?? [])] as any[],
     sqlKeys: [] as string[],
     waits: 0,
   };
@@ -61,8 +63,26 @@ function makeDb(opts: { mode?: string; stock?: number; rentals?: any[] } = {}) {
           state.rentals.filter((r) => r.productId === where.productId && matchStatus(r, where) && r.startDate < where.startDate.lt && r.returnDate > where.returnDate.gt).length),
         create: jest.fn(async ({ data }: any) => { const r = { id: `r${state.rentals.length + 1}`, ...data }; state.rentals.push(r); return r; }),
       },
+      inventoryTransaction: {
+        findFirst: jest.fn(async () => (state.restockAt ? { createdAt: state.restockAt } : null)),
+        create: jest.fn().mockResolvedValue({}),
+      },
+      orderItem: {
+        // Lines of every recorded order (POS creates them via nested `items.create`).
+        findMany: jest.fn(async ({ where }: any) =>
+          state.orders
+            .filter((o) => !where.order.status.notIn.includes(o.status))
+            .filter((o) => !where.order.createdAt || new Date(o.createdAt ?? Date.now()) > where.order.createdAt.gt)
+            .flatMap((o) => (o.items?.create ?? o.lines ?? []).filter((l: any) => l.productId === where.productId))
+            .map((l: any) => ({ quantity: l.quantity, refundedQuantity: l.refundedQuantity ?? 0 }))),
+      },
+      layaway: {
+        create: jest.fn(async ({ data }: any) => ({ id: 'l1', ...data })),
+        findMany: jest.fn(async ({ where }: any) => state.layaways.filter((l) => l.status === where.status)),
+      },
       productVariant: {
         aggregate: jest.fn(async () => ({ _sum: { stock: state.stock } })),
+        findMany: jest.fn(async () => [{ id: 'v1' }]),
         updateMany: jest.fn(async ({ where, data }: any) => {
           if (where.stock?.gte !== undefined && state.stock < where.stock.gte) return { count: 0 };
           state.stock -= data.stock.decrement; return { count: 1 };
@@ -70,13 +90,15 @@ function makeDb(opts: { mode?: string; stock?: number; rentals?: any[] } = {}) {
         findFirst: jest.fn(async () => ({ stock: state.stock })),
       },
       order: {
-        create: jest.fn(async ({ data }: any) => { const o = { id: `o${state.orders.length + 1}`, ...data, items: [] }; state.orders.push(o); return o; }),
+        create: jest.fn(async ({ data }: any) => {
+          const o = { id: `o${state.orders.length + 1}`, createdAt: new Date(), ...data };
+          state.orders.push(o);
+          return { ...o, items: [] };
+        }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       payment: { create: jest.fn().mockResolvedValue({}) },
-      inventoryTransaction: { create: jest.fn().mockResolvedValue({}) },
       posSession: { update: jest.fn().mockResolvedValue({}) },
-      layaway: { create: jest.fn(async ({ data }: any) => ({ id: 'l1', ...data })) },
     };
     return tx;
   };
@@ -110,7 +132,12 @@ function makeDb(opts: { mode?: string; stock?: number; rentals?: any[] } = {}) {
   };
 }
 
-const booking = () => ({ productId: 'p1', variantId: 'v1', startDate: FUTURE(30).toISOString(), returnDate: FUTURE(32).toISOString(), pickupDate: FUTURE(30).toISOString() });
+// One clock read per booking: computing start and pickup separately could put
+// pickup 1 ms AFTER start ("Pickup date must be on or before start date").
+const booking = () => {
+  const start = FUTURE(30);
+  return { productId: 'p1', variantId: 'v1', startDate: start.toISOString(), returnDate: new Date(start.getTime() + 2 * 86_400_000).toISOString(), pickupDate: start.toISOString() };
+};
 const posSale = () => ({ items: [{ productId: 'p1', variantId: 'v1', quantity: 1, unitPrice: 950000 }], payments: [{ method: 'CASH', amount: 950000 }] });
 const rental = (status: string, over: any = {}) => ({ id: 'rx', tenantId: T, productId: 'p1', rentalNumber: 'RNT-X1', status, startDate: FUTURE(10), returnDate: FUTURE(12), ...over });
 
@@ -216,7 +243,7 @@ describe('every sale path is guarded', () => {
 describe('booking side: a sold-out buy-or-rent gown cannot be rented', () => {
   it('BOTH with zero stock is refused', async () => {
     const { rentals } = makeDb({ stock: 0 });
-    await expect(rentals.create('u1', booking() as any)).rejects.toThrow(/sold and is no longer available to rent/);
+    await expect(rentals.create('u1', booking() as any)).rejects.toThrow(/not available to rent/);
   });
   it('BOTH with stock left books normally', async () => {
     const { rentals, state } = makeDb({ stock: 1 });
@@ -227,6 +254,121 @@ describe('booking side: a sold-out buy-or-rent gown cannot be rented', () => {
     const { rentals, state } = makeDb({ mode: 'RENTAL_ONLY', stock: 0 });
     await rentals.create('u1', booking() as any);
     expect(state.rentals).toHaveLength(1);
+  });
+});
+
+describe('booking side, strengthened: no renting a gown that was sold (seeded stock is not evidence)', () => {
+  const reasonOf = async (p: Promise<unknown>) => { try { await p; return 'OK'; } catch (e: any) { return e.getResponse?.().reason ?? e.message; } };
+
+  it('sale → rental: after a POS sale, a gown with seeded stock 10 (9 left) can NOT be rented', async () => {
+    const db = makeDb({ stock: 10 });
+    expect(await codeOf(db.pos.createSale(posSale() as any, 'cashier-1'))).toBe('OK');
+    expect(db.state.stock).toBe(9);
+    expect(await reasonOf(db.rentals.create('u1', booking() as any))).toBe('SOLD_NO_VERIFIED_RESTOCK');
+    expect(db.state.rentals).toHaveLength(0);
+  });
+
+  it('a recorded RESTOCK after the sale is the evidence that re-enables renting', async () => {
+    const db = makeDb({ stock: 10 });
+    await db.pos.createSale(posSale() as any, 'cashier-1');
+    expect(await reasonOf(db.rentals.create('u1', booking() as any))).toBe('SOLD_NO_VERIFIED_RESTOCK');
+    db.state.restockAt = new Date(Date.now() + 1000); // admin records a restock after the sale
+    expect(await reasonOf(db.rentals.create('u1', booking() as any))).toBe('OK');
+  });
+
+  it('a sale BEFORE the last restock does not block (the restock added a gown)', async () => {
+    const db = makeDb({ stock: 2, restockAt: new Date(Date.now() + 60_000) });
+    db.state.orders.push({ id: 'old', status: 'DELIVERED', createdAt: new Date(), lines: [{ productId: 'p1', quantity: 1 }] });
+    expect(await reasonOf(db.rentals.create('u1', booking() as any))).toBe('OK');
+  });
+
+  it.each([
+    ['cancelled order', { status: 'CANCELLED', lines: [{ productId: 'p1', quantity: 1 }] }],
+    ['fully refunded order', { status: 'REFUNDED', lines: [{ productId: 'p1', quantity: 1 }] }],
+    ['line fully refunded (gown came back)', { status: 'DELIVERED', lines: [{ productId: 'p1', quantity: 1, refundedQuantity: 1 }] }],
+  ])('%s does not block renting', async (_l, order) => {
+    const db = makeDb({ stock: 5 });
+    db.state.orders.push({ id: 'x', createdAt: new Date(), ...order });
+    expect(await reasonOf(db.rentals.create('u1', booking() as any))).toBe('OK');
+  });
+
+  it('a partially refunded multi-unit line still blocks', async () => {
+    const db = makeDb({ stock: 5 });
+    db.state.orders.push({ id: 'x', status: 'DELIVERED', createdAt: new Date(), lines: [{ productId: 'p1', quantity: 2, refundedQuantity: 1 }] });
+    expect(await reasonOf(db.rentals.create('u1', booking() as any))).toBe('SOLD_NO_VERIFIED_RESTOCK');
+  });
+
+  it('an online order still PENDING payment holds the gown too', async () => {
+    const db = makeDb({ stock: 5 });
+    db.state.orders.push({ id: 'web', status: 'PENDING', createdAt: new Date(), lines: [{ productId: 'p1', quantity: 1 }] });
+    expect(await reasonOf(db.rentals.create('u1', booking() as any))).toBe('SOLD_NO_VERIFIED_RESTOCK');
+  });
+
+  it('an ACTIVE layaway holding the gown blocks renting', async () => {
+    const active = makeDb({ stock: 5, layaways: [{ status: 'ACTIVE', items: [{ productId: 'p1', variantId: 'v1', quantity: 1 }] }] });
+    expect(await reasonOf(active.rentals.create('u1', booking() as any))).toBe('ON_LAYAWAY');
+  }, 20_000);
+
+  it('a CANCELLED layaway does not block renting', async () => {
+    const cancelled = makeDb({ stock: 5, layaways: [{ status: 'CANCELLED', items: [{ productId: 'p1', variantId: 'v1', quantity: 1 }] }] });
+    expect(await reasonOf(cancelled.rentals.create('u1', booking() as any))).toBe('OK');
+  }, 20_000);
+
+  it('a layaway item mislabelled with another productId is still matched by variant', async () => {
+    const db = makeDb({ stock: 5, layaways: [{ status: 'ACTIVE', items: [{ productId: 'pX', variantId: 'v1', quantity: 1 }] }] });
+    expect(await reasonOf(db.rentals.create('u1', booking() as any))).toBe('ON_LAYAWAY');
+  });
+
+  it('offline POS sale, once synced, counts as a sale (booking refused afterwards)', async () => {
+    const db = makeDb({ stock: 10 });
+    const offline = { ...posSale(), offline: true, clientCreatedAt: new Date(Date.now() - 60_000).toISOString(), sessionId: 's1' };
+    expect(await codeOf(db.pos.createSale(offline as any, 'cashier-1'))).toBe('OK');
+    expect(await reasonOf(db.rentals.create('u1', booking() as any))).toBe('SOLD_NO_VERIFIED_RESTOCK');
+  });
+
+  it('exchange replacement lines (a new order) count as a sale', async () => {
+    const db = makeDb({ stock: 5 });
+    db.state.orders.push({ id: 'exch', status: 'DELIVERED', createdAt: new Date(), lines: [{ productId: 'p1', quantity: 1 }] });
+    expect(await reasonOf(db.rentals.create('u1', booking() as any))).toBe('SOLD_NO_VERIFIED_RESTOCK');
+  });
+
+  it('the customer only ever sees the neutral message', async () => {
+    const db = makeDb({ stock: 10 });
+    await db.pos.createSale(posSale() as any, 'cashier-1');
+    let err: any;
+    try { await db.rentals.create('u1', booking() as any); } catch (e) { err = e; }
+    expect(err.getResponse().message).toBe('This gown is not available to rent.');
+    expect(err.getResponse().code).toBe('NOT_AVAILABLE_FOR_RENTAL');
+  });
+
+  it('never writes stock or data while checking', async () => {
+    const db = makeDb({ stock: 10 });
+    await db.pos.createSale(posSale() as any, 'cashier-1');
+    const before = db.state.stock;
+    await reasonOf(db.rentals.create('u1', booking() as any));
+    expect(db.state.stock).toBe(before);
+  });
+});
+
+describe('concurrency with SEEDED stock (10): simultaneous purchase and rental never both succeed', () => {
+  it('booking first → booking wins, sale refused', async () => {
+    const db = makeDb({ stock: 10 });
+    const b = db.rentals.create('u1', booking() as any);
+    await new Promise((r) => setTimeout(r, 0));
+    const s = db.pos.createSale(posSale() as any, 'cashier-1');
+    expect(await Promise.all([codeOf(b), codeOf(s)])).toEqual(['OK', RESERVED_FOR_RENTAL]);
+    expect(db.state.waits).toBeGreaterThan(0);
+  });
+  it('sale first → sale wins, booking refused although 9 remain in stock', async () => {
+    const db = makeDb({ stock: 10 });
+    const s = db.pos.createSale(posSale() as any, 'cashier-1');
+    await new Promise((r) => setTimeout(r, 0));
+    const b = db.rentals.create('u1', booking() as any);
+    const [rs, rb] = await Promise.all([codeOf(s), codeOf(b)]);
+    expect(rs).toBe('OK');
+    expect(rb).toBe('NOT_AVAILABLE_FOR_RENTAL');
+    expect(db.state.rentals).toHaveLength(0);
+    expect(db.state.waits).toBeGreaterThan(0);
   });
 });
 
@@ -250,7 +392,7 @@ describe('concurrency: a booking and a sale of the same one-stock gown never bot
     const b = db.rentals.create('u1', booking() as any);
     const [rs, rb] = await Promise.all([codeOf(s), codeOf(b)]);
     expect(rs).toBe('OK');
-    expect(rb).toBe('CONFLICT');
+    expect(rb).toBe('NOT_AVAILABLE_FOR_RENTAL');
     expect(db.state.waits).toBeGreaterThan(0); // the booking really queued behind the sale's lock
     expect(db.state.orders).toHaveLength(1);
     expect(db.state.rentals).toHaveLength(0);

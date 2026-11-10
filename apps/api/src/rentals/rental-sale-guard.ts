@@ -109,3 +109,86 @@ export async function assertNotReservedForRental(
     rentals: open.map((o) => ({ rentalNumber: o.rentalNumber, status: o.status, productId: o.productId })),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Booking side (P0b, strengthened): never rent out a gown that can't be
+// verified to still exist.
+// ---------------------------------------------------------------------------
+
+export const NOT_AVAILABLE_FOR_RENTAL = 'NOT_AVAILABLE_FOR_RENTAL';
+
+/** Order statuses whose lines no longer hold the gown. */
+export const SALE_VOID_ORDER_STATUSES = ['CANCELLED', 'REFUNDED'];
+
+interface RentTxLike {
+  productVariant: {
+    aggregate: (args: any) => Promise<any>;
+    findMany: (args: any) => Promise<Array<{ id: string }>>;
+  };
+  inventoryTransaction: { findFirst: (args: any) => Promise<{ createdAt: Date } | null> };
+  orderItem: { findMany: (args: any) => Promise<Array<{ quantity: number; refundedQuantity: number }>> };
+  layaway: { findMany: (args: any) => Promise<Array<{ items: unknown }>> };
+}
+
+/**
+ * Conservative capacity for a BOTH (buy-or-rent) gown until physical rental
+ * units exist: ONE rentable gown per product — and it is gone once sold.
+ *
+ * Refuses (409 NOT_AVAILABLE_FOR_RENTAL) when, under the product lock:
+ *  1. no active-variant stock is left; or
+ *  2. a sale of the product is still in force (order not CANCELLED/REFUNDED,
+ *     line not fully refunded) SINCE THE LAST VERIFIED RESTOCK — an admin
+ *     `RESTOCK` inventory transaction (Inventory → adjust, audited with
+ *     performedBy). Seeded stock numbers are NOT evidence of another gown;
+ *     a recorded restock is; or
+ *  3. an ACTIVE layaway holds the gown (promised to a buyer).
+ *
+ * RENTAL_ONLY products are never sold, so none of this applies to them.
+ * Never changes stock or any data.
+ */
+export async function assertBothGownStillRentable(
+  tx: RentTxLike,
+  tenantId: string,
+  productId: string,
+): Promise<void> {
+  const refuse = (why: string) =>
+    new ConflictException({
+      statusCode: 409,
+      error: 'Conflict',
+      code: NOT_AVAILABLE_FOR_RENTAL,
+      reason: why,
+      message: 'This gown is not available to rent.',
+    });
+
+  const stock = await tx.productVariant.aggregate({
+    where: { productId, tenantId, isActive: true },
+    _sum: { stock: true },
+  });
+  if ((stock?._sum?.stock ?? 0) <= 0) throw refuse('SOLD_OUT');
+
+  const lastRestock = await tx.inventoryTransaction.findFirst({
+    where: { tenantId, productId, type: 'RESTOCK', quantityChange: { gt: 0 } },
+    orderBy: { createdAt: 'desc' },
+    select: { createdAt: true },
+  });
+  const sold = await tx.orderItem.findMany({
+    where: {
+      productId,
+      order: {
+        tenantId,
+        status: { notIn: SALE_VOID_ORDER_STATUSES },
+        ...(lastRestock ? { createdAt: { gt: lastRestock.createdAt } } : {}),
+      },
+    },
+    select: { quantity: true, refundedQuantity: true },
+    take: 50,
+  });
+  if (sold.some((l) => (l.refundedQuantity ?? 0) < l.quantity)) {
+    throw refuse(lastRestock ? 'SOLD_SINCE_LAST_RESTOCK' : 'SOLD_NO_VERIFIED_RESTOCK');
+  }
+
+  const variantIds = new Set((await tx.productVariant.findMany({ where: { productId, tenantId }, select: { id: true } })).map((v) => v.id));
+  const layaways = await tx.layaway.findMany({ where: { tenantId, status: 'ACTIVE' }, select: { items: true }, take: 500 });
+  const held = layaways.some((l) => Array.isArray(l.items) && (l.items as any[]).some((it) => it && variantIds.has(String(it.variantId))));
+  if (held) throw refuse('ON_LAYAWAY');
+}
