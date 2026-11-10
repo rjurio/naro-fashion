@@ -24,6 +24,7 @@ import {
 } from './payment-settlement.service';
 import { ownerScope, isAdminUser } from '../auth/util/ownership';
 import { canTransitionPayment } from '../pos/payment-verification';
+import { withConfirmation } from './payment-confirmation';
 
 /** Order statuses that can never take a new payment. */
 const UNPAYABLE_ORDER_STATUSES = ['CANCELLED', 'REFUNDED'];
@@ -672,10 +673,11 @@ export class PaymentsService {
       throw new NotFoundException('Order not found');
     }
 
-    return this.prisma.payment.findMany({
+    const rows = await this.prisma.payment.findMany({
       where: { orderId, tenantId },
       orderBy: { createdAt: 'desc' },
     });
+    return rows.map(withConfirmation);
   }
 
   async findByRental(rentalOrderId: string, user: any) {
@@ -688,13 +690,14 @@ export class PaymentsService {
       throw new NotFoundException('Rental order not found');
     }
 
-    return this.prisma.payment.findMany({
+    const rows = await this.prisma.payment.findMany({
       where: { rentalOrderId, tenantId },
       orderBy: { createdAt: 'desc' },
     });
+    return rows.map(withConfirmation);
   }
 
-  async updateStatus(id: string, dto: UpdatePaymentDto) {
+  async updateStatus(id: string, dto: UpdatePaymentDto, actorId?: string) {
     const tenantId = this.tenantContext.requireId;
 
     const payment = await this.prisma.payment.findFirst({
@@ -726,9 +729,28 @@ export class PaymentsService {
         message: `A ${payment.status} payment can't be changed to ${dto.status}.`,
       });
     }
+    const supplied =
+      dto.gatewayResponse && typeof dto.gatewayResponse === 'object' ? (dto.gatewayResponse as any) : {};
+    // A person marking a payment paid (or refunded) here is a MANUAL
+    // confirmation: stamp who and when, so it is never shown as
+    // provider-confirmed (payments/payment-confirmation.ts). The stamp is
+    // written last, so a supplied gatewayResponse can't remove or fake it.
+    const manualStamp =
+      dto.status !== payment.status && (dto.status === 'COMPLETED' || dto.status === 'REFUNDED')
+        ? {
+            manualStatusChange: {
+              from: payment.status,
+              to: dto.status,
+              byAdminId: actorId ?? null,
+              at: new Date().toISOString(),
+              providerVerified: false,
+            },
+          }
+        : {};
+    const { _settlement: _ignored, ...safeSupplied } = supplied;
     const merged =
-      dto.gatewayResponse && typeof dto.gatewayResponse === 'object'
-        ? { ...existing, ...(dto.gatewayResponse as any) }
+      Object.keys(safeSupplied).length > 0 || Object.keys(manualStamp).length > 0
+        ? { ...existing, ...safeSupplied, ...manualStamp }
         : undefined;
     const claimed = await this.prisma.payment.updateMany({
       where: { id, tenantId, status: payment.status },

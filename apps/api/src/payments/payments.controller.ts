@@ -106,8 +106,9 @@ export class PaymentsController {
   updateStatus(
     @Param('id') id: string,
     @Body() dto: UpdatePaymentDto,
+    @CurrentUser('id') actorId: string,
   ) {
-    return this.paymentsService.updateStatus(id, dto);
+    return this.paymentsService.updateStatus(id, dto, actorId);
   }
 
   /**

@@ -33,6 +33,7 @@ import {
   isNonCash,
   verifyTenders,
 } from './payment-verification';
+import { withConfirmation } from '../payments/payment-confirmation';
 export interface PosActor {
   id: string;
   role?: string;
@@ -1163,11 +1164,16 @@ export class PosService {
       subtotal: Number(order.subtotal),
       discount: Number(order.discount),
       total: Number(order.total),
-      payments: completed.map((p) => ({
-        method: p.method,
-        amount: Number(meta(p).tendered ?? p.amount),
-        transactionRef: p.transactionRef,
-      })),
+      payments: completed.map((p) => {
+        const c = withConfirmation(p);
+        return {
+          method: p.method,
+          amount: Number(meta(p).tendered ?? p.amount),
+          transactionRef: p.transactionRef,
+          confirmationState: c.confirmationState,
+          confirmationLabel: c.confirmationLabel,
+        };
+      }),
       changeDue: changeDue > 0 ? changeDue : 0,
     };
   }

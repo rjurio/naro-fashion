@@ -33,7 +33,16 @@ describe('PATCH /payments/:id (PaymentsService.updateStatus) — no silent histo
     await svc.updateStatus('p1', { status: 'COMPLETED', gatewayResponse: { note: 'bank statement 12 Nov' } } as any);
     expect(prisma.payment.updateMany).toHaveBeenCalledWith({
       where: { id: 'p1', tenantId: T, status: 'PENDING' },
-      data: { status: 'COMPLETED', gatewayResponse: { provider: 'selcom', ref: 'S1', note: 'bank statement 12 Nov' } },
+      data: {
+        status: 'COMPLETED',
+        gatewayResponse: {
+          provider: 'selcom',
+          ref: 'S1',
+          note: 'bank statement 12 Nov',
+          // a person marked it paid: recorded as manual, never provider-verified
+          manualStatusChange: expect.objectContaining({ from: 'PENDING', to: 'COMPLETED', providerVerified: false }),
+        },
+      },
     });
     expect(prisma.payment.update).not.toHaveBeenCalled();
     expect(settlement.settleParents).toHaveBeenCalled();
