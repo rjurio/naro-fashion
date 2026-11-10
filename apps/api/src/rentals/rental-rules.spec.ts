@@ -135,7 +135,13 @@ describe('RentalsService.update — date edits re-check availability under the a
     };
     const tx: any = {
       $executeRaw: jest.fn().mockResolvedValue(1),
-      rentalOrder: { count: jest.fn().mockResolvedValue(1), update: jest.fn() },
+      rentalOrder: {
+        // another booking right after r1: extending r1 to 10-12 overlaps it
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'r2', status: 'DOWN_PAYMENT_PAID', startDate: new Date('2026-10-10T07:00:00Z'), returnDate: new Date('2026-10-13T07:00:00Z'), actualReturnDate: null },
+        ]),
+        update: jest.fn(),
+      },
     };
     const prisma: any = {
       rentalOrder: { findFirst: jest.fn().mockResolvedValue(rental) },
@@ -148,7 +154,7 @@ describe('RentalsService.update — date edits re-check availability under the a
       ConflictException,
     );
     expect(tx.$executeRaw).toHaveBeenCalled();
-    const where = tx.rentalOrder.count.mock.calls[0][0].where;
+    const where = tx.rentalOrder.findMany.mock.calls[0][0].where;
     expect(where.id).toEqual({ not: 'r1' });
     expect(where.status.notIn).toContain('CANCELLED');
     expect(tx.rentalOrder.update).not.toHaveBeenCalled();

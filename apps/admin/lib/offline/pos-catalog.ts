@@ -25,6 +25,8 @@ export interface PosCatalogVariant {
 export interface PosCatalogProduct {
   id: string;
   name: string;
+  /** PURCHASE_ONLY | RENTAL_ONLY | BOTH (absent in snapshots saved before Nov 2026). */
+  availabilityMode?: string;
   sku: string | null;
   categoryId: string | null;
   categoryName: string | null;

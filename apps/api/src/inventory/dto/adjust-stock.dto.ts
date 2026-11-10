@@ -1,5 +1,7 @@
-import { IsString, IsInt, IsOptional, IsPositive } from 'class-validator';
+import { IsString, IsInt, IsOptional, IsPositive, IsIn, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
+
+export const ADJUST_STOCK_TYPES = ['RESTOCK', 'ADJUSTMENT', 'DAMAGE'];
 
 export class AdjustStockDto {
   @IsString()
@@ -9,8 +11,13 @@ export class AdjustStockDto {
   @IsString()
   variantId?: string;
 
-  @IsString()
-  type: string; // RESTOCK|ADJUSTMENT|DAMAGE
+  /**
+   * Only the three manual types the admin Inventory page offers. SALE /
+   * RENTAL_OUT rows are written by the sale code itself, never by hand.
+   * Only RESTOCK can make a sold buy-or-rent gown rentable again.
+   */
+  @IsIn(ADJUST_STOCK_TYPES)
+  type: string;
 
   @IsInt()
   @IsPositive()
@@ -19,6 +26,7 @@ export class AdjustStockDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   note?: string;
 
   @IsOptional()

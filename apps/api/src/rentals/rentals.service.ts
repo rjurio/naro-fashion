@@ -19,6 +19,8 @@ import {
   computeLateFee,
   resolveReturnedAt,
 } from './rental-rules';
+import { notAvailableForRental } from './rental-sale-guard';
+import { findRentalAvailabilityBlock, RentalBlockReason } from './rental-availability';
 
 @Injectable()
 export class RentalsService {
@@ -75,7 +77,7 @@ export class RentalsService {
     const variant = await this.prisma.productVariant.findUnique({
       where: { id: dto.variantId, tenantId },
     });
-    if (!variant || variant.productId !== dto.productId) {
+    if (!variant || variant.productId !== dto.productId || variant.isActive === false) {
       throw new NotFoundException('Product variant not found');
     }
 
@@ -108,17 +110,11 @@ export class RentalsService {
       );
     }
 
-    const available = await this.checkAvailability(
-      dto.productId,
-      startDate,
-      returnDate,
-      bufferDays,
-    );
-    if (!available) {
-      throw new ConflictException(
-        'Product is not available for the selected dates',
-      );
-    }
+    // Fast pre-check for a quick answer: the SAME rule the availability
+    // endpoint uses. Not trusted: it is repeated under the lock below.
+    const query = { tenantId, product, startDate, returnDate, bufferDays };
+    const early = await findRentalAvailabilityBlock(this.prisma, query);
+    if (early) throw this.bookingRefusal(early);
 
     // New pricing: flat rental price for the entire rental within maxRentalDays.
     // If returned within maxRentalDays → customer pays only the flat price.
@@ -150,35 +146,17 @@ export class RentalsService {
 
     const rentalNumber = `RNT-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
-    // The pre-check above (checkAvailability) is a fast fail for UX, but it and
-    // the insert are two separate statements — two concurrent bookings for the
-    // same gown over overlapping dates would both see overlapping===0 and both
-    // get created, violating the single-item availability + 7-day buffer. Do
-    // the authoritative check inside a transaction serialized by a per-product
-    // advisory lock so only one booking for a given product runs at a time.
-    const bufferMs = bufferDays * 24 * 60 * 60 * 1000;
-    const bufferedStart = new Date(startDate.getTime() - bufferMs);
-    const bufferedEnd = new Date(returnDate.getTime() + bufferMs);
-
+    // The pre-check above and the insert are separate statements: a booking
+    // or sale committed in between would be missed. So the authoritative
+    // check runs again INSIDE the transaction, after the per-product advisory
+    // lock that every booking and every sale path takes
+    // (pg_advisory_xact_lock(hashtext(productId))). Only one of them runs
+    // for a given gown at a time, and each sees what the previous committed.
     return this.prisma.$transaction(async (tx) => {
-      // Advisory lock keyed by product id (auto-released at tx end). hashtext
-      // maps the cuid to an int the lock function accepts.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dto.productId}))`;
 
-      const overlapping = await tx.rentalOrder.count({
-        where: {
-          tenantId,
-          productId: dto.productId,
-          status: { notIn: NON_BLOCKING_RENTAL_STATUSES },
-          startDate: { lt: bufferedEnd },
-          returnDate: { gt: bufferedStart },
-        },
-      });
-      if (overlapping > 0) {
-        throw new ConflictException(
-          'Product is not available for the selected dates',
-        );
-      }
+      const blocked = await findRentalAvailabilityBlock(tx, query);
+      if (blocked) throw this.bookingRefusal(blocked);
 
       return tx.rentalOrder.create({
         data: {
@@ -391,6 +369,12 @@ export class RentalsService {
     endDate: Date,
   ) {
     const tenantId = this.tenantContext.requireId;
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      throw new BadRequestException('startDate and endDate must be valid dates');
+    }
+    if (startDate >= endDate) {
+      throw new BadRequestException('endDate must be after startDate');
+    }
     const product = await this.prisma.product.findUnique({
       where: { id: productId, tenantId },
     });
@@ -404,14 +388,17 @@ export class RentalsService {
     const bufferDays =
       product.bufferDaysOverride ?? policy?.bufferDaysBetweenRentals ?? 7;
 
-    const available = await this.checkAvailability(
-      productId,
+    // Exactly the rule a booking is checked against (and re-checked under
+    // the lock), so a sold, held or overdue gown is never shown as free.
+    const blocked = await findRentalAvailabilityBlock(this.prisma, {
+      tenantId,
+      product,
       startDate,
-      endDate,
+      returnDate: endDate,
       bufferDays,
-    );
+    });
 
-    return { productId, startDate, endDate, available, bufferDays };
+    return { productId, startDate, endDate, available: blocked === null, bufferDays };
   }
 
   async getUpcomingPickups(days: number) {
@@ -500,23 +487,21 @@ export class RentalsService {
     if (rentalDays > maxDuration) {
       throw new BadRequestException(`Rental duration exceeds maximum of ${maxDuration} days`);
     }
-    const bufferMs = bufferDays * 24 * 60 * 60 * 1000;
-    const bufferedStart = new Date(startDate.getTime() - bufferMs);
-    const bufferedEnd = new Date(returnDate.getTime() + bufferMs);
-
     return this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${rental.productId}))`;
-      const overlapping = await tx.rentalOrder.count({
-        where: {
-          tenantId,
-          productId: rental.productId,
-          id: { not: id },
-          status: { notIn: NON_BLOCKING_RENTAL_STATUSES },
-          startDate: { lt: bufferedEnd },
-          returnDate: { gt: bufferedStart },
-        },
+      // Same date-window rule as a booking (RETURNED / INSPECTION still hold
+      // their window), excluding this rental. The gown is already committed
+      // to this customer, so the sale / overdue rules are not re-applied.
+      const blocked = await findRentalAvailabilityBlock(tx, {
+        tenantId,
+        product: { id: rental.productId, availabilityMode: 'RENTAL_ONLY' },
+        startDate,
+        returnDate,
+        bufferDays,
+        excludeRentalId: id,
+        scope: 'reschedule',
       });
-      if (overlapping > 0) {
+      if (blocked) {
         throw new ConflictException('Product is not available for the selected dates');
       }
       return tx.rentalOrder.update({ where: { id }, data, include });
@@ -560,26 +545,20 @@ export class RentalsService {
     });
   }
 
-  private async checkAvailability(
-    productId: string,
-    startDate: Date,
-    endDate: Date,
-    bufferDays: number,
-  ): Promise<boolean> {
-    const bufferMs = bufferDays * 24 * 60 * 60 * 1000;
-    const bufferedStart = new Date(startDate.getTime() - bufferMs);
-    const bufferedEnd = new Date(endDate.getTime() + bufferMs);
-
-    const overlapping = await this.prisma.rentalOrder.count({
-      where: {
-        tenantId: this.tenantContext.requireId,
-        productId,
-        status: { notIn: NON_BLOCKING_RENTAL_STATUSES },
-        startDate: { lt: bufferedEnd },
-        returnDate: { gt: bufferedStart },
-      },
-    });
-
-    return overlapping === 0;
+  /** Customer-facing refusal for a booking (never another customer's details). */
+  private bookingRefusal(reason: RentalBlockReason) {
+    if (reason === 'NOT_RENTABLE_PRODUCT') {
+      return new BadRequestException('Product is not available for rental');
+    }
+    if (reason === 'DATES_TAKEN' || reason === 'OVERDUE_RETURN') {
+      return new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        code: 'NOT_AVAILABLE_FOR_DATES',
+        reason,
+        message: 'Product is not available for the selected dates',
+      });
+    }
+    return notAvailableForRental(reason);
   }
 }

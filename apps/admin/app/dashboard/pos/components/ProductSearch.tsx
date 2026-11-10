@@ -6,6 +6,7 @@ import adminApi, { isOfflineError } from '../../../../lib/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import type { PosCatalogApi } from '../hooks/usePosCatalog';
 import type { PosCatalogProduct } from '@/lib/offline/pos-catalog';
+import { posSaleBlock, POS_SALE_BLOCK_LABEL } from '@/lib/pos-sale-eligibility';
 
 interface Variant {
   id: string;
@@ -22,6 +23,8 @@ interface Variant {
 interface Product {
   id: string;
   name: string;
+  /** PURCHASE_ONLY | RENTAL_ONLY | BOTH. RENTAL_ONLY is never sold at the POS. */
+  availabilityMode?: string;
   basePrice: number;
   sku: string | null;
   variants: Variant[];
@@ -41,6 +44,8 @@ interface CartItem {
   stock: number;
   imageUrl?: string;
   itemDiscount?: number;
+  /** Kept so an offline "Complete sale" can refuse buy-or-rent gowns. */
+  availabilityMode?: string;
 }
 
 interface Props {
@@ -57,6 +62,7 @@ function toSearchProduct(p: PosCatalogProduct): Product {
   return {
     id: p.id,
     name: p.name,
+    availabilityMode: p.availabilityMode,
     basePrice: 0,
     sku: p.sku,
     variants: p.variants,
@@ -91,7 +97,12 @@ function playBeep(success: boolean) {
   }
 }
 
-type ScanFeedback = { type: 'success'; productName: string } | { type: 'error'; code: string } | null;
+type ScanFeedback =
+  | { type: 'success'; productName: string }
+  | { type: 'error'; code: string }
+  | { type: 'rentalOnly'; productName: string }
+  | { type: 'needsOnline'; productName: string }
+  | null;
 
 export default function ProductSearch({ onAddToCart, categories, catalog, offline }: Props) {
   const [query, setQuery] = useState('');
@@ -158,6 +169,12 @@ export default function ProductSearch({ onAddToCart, categories, catalog, offlin
 
   const addLocalBarcode = useCallback((code: string): boolean => {
     const hit = catalogRef.current.lookupBarcode(code);
+    const block = hit ? posSaleBlock(hit.product.availabilityMode, true) : null;
+    if (hit && block) {
+      playBeep(false);
+      showFeedback({ type: block === 'RENTAL_ONLY' ? 'rentalOnly' : 'needsOnline', productName: hit.product.name });
+      return true; // handled: found, but not for sale here
+    }
     if (!hit || hit.variant.stock <= 0) return false;
     onAddToCart({
       productId: hit.product.id,
@@ -170,6 +187,7 @@ export default function ProductSearch({ onAddToCart, categories, catalog, offlin
       unitPrice: Number(hit.variant.price),
       stock: hit.variant.stock,
       imageUrl: hit.product.imageUrl ?? undefined,
+      availabilityMode: hit.product.availabilityMode,
     });
     playBeep(true);
     showFeedback({ type: 'success', productName: hit.product.name });
@@ -191,7 +209,10 @@ export default function ProductSearch({ onAddToCart, categories, catalog, offlin
     }
     try {
       const variant = await adminApi.posLookupBarcode(code);
-      if (variant) {
+      if (variant && posSaleBlock(variant.product?.availabilityMode) === 'RENTAL_ONLY') {
+        playBeep(false);
+        showFeedback({ type: 'rentalOnly', productName: variant.product.name });
+      } else if (variant) {
         onAddToCart({
           productId: variant.product.id,
           variantId: variant.id,
@@ -203,6 +224,7 @@ export default function ProductSearch({ onAddToCart, categories, catalog, offlin
           unitPrice: Number(variant.price),
           stock: variant.stock,
           imageUrl: variant.product.images?.[0]?.url,
+          availabilityMode: variant.product?.availabilityMode,
         });
         playBeep(true);
         showFeedback({ type: 'success', productName: variant.product.name });
@@ -230,7 +252,7 @@ export default function ProductSearch({ onAddToCart, categories, catalog, offlin
   });
 
   const handleAddVariant = (product: Product, variant: Variant) => {
-    if (variant.stock <= 0) return;
+    if (variant.stock <= 0 || posSaleBlock(product.availabilityMode, offline || usingLocal)) return;
     onAddToCart({
       productId: product.id,
       variantId: variant.id,
@@ -242,6 +264,7 @@ export default function ProductSearch({ onAddToCart, categories, catalog, offlin
       unitPrice: Number(variant.price),
       stock: variant.stock,
       imageUrl: product.images?.[0]?.url,
+      availabilityMode: product.availabilityMode,
     });
   };
 
@@ -260,6 +283,10 @@ export default function ProductSearch({ onAddToCart, categories, catalog, offlin
         }`}>
           {scanFeedback.type === 'success' ? (
             <><CheckCircle className="w-4 h-4" /> Added: {scanFeedback.productName}</>
+          ) : scanFeedback.type === 'rentalOnly' ? (
+            <><XCircle className="w-4 h-4" /> {scanFeedback.productName} is rental only — it cannot be sold.</>
+          ) : scanFeedback.type === 'needsOnline' ? (
+            <><XCircle className="w-4 h-4" /> {scanFeedback.productName} is a buy-or-rent gown — it can only be sold while online.</>
           ) : (
             <><XCircle className="w-4 h-4" /> Barcode not found: {scanFeedback.code}</>
           )}
@@ -421,6 +448,17 @@ export default function ProductSearch({ onAddToCart, categories, catalog, offlin
                 <h4 className="text-sm font-medium text-[hsl(var(--foreground))] truncate">
                   {product.name}
                 </h4>
+                {(() => {
+                  const block = posSaleBlock(product.availabilityMode, offline || usingLocal);
+                  return block ? (
+                    <span
+                      className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                      data-testid={block === 'RENTAL_ONLY' ? 'pos-rental-only' : 'pos-needs-online'}
+                    >
+                      {POS_SALE_BLOCK_LABEL[block]}
+                    </span>
+                  ) : null;
+                })()}
                 <p className="text-xs text-[hsl(var(--muted-foreground))]">
                   {product.category?.name} {product.sku ? `• ${product.sku}` : ''}
                 </p>
@@ -428,13 +466,17 @@ export default function ProductSearch({ onAddToCart, categories, catalog, offlin
             </div>
 
             <div className="grid grid-cols-1 gap-1.5">
-              {product.variants.map((variant) => (
+              {product.variants.map((variant) => {
+                const block = posSaleBlock(product.availabilityMode, offline || usingLocal);
+                const sellable = variant.stock > 0 && !block;
+                return (
                 <button
                   key={variant.id}
                   onClick={() => handleAddVariant(product, variant)}
-                  disabled={variant.stock <= 0}
+                  disabled={!sellable}
+                  title={block ? POS_SALE_BLOCK_LABEL[block] : undefined}
                   className={`flex items-center justify-between px-3 py-2 rounded text-xs transition-colors ${
-                    variant.stock > 0
+                    sellable
                       ? 'hover:bg-brand-gold/10 border border-[hsl(var(--border))]'
                       : 'opacity-40 cursor-not-allowed border border-transparent'
                   }`}
@@ -459,12 +501,13 @@ export default function ProductSearch({ onAddToCart, categories, catalog, offlin
                     <span className="font-medium text-[hsl(var(--foreground))]">
                       {Number(variant.price).toLocaleString()} TZS
                     </span>
-                    {variant.stock > 0 && (
+                    {sellable && (
                       <Plus className="w-4 h-4 text-brand-gold" />
                     )}
                   </div>
                 </button>
-              ))}
+                );
+              })}
             </div>
           </div>
         ))}
