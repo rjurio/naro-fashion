@@ -33,7 +33,7 @@ export function posSaleBlock(availabilityMode?: string | null, offline = false):
 
 export const POS_SALE_BLOCK_LABEL: Record<'RENTAL_ONLY' | 'NEEDS_ONLINE', string> = {
   RENTAL_ONLY: 'Rental only — not for sale',
-  NEEDS_ONLINE: 'Buy-or-rent gown — sell it online only (bookings must be checked)',
+  NEEDS_ONLINE: 'Buy-or-rent item — sell it online only (bookings must be checked)',
 };
 
 /** Cart lines that can't be sold offline (checked again at "Complete sale"). */

@@ -408,7 +408,7 @@
     "returnDate": "Return Date",
     "bufferDaysNote": "{buffer}-day buffer between rentals. Max {max} days.",
     "checkingAvailability": "Checking availability...",
-    "notAvailable": "Not available for selected dates. Please choose different dates.",
+    "notAvailable": "This item isn't available to rent for the dates you chose. Please choose different dates.",
     "availableForDates": "Available for selected dates",
     "priceBreakdown": "Price Breakdown",
     "rentalFeeLine": "Rental fee ({days} {unit} x {rate})",

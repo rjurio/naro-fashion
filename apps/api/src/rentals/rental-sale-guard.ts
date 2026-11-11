@@ -84,9 +84,9 @@ export async function assertNotReservedForRental(
   const open = await findOpenRentalObligations(tx, tenantId, ids);
   if (open.length === 0) return;
 
-  const nameOf = new Map(products.map((p) => [p.id, p.name || 'This gown']));
+  const nameOf = new Map(products.map((p) => [p.id, p.name || 'This item']));
   const blockedIds = [...new Set(open.map((o) => o.productId))];
-  const names = blockedIds.map((id) => nameOf.get(id) ?? 'This gown');
+  const names = blockedIds.map((id) => nameOf.get(id) ?? 'This item');
 
   if (audience === 'customer') {
     throw new ConflictException({
@@ -199,7 +199,7 @@ export function notAvailableForRental(reason: string): ConflictException {
     error: 'Conflict',
     code: NOT_AVAILABLE_FOR_RENTAL,
     reason,
-    message: 'This gown is not available to rent.',
+    message: 'This item is not available to rent.',
   });
 }
 

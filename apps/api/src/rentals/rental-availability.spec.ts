@@ -27,6 +27,8 @@ interface FakeOpts {
   isActive?: boolean;
   deletedAt?: Date | null;
   bufferDays?: number;
+  /** Override product fields (e.g. a bouquet configured like production). */
+  product?: Record<string, any>;
 }
 
 function makeDb(opts: FakeOpts = {}) {
@@ -36,6 +38,7 @@ function makeDb(opts: FakeOpts = {}) {
       isActive: opts.isActive ?? true, deletedAt: opts.deletedAt ?? null, archivedAt: null,
       rentalPricePerDay: 140000, rentalDepositAmount: 350000, rentalDownPaymentPct: 25,
       bufferDaysOverride: opts.bufferDays ?? null, purchasePrice: 100,
+      ...(opts.product ?? {}),
     } as any,
     otherProduct: { id: 'p2', tenantId: T, name: 'Other', availabilityMode: 'PURCHASE_ONLY', isActive: true, deletedAt: null, purchasePrice: 0 } as any,
     stock: opts.stock ?? 1,
@@ -466,5 +469,80 @@ describe('offline POS (admin helper)', () => {
     const search = readFileSync(join(admin, 'components', 'ProductSearch.tsx'), 'utf8');
     expect(search).toMatch(/availabilityMode: product\.availabilityMode,/);
     expect(search).toMatch(/type: 'needsOnline'/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Not every rentable product is a gown (owner decision 2026-11-11: the
+//    bridal bouquet stays buy-or-rent). Rules key on availabilityMode, never
+//    on the category, and every message is item-neutral.
+// ---------------------------------------------------------------------------
+describe('non-gown rentable items (the bridal bouquet)', () => {
+  // Mirrors the production row read on 2026-11-11 (Flowers, BOTH, stock 11).
+  const bouquet = {
+    name: 'Orange Rose & White Hydrangea Bridal Bouquet', categoryName: 'Flowers',
+    basePrice: 500, rentalPricePerDay: 250, rentalDepositAmount: 50, rentalDownPaymentPct: 25,
+    minRentalDays: 1, maxRentalDays: 7,
+  };
+  const make = (extra: FakeOpts = {}) => makeDb({ mode: 'BOTH', stock: 11, bufferDays: 2, product: bouquet, ...extra });
+
+  it('is rentable and books with its own price, deposit and down payment', async () => {
+    const db = make();
+    expect(await advertised(db, 30)).toBe(true);
+    await db.rentals.create('u1', bookingFor(30) as any);
+    const r = db.state.rentals[0];
+    expect(Number(r.totalRentalPrice)).toBe(250);
+    expect(Number(r.damageDeposit)).toBe(50);
+    expect(Number(r.downPaymentAmount)).toBe(62.5);
+  });
+
+  it('uses its own 2-day buffer (not the 7-day gown default)', async () => {
+    const db = make();
+    db.addRental({ status: 'FULLY_PAID', startDate: at(25), returnDate: at(27) });
+    expect(await advertised(db, 28, 2)).toBe(false);
+    expect(await bookingOutcome(db, 28, 2)).toBe('DATES_TAKEN'); // 1 day after: inside the 2-day buffer
+    expect(await advertised(db, 30, 2)).toBe(true);
+    expect(await bookingOutcome(db, 30, 2)).toBe('BOOKED'); // 3 days after: outside the buffer
+  });
+
+  it('seeded stock 11 is still one rentable unit, and a sale blocks renting until a recorded restock', async () => {
+    const db = make();
+    db.sell(at(-1));
+    expect(await advertised(db, 30)).toBe(false);
+    expect(await bookingOutcome(db, 30)).toBe('SOLD_NO_VERIFIED_RESTOCK');
+  });
+
+  it('the customer refusal never calls it a gown', async () => {
+    const db = make();
+    db.sell(at(-1));
+    const err: any = await db.rentals.create('u1', bookingFor(30) as any).catch((e) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect(JSON.stringify(err.getResponse())).not.toMatch(/gown/i);
+    expect(err.getResponse().message).toBe('This item is not available to rent.');
+  });
+
+  it('a restock without a note is refused with item-neutral wording', async () => {
+    const db = make();
+    const err: any = await db.inventory.adjustStock({ productId: 'p1', variantId: 'v1', type: 'RESTOCK', quantity: 1 } as any, 'admin-7').catch((e) => e);
+    expect(err.getResponse().code).toBe('RESTOCK_REASON_REQUIRED');
+    expect(err.getResponse().message).not.toMatch(/gown/i);
+  });
+
+  it('staff-facing POS and inventory wording is item-neutral', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { readFileSync } = require('fs');
+    const admin = join(__dirname, '..', '..', '..', 'admin');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const ui = require(join(admin, 'lib', 'pos-sale-eligibility'));
+    expect(ui.POS_SALE_BLOCK_LABEL.NEEDS_ONLINE).not.toMatch(/gown/i);
+    for (const rel of ['app/dashboard/pos/page.tsx', 'app/dashboard/pos/components/ProductSearch.tsx', 'app/dashboard/inventory/page.tsx']) {
+      const visible = readFileSync(join(admin, rel), 'utf8')
+        .split('\n')
+        .filter((l: string) => !/^\s*(\/\/|\*|\/\*)/.test(l)) // ignore comments
+        .join('\n');
+      expect([rel, /buy-or-rent gown/i.test(visible)]).toEqual([rel, false]);
+    }
+    const guard = readFileSync(join(__dirname, 'rental-sale-guard.ts'), 'utf8');
+    expect(guard).not.toMatch(/'This gown/);
   });
 });
