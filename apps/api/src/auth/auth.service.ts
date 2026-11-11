@@ -39,8 +39,8 @@ import {
   TWO_FA_ACCOUNT_LIMIT,
   TWO_FA_PER_CHALLENGE_LIMIT,
   WindowCounter,
+  adminLockClears,
   isIpBlockedForAccount,
-  isTrustedNetwork,
 } from './util/admin-lockout';
 
 // Setting keys used to override JWT lifetimes per-tenant via the CMS settings UI.
@@ -449,17 +449,12 @@ export class AuthService {
       await this.logLoginAttempt(row.email, false, tenantId, meta);
       return new UnauthorizedException(GENERIC_LOGIN_ERROR);
     };
-    // Trusted network = this admin fully signed in from this IP recently.
-    let trusted: boolean | undefined;
-    const fromTrustedNetwork = async () => (trusted ??= await isTrustedNetwork(this.prisma as any, row.email, ip, now));
-
     // Tier 1 (per account + IP): one source can't lock the whole account.
     if (await isIpBlockedForAccount(this.prisma as any, row.email, ip, now)) throw await refuse();
 
-    // Tier 2 (per account, distributed): while locked, only trusted networks
-    // may still try (each still capped by tier 1).
-    const accountLocked = !!(row.lockedUntil && row.lockedUntil > now);
-    if (accountLocked && !(await fromTrustedNetwork())) throw await refuse();
+    // Tier 2 (per account, distributed): while locked, refused from every
+    // network. No trusted-network exception (owner decision 2026-11-11).
+    if (row.lockedUntil && row.lockedUntil > now) throw await refuse();
 
     // A lock that has expired starts a fresh window. Conditional so a
     // concurrent request that just re-locked the account isn't undone.
@@ -477,18 +472,16 @@ export class AuthService {
     });
 
     if (reserved.failedLoginAttempts > MAX_FAILED_LOGIN_ATTEMPTS) {
-      if (!accountLocked) {
-        await delegate.update({
-          where: { id: row.id },
-          data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
-        });
-      }
-      if (!(await fromTrustedNetwork())) throw await refuse();
+      await delegate.update({
+        where: { id: row.id },
+        data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
+      });
+      throw await refuse();
     }
 
     const valid = await bcrypt.compare(password, row.passwordHash);
     if (!valid) {
-      if (reserved.failedLoginAttempts >= MAX_FAILED_LOGIN_ATTEMPTS && !accountLocked) {
+      if (reserved.failedLoginAttempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
         await delegate.update({
           where: { id: row.id },
           data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
@@ -1438,8 +1431,10 @@ export class AuthService {
           tokenVersion: { increment: 1 },
         },
       });
-      // Recovery: a reset (proves the mailbox) also clears the code-step limit.
+      // Recovery: a reset (proves the mailbox) also clears the code-step
+      // limit and every per-IP block for this account.
       this.twoFaAccountFailures.clear(`admin:${admin.id}`);
+      adminLockClears.mark(admin.email);
       return { message: 'Password reset successfully' };
     }
 

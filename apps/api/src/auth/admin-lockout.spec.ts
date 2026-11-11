@@ -1,17 +1,22 @@
 import * as bcryptNs from 'bcryptjs';
 import { AuthService, GENERIC_LOGIN_ERROR } from './auth.service';
+import { AdminUsersService } from '../admin-users/admin-users.service';
 import {
   ADMIN_ACCOUNT_FAILURE_LIMIT,
   ADMIN_PER_IP_FAILURE_LIMIT,
   ADMIN_LOCK_WINDOW_MS,
-  ADMIN_TRUSTED_NETWORK_MS,
+  LockClearMarks,
   WindowCounter,
+  isIpBlockedForAccount,
 } from './util/admin-lockout';
 
 /**
- * P0d (round 7): administrator lockout without a single-IP denial of service
- * and without unlimited password guessing. A stateful fake of the admin row
- * and the LoginAttempt log, so the tiers interact as they do in production.
+ * P0d: administrator lockout without a single-IP denial of service and
+ * without unlimited password guessing. No trusted-network exception (owner
+ * decision 2026-11-11): a locked account is refused from every network until
+ * a password reset, an admin unlock or the 30-min expiry. A stateful fake of
+ * the admin row and the LoginAttempt log, so the tiers interact as they do
+ * in production.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -19,11 +24,13 @@ const bcrypt: typeof bcryptNs = require('bcryptjs');
 
 interface Attempt { email: string; isAdmin: boolean; success: boolean; ipAddress: string | null; attemptedAt: Date }
 
+let worldNo = 0;
 function makeWorld(over: Partial<any> = {}) {
+  worldNo += 1;
   let clock = Date.parse('2026-11-11T08:00:00Z');
   const now = () => new Date(clock);
   const attempts: Attempt[] = [];
-  const admin: any = { id: 'a1', email: 'owner@naro.tz', tenantId: 't1', isActive: true, deletedAt: null, role: 'SUPER_ADMIN', is2FAEnabled: false, twoFASecret: null, failedLoginAttempts: 0, lockedUntil: null, tokenVersion: 0, ...over };
+  const admin: any = { id: 'a1', email: `owner${worldNo}@naro.tz`, tenantId: 't1', isActive: true, deletedAt: null, role: 'SUPER_ADMIN', is2FAEnabled: false, twoFASecret: null, failedLoginAttempts: 0, lockedUntil: null, tokenVersion: 0, ...over };
   const matches = (a: Attempt, w: any) =>
     a.email === w.email && (w.isAdmin === undefined || a.isAdmin === w.isAdmin) &&
     (w.ipAddress === undefined || a.ipAddress === w.ipAddress) &&
@@ -31,6 +38,7 @@ function makeWorld(over: Partial<any> = {}) {
     (!w.attemptedAt?.gt || a.attemptedAt > w.attemptedAt.gt);
   const adminDelegate = {
     findUnique: jest.fn(async () => ({ ...admin })),
+    findFirst: jest.fn(async () => ({ ...admin })),
     update: jest.fn(async ({ data, select }: any) => {
       if (data.failedLoginAttempts?.increment) admin.failedLoginAttempts += data.failedLoginAttempts.increment;
       else if (data.failedLoginAttempts === 0) admin.failedLoginAttempts = 0;
@@ -131,45 +139,45 @@ describe('password attempts, per account + IP', () => {
 });
 
 describe('distributed attacks (many IPs)', () => {
-  it(`${ADMIN_ACCOUNT_FAILURE_LIMIT} failures across IPs lock the account for untrusted networks`, async () => {
+  it(`${ADMIN_ACCOUNT_FAILURE_LIMIT} failures across IPs lock the account from every network`, async () => {
     const w = world();
     for (let i = 0; i < ADMIN_ACCOUNT_FAILURE_LIMIT; i++) expect(await w.signIn('wrong', `203.0.113.${i}`)).toBe('WRONG');
     expect(w.admin.lockedUntil).toBeInstanceOf(Date);
     expect(await w.signIn(GOOD, '198.51.100.1')).toBe('REFUSED'); // a new network, even with the right password
   });
 
-  it('…but the owner’s trusted network (a successful sign-in in the last 30 days) still gets in, which clears the lock', async () => {
+  it('no trusted-network exception: the owner’s usual network is refused too while locked', async () => {
     const w = world();
     expect(await w.signIn(GOOD, '10.0.0.5')).toBe('OK'); // owner signed in from the office earlier
     w.tick(3 * 24 * 3600_000);
     for (let i = 0; i < 25; i++) await w.signIn('wrong', `203.0.113.${i}`);
     expect(w.admin.lockedUntil).toBeInstanceOf(Date);
-    expect(await w.signIn(GOOD, '10.0.0.5')).toBe('OK');
-    expect(w.admin.lockedUntil).toBeNull();
-    expect(w.admin.failedLoginAttempts).toBe(0);
+    compareSpy.mockClear();
+    expect(await w.signIn(GOOD, '10.0.0.5')).toBe('REFUSED');
+    expect(compareSpy.mock.calls.filter((c) => c[1] === hash)).toHaveLength(0); // the real hash isn't even checked
+    expect(w.admin.lockedUntil).toBeInstanceOf(Date); // and the lock stays
   });
 
-  it('a trusted network is still capped per IP while the account is locked (no bypass for guessing)', async () => {
+  it('a previously successful network can’t be used to keep guessing during a lock (shared or spoofed IP)', async () => {
     const w = world();
     await w.signIn(GOOD, '10.0.0.5');
     w.tick(1000);
     for (let i = 0; i < ADMIN_ACCOUNT_FAILURE_LIMIT; i++) await w.signIn('wrong', `203.0.113.${i}`);
-    for (let i = 0; i < ADMIN_PER_IP_FAILURE_LIMIT; i++) expect(await w.signIn('wrong', '10.0.0.5')).toBe('WRONG');
-    expect(await w.signIn(GOOD, '10.0.0.5')).toBe('REFUSED');
+    compareSpy.mockClear();
+    for (let i = 0; i < 20; i++) expect(await w.signIn(`guess-${i}`, '10.0.0.5')).toBe('REFUSED');
+    expect(compareSpy.mock.calls.filter((c) => c[1] === hash)).toHaveLength(0);
   });
 
-  it('trust expires after 30 days', async () => {
+  it('bounded guessing: 1,000 attacker IPs, including ones the owner used before, get only 10 real password checks per window', async () => {
     const w = world();
     await w.signIn(GOOD, '10.0.0.5');
-    w.tick(ADMIN_TRUSTED_NETWORK_MS + 1000);
-    for (let i = 0; i < ADMIN_ACCOUNT_FAILURE_LIMIT; i++) await w.signIn('wrong', `203.0.113.${i}`);
-    expect(await w.signIn(GOOD, '10.0.0.5')).toBe('REFUSED');
-  });
-
-  it('bounded guessing: 1,000 attacker IPs get only 10 real password checks per window', async () => {
-    const w = world();
+    await w.signIn(GOOD, '10.0.0.6');
+    w.tick(1000);
     compareSpy.mockClear();
-    for (let i = 0; i < 1000; i++) await w.signIn(`guess-${i}`, `10.${i >> 8}.${i & 255}.9`);
+    for (let i = 0; i < 1000; i++) {
+      const ip = i % 50 === 0 ? `10.0.0.${5 + ((i / 50) % 2)}` : `10.${i >> 8}.${i & 255}.9`;
+      await w.signIn(`guess-${i}`, ip);
+    }
     const realChecks = compareSpy.mock.calls.filter((c) => c[1] === hash).length;
     expect(compareSpy.mock.calls.length).toBe(1000); // every attempt still costs one comparison
     expect(realChecks).toBe(ADMIN_ACCOUNT_FAILURE_LIMIT);
@@ -192,16 +200,92 @@ describe('distributed attacks (many IPs)', () => {
   });
 });
 
-describe('legitimate recovery', () => {
+describe('legitimate administrator access', () => {
+  it('a normal sign-in works, and a few typos below every limit don’t get in the way', async () => {
+    const w = world();
+    expect(await w.signIn(GOOD, '10.0.0.5')).toBe('OK');
+    w.tick(60_000);
+    for (let i = 0; i < ADMIN_PER_IP_FAILURE_LIMIT - 1; i++) expect(await w.signIn('typo', '10.0.0.5')).toBe('WRONG');
+    expect(await w.signIn(GOOD, '10.0.0.5')).toBe('OK');
+    expect(w.admin.failedLoginAttempts).toBe(0);
+    expect(w.admin.lockedUntil).toBeNull();
+  });
+
+  it('a single attacker IP never locks the owner out (tier 1 stops it before the account counter)', async () => {
+    const w = world();
+    for (let i = 0; i < 50; i++) await w.signIn('wrong', '6.6.6.6');
+    expect(w.admin.lockedUntil).toBeNull();
+    expect(await w.signIn(GOOD, '10.0.0.5')).toBe('OK');
+  });
+});
+
+describe('authorised recovery', () => {
+  const resetVia = async (w: ReturnType<typeof world>) => {
+    (w.svc as any).twoFaAccountFailures.hit('admin:a1');
+    await w.svc.resetPassword('token-from-email', 'NewPassw0rd!');
+  };
+
   it('a password reset (proves the mailbox) clears the account lock and the two-factor limit', async () => {
     const w = world();
     for (let i = 0; i < ADMIN_ACCOUNT_FAILURE_LIMIT; i++) await w.signIn('wrong', `203.0.113.${i}`);
-    (w.svc as any).twoFaAccountFailures.hit('admin:a1');
-    w.prisma.adminUser.findFirst = jest.fn(async () => ({ id: 'a1' }));
-    w.prisma.adminUser.update.mockImplementationOnce(async ({ data }: any) => { w.admin.failedLoginAttempts = data.failedLoginAttempts; w.admin.lockedUntil = data.lockedUntil; return {}; });
-    await w.svc.resetPassword('token-from-email', 'NewPassw0rd!');
+    await resetVia(w);
     expect(w.admin.lockedUntil).toBeNull();
+    expect(w.admin.failedLoginAttempts).toBe(0);
     expect((w.svc as any).twoFaAccountFailures.count('admin:a1')).toBe(0);
+  });
+
+  it('…and also lifts the owner’s own per-IP block (5 typos from the office, then a reset)', async () => {
+    const w = world();
+    for (let i = 0; i < ADMIN_PER_IP_FAILURE_LIMIT; i++) await w.signIn('typo', '10.0.0.5');
+    expect(await w.signIn(GOOD, '10.0.0.5')).toBe('REFUSED');
+    w.tick(1000);
+    await resetVia(w);
+    w.tick(1000);
+    expect(await w.signIn(GOOD, '10.0.0.5')).toBe('OK');
+  });
+
+  it('an unlock by another admin (admins:unlock) clears the account lock and per-IP blocks', async () => {
+    const w = world();
+    for (let i = 0; i < ADMIN_PER_IP_FAILURE_LIMIT; i++) await w.signIn('typo', '10.0.0.5');
+    for (let i = 0; i < ADMIN_ACCOUNT_FAILURE_LIMIT; i++) await w.signIn('wrong', `203.0.113.${i}`);
+    expect(w.admin.lockedUntil).toBeInstanceOf(Date);
+    w.tick(1000);
+    const admins = new AdminUsersService(w.prisma, { requireId: 't1' } as any);
+    await admins.unlock('a1');
+    expect(w.prisma.adminUser.findUnique).toHaveBeenCalledWith({ where: { id: 'a1', tenantId: 't1' } });
+    w.tick(1000);
+    expect(await w.signIn(GOOD, '10.0.0.5')).toBe('OK');
+  });
+
+  it('recovery is not a guessing bypass: after a reset, attackers again get at most 10 checks before the next lock', async () => {
+    const w = world();
+    for (let i = 0; i < ADMIN_ACCOUNT_FAILURE_LIMIT; i++) await w.signIn('wrong', `203.0.113.${i}`);
+    await resetVia(w);
+    w.tick(1000);
+    compareSpy.mockClear();
+    for (let i = 0; i < 200; i++) await w.signIn(`guess-${i}`, `198.18.${i >> 8}.${i & 255}`);
+    expect(compareSpy.mock.calls.filter((c) => c[1] === hash)).toHaveLength(ADMIN_ACCOUNT_FAILURE_LIMIT);
+    expect(w.admin.lockedUntil).toBeInstanceOf(Date);
+  });
+
+  it('a lost marker (API restart) fails closed: older failures count again until the window passes', async () => {
+    const now = new Date('2026-11-11T08:30:00Z');
+    const db = {
+      loginAttempt: {
+        findFirst: jest.fn(async () => null),
+        count: jest.fn(async ({ where }: any) => (where.attemptedAt.gt < new Date('2026-11-11T08:10:00Z') ? 5 : 0)),
+      },
+    };
+    expect(await isIpBlockedForAccount(db, 'x@naro.tz', '10.0.0.5', now, undefined)).toBe(true);
+    expect(await isIpBlockedForAccount(db, 'x@naro.tz', '10.0.0.5', now, new Date('2026-11-11T08:20:00Z'))).toBe(false);
+  });
+
+  it('lock-clear marks are per account and case-insensitive', () => {
+    const m = new LockClearMarks();
+    const at = new Date('2026-11-11T08:00:00Z');
+    m.mark('Owner@Naro.tz ', at);
+    expect(m.get('owner@naro.tz')).toEqual(at);
+    expect(m.get('someone@naro.tz')).toBeUndefined();
   });
 });
 

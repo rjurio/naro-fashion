@@ -10,6 +10,7 @@ import { CreateAdminUserDto } from './dto/create-admin-user.dto';
 import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
+import { adminLockClears } from '../auth/util/admin-lockout';
 
 /** The authenticated caller (req.user from JwtStrategy). */
 export interface AdminActor {
@@ -225,6 +226,8 @@ export class AdminUsersService {
   async unlock(id: string) {
     const admin = await this.prisma.adminUser.findUnique({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!admin) throw new NotFoundException('Admin user not found');
+    // Also lift this account's per-IP blocks (tier 1 reads the sign-in log).
+    adminLockClears.mark(admin.email);
     return this.prisma.adminUser.update({
       where: { id },
       data: { failedLoginAttempts: 0, lockedUntil: null },
