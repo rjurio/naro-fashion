@@ -125,3 +125,32 @@ describe('POS never sells an inactive product (Royal Pearl Mermaid Gown case)', 
     expect(err.getResponse().code).toBe('RENTAL_ONLY_NOT_FOR_SALE');
   });
 });
+
+describe('POS search and offline catalog only list active products', () => {
+  const visible = { isActive: true, deletedAt: null, archivedAt: null };
+
+  it('search filters out inactive, deleted and archived products, and disabled variants', async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const service = new PosService({ product: { findMany } } as any, { requireId: 't1' } as any);
+    await service.searchProducts('royal');
+    const arg = findMany.mock.calls[0][0];
+    expect(arg.where).toMatchObject({ tenantId: 't1', ...visible });
+    expect(arg.include.variants.where).toEqual({ isActive: true });
+  });
+
+  it('the offline catalog snapshot uses the same filter, so an offline till never lists them', async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const service = new PosService({ product: { findMany } } as any, { requireId: 't1' } as any);
+    await service.getCatalog();
+    const arg = findMany.mock.calls[0][0];
+    expect(arg.where).toMatchObject({ tenantId: 't1', ...visible });
+    expect(arg.select.variants.where).toEqual({ isActive: true });
+  });
+
+  it('an empty query returns nothing without a database call', async () => {
+    const findMany = jest.fn();
+    const service = new PosService({ product: { findMany } } as any, { requireId: 't1' } as any);
+    await expect(service.searchProducts('')).resolves.toEqual([]);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+});

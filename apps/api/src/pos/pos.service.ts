@@ -411,6 +411,7 @@ export class PosService {
         tenantId: this.tenantContext.requireId,
         isActive: true,
         deletedAt: null,
+        archivedAt: null,
         OR: [
           { name: { contains: query, mode: 'insensitive' } },
           { sku: { contains: query, mode: 'insensitive' } },
@@ -461,7 +462,7 @@ export class PosService {
   async getCatalog(): Promise<PosCatalogResponse> {
     const tenantId = this.tenantContext.requireId;
     const rows = await this.prisma.product.findMany({
-      where: { tenantId, isActive: true, deletedAt: null },
+      where: { tenantId, isActive: true, deletedAt: null, archivedAt: null },
       select: {
         id: true,
         name: true,

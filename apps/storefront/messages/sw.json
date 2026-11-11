@@ -408,7 +408,7 @@
     "returnDate": "Tarehe ya Kurejesha",
     "bufferDaysNote": "Siku {buffer} za kati ya ukodishaji. Upeo siku {max}.",
     "checkingAvailability": "Inakagua upatikanaji...",
-    "notAvailable": "Haipatikani kwa tarehe ulizochagua. Tafadhali chagua tarehe nyingine.",
+    "notAvailable": "Bidhaa hii haipatikani kwa kukodi kwa tarehe ulizochagua. Tafadhali chagua tarehe nyingine.",
     "availableForDates": "Inapatikana kwa tarehe ulizochagua",
     "priceBreakdown": "Mchanganuo wa Bei",
     "rentalFeeLine": "Ada ya kukodisha ({days} {unit} x {rate})",

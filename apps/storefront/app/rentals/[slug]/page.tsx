@@ -93,10 +93,18 @@ export default function RentalDetailPage() {
       toast.success(t('rentals.rentalBookedSuccess'));
       router.push('/account/rentals');
     } catch (err) {
-      // Show the API's reason (incomplete profile, dates taken, too long…).
+      // "Not available" refusals (dates taken, still out, sold) get the
+      // translated, item-neutral message: the same page rents gowns,
+      // bouquets and other items. Other API reasons (incomplete profile,
+      // too long…) are shown as sent.
+      const code = err instanceof ApiError ? (err.data as { code?: string } | null | undefined)?.code : undefined;
       const apiMsg = err instanceof ApiError ? err.message : '';
       const isGeneric = !apiMsg || /^Request failed with status/.test(apiMsg);
-      toast.error(isGeneric ? t('rentals.rentalBookFailed') : apiMsg);
+      if (code === 'NOT_AVAILABLE_FOR_DATES' || code === 'NOT_AVAILABLE_FOR_RENTAL') {
+        toast.error(t('rentals.notAvailable'));
+      } else {
+        toast.error(isGeneric ? t('rentals.rentalBookFailed') : apiMsg);
+      }
     } finally {
       setBooking(false);
     }
