@@ -56,7 +56,7 @@ describe('global rate limiting wiring', () => {
     expect(main).toMatch(/rawBody:\s*true/);
   });
 
-  it('exempts only internal loopback calls without X-Forwarded-For', () => {
+  it('detects direct loopback calls (no X-Forwarded-For) — detection only; the exemption now also needs the AI path + in-process token', () => {
     expect(isInternalLoopbackRequest({ socket: { remoteAddress: '127.0.0.1' }, headers: {} })).toBe(true);
     expect(isInternalLoopbackRequest({ socket: { remoteAddress: '::1' }, headers: {} })).toBe(true);
     // Through nginx: loopback peer but XFF present → throttled normally.
