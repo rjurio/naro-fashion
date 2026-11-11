@@ -19,7 +19,7 @@ import {
   CreateExchangeDto,
 } from './dto';
 import { eatDayBounds } from '../reports/eat-time.util';
-import { assertSellableAtPos } from './pos-sale-eligibility';
+import { assertActiveAtPos, assertSellableAtPos } from './pos-sale-eligibility';
 import { assertNotReservedForRental } from '../rentals/rental-sale-guard';
 
 // ============================================================
@@ -543,6 +543,11 @@ export class PosService {
       },
     });
     if (!variant) throw new NotFoundException('No product found for this barcode.');
+    // Inactive / archived / deleted products (and disabled variants) are hidden
+    // everywhere else; a scan must not bring them back into a sale.
+    if (variant.isActive === false || variant.product?.isActive === false || variant.product?.deletedAt || variant.product?.archivedAt) {
+      throw new NotFoundException('This product is not active and cannot be sold.');
+    }
     return variant;
   }
 
@@ -670,7 +675,7 @@ export class PosService {
     const variantIds = dto.items.map((i) => i.variantId);
     const variants = await this.prisma.productVariant.findMany({
       where: { id: { in: variantIds }, tenantId },
-      include: { product: { select: { id: true, name: true, availabilityMode: true } } },
+      include: { product: { select: { id: true, name: true, availabilityMode: true, isActive: true, deletedAt: true, archivedAt: true } } },
     });
 
     const variantMap = new Map(variants.map((v) => [v.id, v]));
@@ -683,6 +688,7 @@ export class PosService {
     // A RENTAL_ONLY product is never sold — online or offline (an offline
     // replay is rejected and surfaces in the sync drawer for review).
     assertSellableAtPos(dto.items.map((i) => variantMap.get(i.variantId)!.product));
+    assertActiveAtPos(dto.items.map((i) => variantMap.get(i.variantId)));
 
     for (const item of dto.items) {
       const variant = variantMap.get(item.variantId)!;
@@ -1286,13 +1292,14 @@ export class PosService {
     const variantIds = [...new Set(dto.items.map((i) => i.variantId))];
     const found = await this.prisma.productVariant.findMany({
       where: { id: { in: variantIds }, tenantId },
-      select: { id: true, productId: true, product: { select: { name: true, availabilityMode: true } } },
+      select: { id: true, productId: true, isActive: true, product: { select: { name: true, availabilityMode: true, isActive: true, deletedAt: true, archivedAt: true } } },
     });
     if (found.length !== variantIds.length) {
       throw new BadRequestException('One or more layaway items were not found.');
     }
     // A layaway is a purchase paid in instalments — rental-only items can't be on one.
     assertSellableAtPos(found.map((v) => v.product));
+    assertActiveAtPos(found);
 
     // Calculate totals (validated: no negative lines/totals, discount caps)
     const { subtotal, discountAmount, total } = computeSaleTotals(
@@ -1611,7 +1618,7 @@ export class PosService {
     const newVariants = newVariantIds.length
       ? await this.prisma.productVariant.findMany({
           where: { id: { in: newVariantIds }, tenantId },
-          include: { product: { select: { id: true, name: true, availabilityMode: true } } },
+          include: { product: { select: { id: true, name: true, availabilityMode: true, isActive: true, deletedAt: true, archivedAt: true } } },
         })
       : [];
     const newVariantMap = new Map(newVariants.map((v) => [v.id, v]));
@@ -1620,6 +1627,7 @@ export class PosService {
     }
     // Replacement items are sold to the customer — never a rental-only product.
     assertSellableAtPos(dto.newItems.map((ni) => newVariantMap.get(ni.variantId)!.product));
+    assertActiveAtPos(dto.newItems.map((ni) => newVariantMap.get(ni.variantId)));
     for (const ni of dto.newItems) {
       const variant = newVariantMap.get(ni.variantId)!;
       if (variant.stock < ni.quantity) {
