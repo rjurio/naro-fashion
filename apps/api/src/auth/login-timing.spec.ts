@@ -16,6 +16,7 @@ function makePrisma() {
   const delegate = () => ({
     findFirst: jest.fn().mockResolvedValue(null),
     findUnique: jest.fn().mockResolvedValue(null),
+    count: jest.fn().mockResolvedValue(0),
     update: jest.fn().mockResolvedValue({ failedLoginAttempts: 1 }),
     updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     create: jest.fn().mockResolvedValue({}),
@@ -53,7 +54,7 @@ describe('sign-in timing does not reveal whether an account exists', () => {
     ['admin app: unknown email', () => {}, (s) => s.validateUser('nobody@x.tz', 'Wrong1pass', null), 'null'],
     ['admin app: known email, wrong password', (pr) => pr.adminUser.findUnique.mockResolvedValue(admin()), (s) => s.validateUser('adm@x.tz', 'Wrong1pass', null), 'null'],
     ['admin app: locked account', (pr) => pr.adminUser.findUnique.mockResolvedValue(admin({ lockedUntil: new Date(Date.now() + 60_000) })), (s) => s.validateUser('adm@x.tz', 'Wrong1pass', null), 'generic'],
-    ['admin app: over the attempt cap', (pr) => { pr.adminUser.findUnique.mockResolvedValue(admin()); pr.adminUser.update.mockResolvedValueOnce({ failedLoginAttempts: 6 }); }, (s) => s.validateUser('adm@x.tz', 'Wrong1pass', null), 'generic'],
+    ['admin app: over the attempt cap', (pr) => { pr.adminUser.findUnique.mockResolvedValue(admin()); pr.adminUser.update.mockResolvedValueOnce({ failedLoginAttempts: 11 }); }, (s) => s.validateUser('adm@x.tz', 'Wrong1pass', null), 'generic'],
     ['platform: unknown email', () => {}, (s) => s.validatePlatformAdmin('nobody@x.tz', 'Wrong1pass'), 'null'],
     ['platform: known email, wrong password', (pr) => pr.platformAdmin.findUnique.mockResolvedValue(admin()), (s) => s.validatePlatformAdmin('adm@x.tz', 'Wrong1pass'), 'null'],
     ['platform: locked account', (pr) => pr.platformAdmin.findUnique.mockResolvedValue(admin({ lockedUntil: new Date(Date.now() + 60_000) })), (s) => s.validatePlatformAdmin('adm@x.tz', 'Wrong1pass'), 'generic'],

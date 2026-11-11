@@ -5,6 +5,7 @@ import {
   AuthService,
   GENERIC_LOGIN_ERROR,
   TWO_FA_ADMIN_ONLY_ERROR,
+  TWO_FA_CHALLENGE_INVALID_ERROR,
   TWO_FA_INVALID_CODE_ERROR,
   TWO_FA_NOT_CONFIGURED_ERROR,
   TWO_FA_USE_NEW_ENDPOINTS_ERROR,
@@ -212,7 +213,7 @@ function makeFakePrisma(admin: any, platform: any) {
     platformAdmin: statefulDelegate(platform),
     user: { findFirst: jest.fn().mockResolvedValue(null), findUnique: jest.fn().mockResolvedValue(null) },
     tenant: { findUnique: jest.fn().mockResolvedValue({ name: 'Naro Fashion' }) },
-    loginAttempt: { create: jest.fn() },
+    loginAttempt: { create: jest.fn(), count: jest.fn().mockResolvedValue(0), findFirst: jest.fn().mockResolvedValue(null) },
     adminActivityLog: { create: jest.fn() },
     siteSetting: { findMany: jest.fn().mockResolvedValue([]) },
     tenantModule: { findMany: jest.fn().mockResolvedValue([]) },
@@ -448,21 +449,40 @@ describe('AuthService two-factor flows', () => {
       ).rejects.toThrow(TWO_FA_INVALID_CODE_ERROR);
     });
 
-    it('failed codes count toward the lockout; 5th failure locks the account', async () => {
+    it('wrong codes have their own limits: 5 burn the challenge, without touching the password counter', async () => {
       const secret = await enrol();
       const token = service.issueTwoFactorChallenge(admin);
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 4; i++) {
         await expect(service.verifyTwoFactorLogin(token, '000000')).rejects.toThrow(TWO_FA_INVALID_CODE_ERROR);
       }
-      expect(admin.failedLoginAttempts).toBe(5);
-      expect(admin.lockedUntil).toBeInstanceOf(Date);
-      // locked: even the right code gets the generic error
-      await expect(service.verifyTwoFactorLogin(token, codeFor(secret))).rejects.toThrow(GENERIC_LOGIN_ERROR);
-      // and the password step is locked too
-      await expect(service.validateUser('adm@x.tz', 'Correct1pass', null)).rejects.toThrow(GENERIC_LOGIN_ERROR);
+      // 5th wrong code burns this challenge (the password must be entered again)
+      await expect(service.verifyTwoFactorLogin(token, '000000')).rejects.toThrow(TWO_FA_CHALLENGE_INVALID_ERROR);
+      await expect(service.verifyTwoFactorLogin(token, codeFor(secret))).rejects.toThrow(TWO_FA_CHALLENGE_INVALID_ERROR);
+      // the password counter / account lock are untouched by code guesses
+      expect(admin.failedLoginAttempts).toBe(0);
+      expect(admin.lockedUntil).toBeNull();
+      // a fresh challenge with the right code still works
+      await expect(service.verifyTwoFactorLogin(service.issueTwoFactorChallenge(admin), codeFor(secret))).resolves.toMatchObject({ id: 'a1' });
       expect(prisma.adminActivityLog.create).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ action: '2FA_VERIFY_FAILED' }) }),
       );
+    });
+
+    it('10 wrong codes per account (across challenges) lock the code step; a password reset clears it', async () => {
+      const secret = await enrol();
+      for (let c = 0; c < 3; c++) {
+        const token = service.issueTwoFactorChallenge(admin);
+        for (let i = 0; i < 4 && c * 4 + i < 10; i++) {
+          await expect(service.verifyTwoFactorLogin(token, '000000')).rejects.toThrow(TWO_FA_INVALID_CODE_ERROR);
+        }
+      }
+      // locked: even the right code on a new challenge gets the generic error
+      await expect(service.verifyTwoFactorLogin(service.issueTwoFactorChallenge(admin), codeFor(secret))).rejects.toThrow(GENERIC_LOGIN_ERROR);
+      // the password step itself is NOT locked by code guesses
+      await expect(service.validateUser('adm@x.tz', 'Correct1pass', null)).resolves.toMatchObject({ id: 'a1' });
+      // recovery: a password reset clears the code-step limit
+      (service as any).twoFaAccountFailures.clear('admin:a1');
+      await expect(service.verifyTwoFactorLogin(service.issueTwoFactorChallenge(admin), codeFor(secret))).resolves.toMatchObject({ id: 'a1' });
     });
 
     it('rejects an access token presented as a challenge (typ confusion)', async () => {
@@ -548,7 +568,9 @@ describe('AuthService two-factor flows', () => {
       await expect(
         service.verifyTwoFactorLogin(service.issueTwoFactorChallenge(admin), lastRecoveryCodes[3]),
       ).rejects.toThrow(TWO_FA_INVALID_CODE_ERROR);
-      expect(admin.failedLoginAttempts).toBe(1);
+      // counted by the separate two-factor limits, not the password counter
+      expect(admin.failedLoginAttempts).toBe(0);
+      expect((service as any).twoFaAccountFailures.count('admin:a1')).toBe(1);
     });
 
     it('concurrent use of the same recovery code succeeds only once', async () => {
@@ -641,14 +663,19 @@ describe('AuthService two-factor flows', () => {
       await expect(service.verifyTwoFactorLogin(noPt, codeFor(secret))).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
-    it('platform failed codes lock the platform account', async () => {
-      await enrol(platformPrincipal);
-      const token = service.issueTwoFactorChallenge(platform, 'platform');
-      for (let i = 0; i < 5; i++) {
-        await expect(service.verifyTwoFactorLogin(token, '000000')).rejects.toThrow(TWO_FA_INVALID_CODE_ERROR);
+    it('platform wrong codes lock the platform code step (own limits), not the password step', async () => {
+      const secret = await enrol(platformPrincipal);
+      for (let c = 0; c < 3; c++) {
+        const token = service.issueTwoFactorChallenge(platform, 'platform');
+        for (let i = 0; i < 4 && c * 4 + i < 10; i++) {
+          await expect(service.verifyTwoFactorLogin(token, '000000')).rejects.toThrow(TWO_FA_INVALID_CODE_ERROR);
+        }
       }
-      expect(platform.lockedUntil).toBeInstanceOf(Date);
-      await expect(service.validatePlatformAdmin('platform@naro.co.tz', 'Correct1pass')).rejects.toThrow(GENERIC_LOGIN_ERROR);
+      await expect(
+        service.verifyTwoFactorLogin(service.issueTwoFactorChallenge(platform, 'platform'), codeFor(secret)),
+      ).rejects.toThrow(GENERIC_LOGIN_ERROR);
+      expect(platform.lockedUntil).toBeNull();
+      await expect(service.validatePlatformAdmin('platform@naro.co.tz', 'Correct1pass')).resolves.toMatchObject({ id: 'p1' });
     });
 
     it('disable + recovery codes work for platform admins; profile reports state', async () => {
