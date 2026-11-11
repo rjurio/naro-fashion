@@ -83,7 +83,7 @@ describe('storefront rental wiring', () => {
     'rentals.downPayment': 'Lipa kianzio cha 25%',
     'rentals.payDeposit': 'Lipa kianzio cha 25%',
     'rentals.downPaymentLine': 'Kianzio ({pct}% ya ada ya kukodi) — kinahitajika kuthibitisha nafasi',
-    'rentals.remainingBeforeDispatch': 'Lipa salio na amana inayorejeshwa kabla ya kuchukua gauni',
+    'rentals.remainingBeforeDispatch': 'Lipa salio na amana inayorejeshwa kabla ya kuchukua bidhaa',
   };
   const at = (o: any, k: string) => k.split('.').reduce((a, b) => a?.[b], o);
   const placeholders = (s: string) => (s.match(/\{[a-zA-Z]+\}/g) ?? []).sort();
@@ -116,6 +116,48 @@ describe('storefront rental wiring', () => {
     expect(at(sw, 'rentals.remainingBeforeDispatch')).toMatch(/amana inayorejeshwa/);
     // the step's own description confirms it is the down payment that secures the dates
     expect(at(JSON.parse(read('messages/en.json')), 'rentals.payDepositDesc')).toMatch(/^Secures your dates/);
+  });
+
+  // Owner rule 2026-11-11: the CUSTOMER renting -> kodi / kukodi; NARO letting
+  // out -> kodisha / kukodisha. Reviewed key by key in context, not replaced
+  // wholesale.
+  const CUSTOMER_RENTS = [
+    'account.idNeedToVerify', 'auth.joinCommunityDesc', 'auth.welcomeBackDesc', 'footer.footerDesc',
+    'home.heroSubtitle', 'home.rentAGown', 'idVerification.allSetDesc', 'idVerification.verifiedDesc',
+    'pages.faqRentalsContent', 'product.rentFrom', 'product.rentalPrice', 'rentals.pickYourDatesDesc',
+    'rentals.selectRentalPeriod', 'rentals.selectSizeAndDates', 'rentals.title',
+  ];
+  const NARO_LETS_OUT = [
+    'idVerification.uploadPrompt', 'rentals.rentalOnly', 'rentals.noRentalProducts', 'rentals.loadFailed',
+    'home.gownsForRent', 'home.premiumRentalService',
+  ];
+  // Shown for every rentable product (gowns, bouquets, ...): never "gauni".
+  const SHARED_RENTAL = [
+    'rentals.remainingBeforeDispatch', 'rentals.loadFailed', 'rentals.loadMoreFailed',
+    'account.idNeedToVerify', 'idVerification.verifiedDesc', 'pages.faqRentalsContent',
+  ];
+
+  it('customer-side strings use kodi / kukodi; NARO-side strings keep kodisha', () => {
+    const sw = JSON.parse(read('messages/sw.json'));
+    for (const k of CUSTOMER_RENTS) {
+      expect([k, /\bk(u)?kodi\b|\bKodi\b/i.test(at(sw, k)), /kodish/i.test(at(sw, k))]).toEqual([k, true, false]);
+    }
+    for (const k of NARO_LETS_OUT) expect([k, /kodish/i.test(at(sw, k))]).toEqual([k, true]);
+  });
+
+  it('shared rental messages are item-neutral (no gauni / gown)', () => {
+    const sw = JSON.parse(read('messages/sw.json'));
+    const en = JSON.parse(read('messages/en.json'));
+    for (const k of SHARED_RENTAL) {
+      expect([k, /gaun/i.test(at(sw, k)), /gown/i.test(at(en, k))]).toEqual([k, false, false]);
+    }
+  });
+
+  it('the rentals FAQ uses the approved terms: kianzio for the 25%, amana inayorejeshwa for the deposit', () => {
+    const faq: string = at(JSON.parse(read('messages/sw.json')), 'pages.faqRentalsContent');
+    expect(faq).toMatch(/kianzio cha 25%/);
+    expect(faq).toMatch(/Amana inayorejeshwa/);
+    expect(faq).not.toMatch(/mtandaoni|online|kadi/i);
   });
 
   it('no Swahili rental string implies an online payment (none is taken online)', () => {
