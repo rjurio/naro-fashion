@@ -180,7 +180,7 @@ export default function PosPage() {
     const needOnline = offline ? offlineBlockedItems(cartItems) : [];
     if (needOnline.length > 0) {
       toast.error(
-        `${needOnline.map((i) => i.productName).join(', ')}: buy-or-rent gowns can only be sold while online, because their rental bookings must be checked. Remove them or reconnect.`,
+        `${needOnline.map((i) => i.productName).join(', ')}: buy-or-rent items can only be sold while online, because their rental bookings must be checked. Remove them or reconnect.`,
       );
       return;
     }

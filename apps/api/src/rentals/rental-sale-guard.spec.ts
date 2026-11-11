@@ -348,7 +348,7 @@ describe('booking side, strengthened: no renting a gown that was sold (seeded st
     await db.pos.createSale(posSale() as any, 'cashier-1');
     let err: any;
     try { await db.rentals.create('u1', booking() as any); } catch (e) { err = e; }
-    expect(err.getResponse().message).toBe('This gown is not available to rent.');
+    expect(err.getResponse().message).toBe('This item is not available to rent.');
     expect(err.getResponse().code).toBe('NOT_AVAILABLE_FOR_RENTAL');
   });
 
