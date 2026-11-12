@@ -31,9 +31,10 @@ import { DEFAULT_RENTAL_HOLD_TTL_HOURS } from './rental-rules';
  *  | PAYMENT_REVIEW   | an unconfirmed booking with COMPLETED payments    | staff have RENTAL_PAYMENT_REVIEW_HOURS |
  *  |                  | reaches its deadline or pickup day                | (72) to extend, take the rest, or      |
  *  |                  |                                                   | cancel; the dates stay held meanwhile  |
- *  | REFUND_DUE       | a booking is cancelled (by staff or released when | finance staff pay it out and record it |
- *  |                  | the review window ends) with money still held     | (REFUND_RECORDED, audited)             |
- *  | REFUND_RECORDED  | staff recorded the refund payout                  | —                                      |
+ *  | REFUND_DUE       | a booking is cancelled (by staff or released when | an OUTSTANDING liability flag only:    |
+ *  |                  | the review window ends) with money still held     | never treated as refunded; payouts are |
+ *  |                  |                                                   | recorded by the rental refund ledger   |
+ *  |                  |                                                   | (proposed release after P0c)           |
  *  | NO_SHOW_REVIEW   | a CONFIRMED booking not collected by the end of   | staff decide (hand over, reschedule,   |
  *  |                  | its pickup day                                    | cancel); never auto-cancelled          |
  *
@@ -53,7 +54,6 @@ export const HOLD_STATES = [
   'NO_DOWN_PAYMENT',
   'PAYMENT_REVIEW',
   'REFUND_DUE',
-  'REFUND_RECORDED',
   'NO_SHOW_REVIEW',
 ] as const;
 export type HoldState = (typeof HOLD_STATES)[number];

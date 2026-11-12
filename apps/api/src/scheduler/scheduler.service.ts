@@ -525,8 +525,8 @@ export class SchedulerService implements OnModuleInit {
    *       - money received → PAYMENT_REVIEW: staff have
    *         RENTAL_PAYMENT_REVIEW_HOURS (72) to extend, take the rest, or
    *         cancel; the dates stay held meanwhile;
-   *       - PAYMENT_REVIEW not resolved in time → CANCELLED + REFUND_DUE (the
-   *         money is never forfeited; finance staff pay it out and record it);
+   *       - PAYMENT_REVIEW not resolved in time → CANCELLED + REFUND_DUE (an
+   *         outstanding liability: never forfeited, never treated as refunded);
    *     a payment in progress holds an expired booking back only if it was
    *     started BEFORE the expiry, and only for RENTAL_HOLD_PAYMENT_GRACE_MINUTES
    *     after it (default 120) — new attempts can't postpone it;
@@ -769,7 +769,7 @@ export class SchedulerService implements OnModuleInit {
       where: {
         status: { in: CONFIRMED_NOT_COLLECTED_STATUSES },
         pickupDate: { lt: cutoff },
-        OR: [{ holdState: null }, { holdState: { notIn: ['NO_SHOW_REVIEW', 'REFUND_DUE', 'REFUND_RECORDED'] } }],
+        OR: [{ holdState: null }, { holdState: { notIn: ['NO_SHOW_REVIEW', 'REFUND_DUE'] } }],
       },
       select: { id: true, tenantId: true, rentalNumber: true, status: true, pickupDate: true, holdState: true, notes: true },
       take: 500,

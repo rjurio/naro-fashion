@@ -34,7 +34,7 @@ import {
 import { RentalsService } from './rentals.service';
 import { RentalsController } from './rentals.controller';
 import { PERMISSIONS_KEY } from '../auth/decorators/requires-permission.decorator';
-import { ReviewerTwoFactorGuard } from '../id-verification/reviewer-two-factor.guard';
+import { idReview2faForAll, ReviewerTwoFactorGuard } from '../id-verification/reviewer-two-factor.guard';
 import { UNPAID_HOLD_STATUSES } from './rental-rules';
 import { customerIdState } from '../id-verification/id-approval';
 import { SchedulerService } from '../scheduler/scheduler.service';
@@ -546,6 +546,26 @@ describe('ReviewerTwoFactorGuard (owner rule: designated ID reviewers need 2FA)'
     await expect(guard(null).canActivate(ctx({ id: 'x', role: 'STAFF', isAdmin: true }))).rejects.toBeInstanceOf(ForbiddenException);
     await expect(guard(true).canActivate(ctx({ id: 'm', role: 'MANAGER', isAdmin: true }))).resolves.toBe(true);
   });
+  it('ID_REVIEW_2FA_ALL=true ends the temporary SUPER_ADMIN / platform-admin exemption (default off)', async () => {
+    const prev = process.env.ID_REVIEW_2FA_ALL;
+    try {
+      expect(idReview2faForAll(undefined)).toBe(false);
+      expect(idReview2faForAll('TRUE')).toBe(true);
+      process.env.ID_REVIEW_2FA_ALL = 'true';
+      await expect(guard(false).canActivate(ctx({ id: 'a', role: 'SUPER_ADMIN', isAdmin: true }))).rejects.toMatchObject({
+        response: { code: 'TWO_FA_REQUIRED' },
+      });
+      await expect(guard(true).canActivate(ctx({ id: 'a', role: 'SUPER_ADMIN', isAdmin: true }))).resolves.toBe(true);
+      const pf = (on: boolean) =>
+        new ReviewerTwoFactorGuard({ platformAdmin: { findFirst: jest.fn(async () => ({ is2FAEnabled: on })) } } as any);
+      await expect(pf(false).canActivate(ctx({ id: 'p', isPlatformAdmin: true }))).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(pf(true).canActivate(ctx({ id: 'p', isPlatformAdmin: true }))).resolves.toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.ID_REVIEW_2FA_ALL;
+      else process.env.ID_REVIEW_2FA_ALL = prev;
+    }
+  });
+
   it('is wired after PermissionGuard on the ID queue, approve, reject and the ID image route', () => {
     const fs = require('fs');
     const path = require('path');
@@ -557,7 +577,7 @@ describe('ReviewerTwoFactorGuard (owner rule: designated ID reviewers need 2FA)'
 });
 
 // ---------------------------------------------------------------------------
-describe('staff actions: extend a hold, cancel with money held, record a refund', () => {
+describe('staff actions: extend a hold, cancel with money held (REFUND_DUE liability)', () => {
   const tenant = { requireId: 't1' } as any;
   const base = {
     id: 'r1', tenantId: 't1', userId: 'u1', rentalNumber: 'RNT-1', status: 'ID_VERIFIED', holdState: 'PAYMENT_REVIEW',
@@ -611,22 +631,25 @@ describe('staff actions: extend a hold, cancel with money held, record a refund'
     expect(noMoney.prisma.rentalOrder.updateMany.mock.calls[0][0].data).toEqual({ status: 'CANCELLED' });
   });
 
-  it('REFUND_RECORDED: only from CANCELLED + REFUND_DUE, never more than is held, CAS, audited', async () => {
-    const ok = make({ ...base, status: 'CANCELLED', holdState: 'REFUND_DUE' }, { net: 50 });
-    await ok.svc.recordRefund('r1', { amount: 50, method: 'MOBILE_MONEY', reference: 'MP123', note: 'Full refund' });
-    expect(ok.prisma.rentalOrder.updateMany).toHaveBeenCalledWith({
-      where: { id: 'r1', tenantId: 't1', status: 'CANCELLED', holdState: 'REFUND_DUE' },
-      data: { holdState: 'REFUND_RECORDED' },
-    });
-    expect(ok.audit.log).toHaveBeenCalledWith('HOLD_REFUND_RECORDED', 'Rental', 'r1', { amount: 50, held: 50, method: 'MOBILE_MONEY', reference: 'MP123', note: 'Full refund' });
-    await expect(make({ ...base, status: 'CANCELLED', holdState: 'REFUND_DUE' }, { net: 50 }).svc.recordRefund('r1', { amount: 60, method: 'CASH', note: 'x' })).rejects.toThrow(/more than the 50 TZS held/);
-    await expect(make({ ...base, status: 'ID_VERIFIED', holdState: 'PAYMENT_REVIEW' }, { net: 50 }).svc.recordRefund('r1', { amount: 50, method: 'CASH', note: 'x' })).rejects.toThrow(/Only a cancelled booking marked REFUND_DUE/);
-    await expect(make({ ...base, status: 'CANCELLED', holdState: 'REFUND_DUE' }, { net: 50, cas: 0 }).svc.recordRefund('r1', { amount: 50, method: 'CASH', note: 'x' })).rejects.toBeInstanceOf(ConflictException);
+  it('routes: extend needs rentals:update-status', () => {
+    expect(Reflect.getMetadata(PERMISSIONS_KEY, RentalsController.prototype.extendHold)).toEqual(['rentals:update-status']);
   });
 
-  it('routes: extend needs rentals:update-status, refund-recorded needs payments:manage', () => {
-    expect(Reflect.getMetadata(PERMISSIONS_KEY, RentalsController.prototype.extendHold)).toEqual(['rentals:update-status']);
-    expect(Reflect.getMetadata(PERMISSIONS_KEY, RentalsController.prototype.recordRefund)).toEqual(['payments:manage']);
+  it('REFUND_DUE is a liability flag only: no route or method marks money as refunded, and the flag never writes a payment', () => {
+    // Owner rule (round 24): an audit entry is not a financial refund record;
+    // payouts belong to the rental refund ledger (proposed release after P0c).
+    expect((RentalsController.prototype as any).recordRefund).toBeUndefined();
+    expect((RentalsService.prototype as any).recordRefund).toBeUndefined();
+    const fs = require('fs');
+    const path = require('path');
+    const ctl = fs.readFileSync(path.join(__dirname, 'rentals.controller.ts'), 'utf8');
+    expect(ctl).not.toMatch(/refund-recorded|refunds?'\)/);
+    for (const f of ['rentals.service.ts', 'rental-hold.ts', '../scheduler/scheduler.service.ts']) {
+      const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
+      expect([f, /REFUND_RECORDED/.test(src)]).toEqual([f, false]);
+      // the hold code never creates or edits a payment row
+      expect([f, /payment\.(create|update|updateMany|upsert)\(/.test(src)]).toEqual([f, false]);
+    }
   });
 });
 

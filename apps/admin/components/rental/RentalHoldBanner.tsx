@@ -18,8 +18,7 @@ const LABELS: Record<string, string> = {
   AWAITING_DOWN_PAYMENT: 'ID approved, waiting for the down payment',
   NO_DOWN_PAYMENT: 'ID approved, no down payment due: confirm the booking',
   PAYMENT_REVIEW: 'Payment review: money received but the booking expired. Extend it, take the rest, or cancel',
-  REFUND_DUE: 'Refund due: this cancelled booking still holds money paid by the customer',
-  REFUND_RECORDED: 'Refund recorded',
+  REFUND_DUE: 'Refund due: this cancelled booking still holds money paid by the customer. It has NOT been refunded yet (refunds are recorded by finance, see the payments)',
   NO_SHOW_REVIEW: 'No-show: confirmed but not collected by the end of the pickup day. Hand over, reschedule or cancel',
 };
 
@@ -32,9 +31,10 @@ export interface HoldRental {
 
 /**
  * The booking's hold (rentals/rental-hold.ts in the API): what it waits for,
- * until when, and the two staff actions — extend the deadline
- * (rentals:update-status) and record a refund payout (payments:manage).
- * The API enforces every rule; this only offers the actions.
+ * until when, and the staff action to extend the deadline
+ * (rentals:update-status). REFUND_DUE is shown as an outstanding liability
+ * only — this screen never marks money as refunded. The API enforces every
+ * rule; this only offers the action.
  */
 export default function RentalHoldBanner({
   rental,
@@ -46,37 +46,25 @@ export default function RentalHoldBanner({
   onUpdate: (updated: any) => void;
 }) {
   const { toast } = useToast();
-  const [mode, setMode] = useState<'none' | 'extend' | 'refund'>('none');
+  const [mode, setMode] = useState<'none' | 'extend'>('none');
   const [busy, setBusy] = useState(false);
   const [until, setUntil] = useState('');
   const [note, setNote] = useState('');
-  const [amount, setAmount] = useState('');
-  const [method, setMethod] = useState<'MOBILE_MONEY' | 'BANK_TRANSFER' | 'CASH'>('MOBILE_MONEY');
-  const [reference, setReference] = useState('');
 
   const state = rental.holdState ?? '';
   const visible =
-    (HOLD_STATUSES.includes(rental.status) && !!state) || ['REFUND_DUE', 'REFUND_RECORDED', 'NO_SHOW_REVIEW'].includes(state);
+    (HOLD_STATUSES.includes(rental.status) && !!state) || ['REFUND_DUE', 'NO_SHOW_REVIEW'].includes(state);
   if (!visible) return null;
 
   const canExtend = HOLD_STATUSES.includes(rental.status) && EXTENDABLE.includes(state);
-  const canRecordRefund = rental.status === 'CANCELLED' && state === 'REFUND_DUE';
   const warn = ['PAYMENT_REVIEW', 'REFUND_DUE', 'NO_SHOW_REVIEW'].includes(state);
 
   const submit = async () => {
     setBusy(true);
     try {
-      const updated =
-        mode === 'extend'
-          ? await adminApi.extendRentalHold(rental.id, { until: new Date(until).toISOString(), note: note.trim() })
-          : await adminApi.recordRentalRefund(rental.id, {
-              amount: Number(amount),
-              method,
-              reference: reference.trim() || undefined,
-              note: note.trim(),
-            });
+      const updated = await adminApi.extendRentalHold(rental.id, { until: new Date(until).toISOString(), note: note.trim() });
       onUpdate(updated);
-      toast(mode === 'extend' ? 'Deadline extended' : 'Refund recorded', 'success');
+      toast('Deadline extended', 'success');
       setMode('none');
       setNote('');
     } catch (err: any) {
@@ -88,7 +76,7 @@ export default function RentalHoldBanner({
 
   const input =
     'px-2 py-1 text-xs rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))]';
-  const ready = note.trim().length > 0 && (mode === 'extend' ? !!until : Number(amount) > 0);
+  const ready = note.trim().length > 0 && !!until;
 
   return (
     <div
@@ -103,7 +91,7 @@ export default function RentalHoldBanner({
         (rental.holdExpiresAt
           ? `Released automatically if not done by ${new Date(rental.holdExpiresAt).toLocaleString()}.`
           : 'No deadline running; released automatically if not confirmed by the end of the pickup day.')}
-      {(canExtend || canRecordRefund) && mode === 'none' && (
+      {canExtend && mode === 'none' && (
         <span className="ml-2">
           {canExtend && (
             <button
@@ -116,37 +104,14 @@ export default function RentalHoldBanner({
               Extend deadline
             </button>
           )}
-          {canRecordRefund && (
-            <button
-              type="button"
-              onClick={() => setMode('refund')}
-              disabled={!online}
-              title={needsInternetTitle(online, 'Record the refund payout')}
-              className="underline font-medium disabled:opacity-50"
-            >
-              Record refund paid
-            </button>
-          )}
         </span>
       )}
       {mode !== 'none' && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          {mode === 'extend' ? (
-            <label className="flex items-center gap-1">
-              New deadline
-              <input type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} className={input} />
-            </label>
-          ) : (
-            <>
-              <input type="number" min="1" placeholder="Amount (TZS)" value={amount} onChange={(e) => setAmount(e.target.value)} className={`${input} w-32`} />
-              <select value={method} onChange={(e) => setMethod(e.target.value as any)} className={input}>
-                <option value="MOBILE_MONEY">Mobile money</option>
-                <option value="BANK_TRANSFER">Bank transfer</option>
-                <option value="CASH">Cash</option>
-              </select>
-              <input placeholder="Reference (optional)" value={reference} onChange={(e) => setReference(e.target.value)} className={`${input} w-40`} maxLength={100} />
-            </>
-          )}
+          <label className="flex items-center gap-1">
+            New deadline
+            <input type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} className={input} />
+          </label>
           <input placeholder="Reason (required)" value={note} onChange={(e) => setNote(e.target.value)} className={`${input} flex-1 min-w-[12rem]`} maxLength={500} />
           <button
             type="button"

@@ -26,7 +26,7 @@ import {
 } from './rental-rules';
 import { customerIdState, hasApprovedId, lockCustomerIdState } from '../id-verification/id-approval';
 import { decideHold, MAX_STAFF_EXTENSION_DAYS, pickupCutoff, pickupExpiryAt } from './rental-hold';
-import { ExtendRentalHoldDto, RecordRentalRefundDto } from './dto/rental-hold-actions.dto';
+import { ExtendRentalHoldDto } from './dto/rental-hold-actions.dto';
 
 @Injectable()
 export class RentalsService {
@@ -353,9 +353,10 @@ export class RentalsService {
       );
     }
     if (status === 'CANCELLED') {
-      // Money still held on a cancelled booking is flagged for refund
-      // (REFUND_DUE) — never forfeited silently. Finance staff record the
-      // payout (PATCH /rentals/:id/refund-recorded).
+      // Money still held on a cancelled booking is flagged REFUND_DUE: an
+      // outstanding liability, never forfeited and never treated as refunded.
+      // Recording the payout belongs to the rental refund ledger (proposed
+      // release after P0c), not to this flag.
       const held = await this.netPaid(rental.id);
       if (held > 0) {
         data.holdState = 'REFUND_DUE';
@@ -481,41 +482,6 @@ export class RentalsService {
     });
     return this.findOne(id, { isAdmin: true });
   }
-
-  /**
-   * Finance staff record that the money held on a cancelled booking was paid
-   * back: REFUND_DUE → REFUND_RECORDED, audited with amount / method /
-   * reference / note. The amount can't exceed what is held. No Payment row is
-   * created (a rental refund ledger is proposed with P0c), so reports keep
-   * the collection until then.
-   */
-  async recordRefund(id: string, dto: RecordRentalRefundDto) {
-    const tenantId = this.tenantContext.requireId;
-    const rental = await this.prisma.rentalOrder.findFirst({ where: { id, tenantId } });
-    if (!rental) throw new NotFoundException('Rental order not found');
-    if (rental.status !== 'CANCELLED' || rental.holdState !== 'REFUND_DUE') {
-      throw new BadRequestException('Only a cancelled booking marked REFUND_DUE can have its refund recorded.');
-    }
-    const held = await this.netPaid(id);
-    const amount = Math.round(Number(dto.amount) * 100) / 100;
-    if (amount > held + 0.001) {
-      throw new BadRequestException(`The refund (${amount}) is more than the ${held} TZS held on ${rental.rentalNumber}.`);
-    }
-    const res = await this.prisma.rentalOrder.updateMany({
-      where: { id, tenantId, status: 'CANCELLED', holdState: 'REFUND_DUE' },
-      data: { holdState: 'REFUND_RECORDED' },
-    });
-    if (res.count === 0) throw new ConflictException('The refund was already recorded. Reload.');
-    await this.auditService.log('HOLD_REFUND_RECORDED', 'Rental', id, {
-      amount,
-      held,
-      method: dto.method,
-      reference: dto.reference?.trim() || null,
-      note: dto.note,
-    });
-    return this.findOne(id, { isAdmin: true });
-  }
-
   async markReadyForPickup(id: string) {
     const rental = await this.prisma.rentalOrder.findFirst({
       where: { id, tenantId: this.tenantContext.requireId },
