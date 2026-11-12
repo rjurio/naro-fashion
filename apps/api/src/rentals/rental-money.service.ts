@@ -194,6 +194,13 @@ export class RentalMoneyService {
   async pay(id: string, dto: PayRentalRefundDto, actor: { id: string }) {
     const tenantId = this.tenantContext.requireId;
     const req = await this.loadRequest(id);
+    // Separation of duties: whoever asked for the refund never hands the
+    // money out. (The approver may pay out: with one owner a three-person
+    // rule would make every payout impossible.)
+    if (req.requestedById === actor.id) {
+      await this.audit.log('REFUND_PAYOUT_DENIED', 'RentalRefundRequest', id, { reason: 'PAYOUT_BY_REQUESTER' });
+      throw new ForbiddenException({ statusCode: 403, code: 'PAYOUT_BY_REQUESTER', message: 'The person who requested a refund cannot also pay it out.' });
+    }
     const reference = dto.reference ? normalizeReference(dto.reference) : null;
     if (dto.method !== 'CASH' && Number(req.amount) > 0 && !reference) {
       throw new BadRequestException('Mobile-money and bank payouts need the payout reference (4–64 letters/digits).');

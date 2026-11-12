@@ -17,6 +17,14 @@ export const MANAGER_EXCLUDED = [
   'payments:confirm-manual',
   // POS rental MVP: refund approval is the second-person finance control.
   'refunds:approve',
+  // POS rental MVP (owner decision 2026-11-12): every new rental control is
+  // granted per designated person, never by role default — not even to
+  // MANAGER on a fresh database.
+  'rentals:create',
+  'rentals:record-payment',
+  'rentals:release',
+  'rentals:refund-request',
+  'rentals:manage-inventory',
 ];
 
 export const STAFF_CODES = [
