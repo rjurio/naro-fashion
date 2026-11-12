@@ -96,8 +96,16 @@ export class CmsController {
 
   // --- Pages ---
 
+  /** Public: published pages only, display fields only (storefront footer). */
   @Public()
   @Get('pages')
+  findPublishedPages() {
+    return this.cmsService.findPublishedPages();
+  }
+
+  /** Admin editor: every page of the shop incl. drafts. Before `pages/:slug`. */
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get('pages/admin')
   findAllPages() {
     return this.cmsService.findAllPages();
   }
