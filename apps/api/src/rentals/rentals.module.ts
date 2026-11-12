@@ -1,3 +1,4 @@
+import { HandoverSafeguardController, HandoverSafeguardService } from './handover-safeguard';
 import { Module } from '@nestjs/common';
 import { RentalsController } from './rentals.controller';
 import { RentalsService } from './rentals.service';
@@ -12,8 +13,8 @@ import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
   imports: [IdVerificationModule, PaymentsModule],
-  controllers: [RentalsController, RentalMoneyController, RentalUnitsController, PosRentalsController],
-  providers: [RentalsService, RentalMoneyService, RentalUnitsService, PosRentalsService],
+  controllers: [RentalsController, RentalMoneyController, RentalUnitsController, PosRentalsController, HandoverSafeguardController],
+  providers: [RentalsService, RentalMoneyService, RentalUnitsService, PosRentalsService, HandoverSafeguardService],
   exports: [RentalsService, RentalMoneyService, RentalUnitsService],
 })
 export class RentalsModule {}

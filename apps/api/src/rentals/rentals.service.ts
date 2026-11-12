@@ -1,3 +1,4 @@
+import { assertHandoverSafeguard } from './handover-safeguard';
 import {
   Injectable,
   Logger,
@@ -589,11 +590,19 @@ export class RentalsService {
    */
   async assertReleasable(rental: Parameters<typeof rentalBalances>[0] & { id: string; userId: string; productId: string; rentalUnitId?: string | null }) {
     const tenantId = this.tenantContext.requireId;
+    // R1 rollback safety switch: fail closed when R3's checklist requirement is
+    // on but this build has no checklist gate (handover-safeguard.ts).
+    try {
+      await assertHandoverSafeguard(this.prisma, tenantId);
+    } catch (e) {
+      await this.auditService.log('RELEASE_BLOCKED', 'Rental', rental.id, { missing: ['CHECKLIST_BUILD'] });
+      throw e;
+    }
     const missing: string[] = [];
     if (!(await hasApprovedId(this.prisma, tenantId, rental.userId))) missing.push('APPROVED_ID');
     const [payments, requests, addresses, units, unit] = await Promise.all([
       this.prisma.payment.findMany({ where: { rentalOrderId: rental.id, tenantId }, select: { amount: true, status: true, component: true } }),
-      this.prisma.rentalRefundRequest?.findMany?.({ where: { rentalOrderId: rental.id, tenantId }, select: { component: true, amount: true, retainedAmount: true, status: true } }) ?? [],
+      this.prisma.refundRequest?.findMany?.({ where: { rentalOrderId: rental.id, tenantId }, select: { component: true, amount: true, retainedAmount: true, status: true } }) ?? [],
       this.prisma.address.count({ where: { userId: rental.userId } }),
       // A gown tag is required only once the product's per-gown tracking was
       // activated by an approved count (registered-but-unactivated units

@@ -64,7 +64,7 @@ describe('RentalMoneyService (refund workflow)', () => {
         create: jest.fn(async ({ data }: any) => ({ id: 'refund1', ...data })),
         updateMany: jest.fn(async () => ({ count: 1 })),
       },
-      rentalRefundRequest: {
+      refundRequest: {
         findMany: jest.fn(async () => opts.requests ?? []),
         create: jest.fn(async ({ data }: any) => ({ id: 'q1', ...data })),
         findFirst: jest.fn(async () => opts.request ?? null),
@@ -80,8 +80,8 @@ describe('RentalMoneyService (refund workflow)', () => {
     const { svc, db, audit } = make();
     await svc.createRequest('r1', { kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 100000, reason: 'Customer cancelled' }, { id: 'a1' });
     expect(db.$executeRaw).toHaveBeenCalled();
-    expect(db.rentalRefundRequest.create.mock.calls[0][0].data).toMatchObject({ amount: 100000, requestedById: 'a1' }); // status defaults to REQUESTED in the DB
-    expect(audit.log).toHaveBeenCalledWith('REFUND_REQUESTED', 'RentalRefundRequest', 'q1', expect.objectContaining({ amount: 100000 }));
+    expect(db.refundRequest.create.mock.calls[0][0].data).toMatchObject({ amount: 100000, requestedById: 'a1' }); // status defaults to REQUESTED in the DB
+    expect(audit.log).toHaveBeenCalledWith('REFUND_REQUESTED', 'RefundRequest', 'q1', expect.objectContaining({ amount: 100000 }));
     await expect(make().svc.createRequest('r1', { kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 100001, reason: 'x' }, { id: 'a1' })).rejects.toThrow(/more than the 100000 TZS/);
     // already claimed by an open request → partial left
     const claimed = make({ requests: [{ component: 'RENTAL_FEE', amount: 60000, status: 'REQUESTED' }] });
@@ -99,11 +99,11 @@ describe('RentalMoneyService (refund workflow)', () => {
     const req = { id: 'q1', rentalOrderId: 'r1', requestedById: 'a1', amount: 100000, retainedAmount: 0, status: 'REQUESTED' };
     const self = make({ request: req });
     await expect(self.svc.approve('q1', { id: 'a1' })).rejects.toBeInstanceOf(ForbiddenException);
-    expect(self.audit.log).toHaveBeenCalledWith('REFUND_APPROVAL_DENIED', 'RentalRefundRequest', 'q1', { reason: 'SELF_APPROVAL' });
-    expect(self.db.rentalRefundRequest.updateMany).not.toHaveBeenCalled();
+    expect(self.audit.log).toHaveBeenCalledWith('REFUND_APPROVAL_DENIED', 'RefundRequest', 'q1', { reason: 'SELF_APPROVAL' });
+    expect(self.db.refundRequest.updateMany).not.toHaveBeenCalled();
     const ok = make({ request: req });
     await ok.svc.approve('q1', { id: 'a2' });
-    expect(ok.db.rentalRefundRequest.updateMany.mock.calls[0][0]).toMatchObject({ where: { status: 'REQUESTED' }, data: { status: 'APPROVED', approvedById: 'a2' } });
+    expect(ok.db.refundRequest.updateMany.mock.calls[0][0]).toMatchObject({ where: { status: 'REQUESTED' }, data: { status: 'APPROVED', approvedById: 'a2' } });
     await expect(make({ request: req, cas: 0 }).svc.approve('q1', { id: 'a2' })).rejects.toBeInstanceOf(ConflictException);
   });
 
@@ -136,6 +136,6 @@ describe('RentalMoneyService (refund workflow)', () => {
     await svc.fail('q1', { reason: 'Mobile money reversed' }, { id: 'fin' });
     expect(db.payment.updateMany).toHaveBeenCalledWith({ where: { tenantId: 't1', refundRequestId: 'q1', status: 'REFUNDED' }, data: { status: 'REVERSED' } });
     expect(db.rentalOrder.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { holdState: 'REFUND_DUE' } }));
-    expect(audit.log).toHaveBeenCalledWith('REFUND_FAILED', 'RentalRefundRequest', 'q1', { reason: 'Mobile money reversed' });
+    expect(audit.log).toHaveBeenCalledWith('REFUND_FAILED', 'RefundRequest', 'q1', { reason: 'Mobile money reversed' });
   });
 });

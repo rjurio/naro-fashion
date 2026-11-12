@@ -82,7 +82,7 @@ export class RentalMoneyService {
         select: { id: true, amount: true, status: true, component: true, method: true, createdAt: true, refundOfPaymentId: true, transactionRef: true },
         orderBy: { createdAt: 'asc' },
       }),
-      db.rentalRefundRequest.findMany({ where: { rentalOrderId, tenantId }, orderBy: { createdAt: 'asc' } }),
+      db.refundRequest.findMany({ where: { rentalOrderId, tenantId }, orderBy: { createdAt: 'asc' } }),
     ]);
     return { rental, payments, requests, balances: rentalBalances(rental, payments, requests) };
   }
@@ -134,7 +134,7 @@ export class RentalMoneyService {
           `The request (${amount + retained} TZS) is more than the ${room} TZS of ${dto.component} still held and not already claimed on ${rental.rentalNumber}.`,
         );
       }
-      return tx.rentalRefundRequest.create({
+      return tx.refundRequest.create({
         data: {
           tenantId,
           rentalOrderId,
@@ -147,41 +147,43 @@ export class RentalMoneyService {
         },
       });
     });
-    await this.audit.log('REFUND_REQUESTED', 'RentalRefundRequest', created.id, {
+    await this.audit.log('REFUND_REQUESTED', 'RefundRequest', created.id, {
       rentalOrderId, kind: dto.kind, component: dto.component, amount, retainedAmount: retained,
     });
     return created;
   }
 
   private async loadRequest(id: string) {
-    const r = await this.prisma.rentalRefundRequest.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
-    if (!r) throw new NotFoundException('Refund request not found');
-    return r;
+    // /rental-money acts on RENTAL requests only; order / POS / layaway
+    // requests share the table but go through /refund-requests.
+    const r = await this.prisma.refundRequest.findFirst({ where: { id, tenantId: this.tenantContext.requireId, subject: 'RENTAL' } });
+    if (!r || !r.rentalOrderId) throw new NotFoundException('Refund request not found');
+    return r as typeof r & { rentalOrderId: string; component: string };
   }
 
   /** Four-eyes: the approver must not be the requester. */
   async approve(id: string, actor: { id: string }) {
     const r = await this.loadRequest(id);
     if (r.requestedById === actor.id) {
-      await this.audit.log('REFUND_APPROVAL_DENIED', 'RentalRefundRequest', id, { reason: 'SELF_APPROVAL' });
+      await this.audit.log('REFUND_APPROVAL_DENIED', 'RefundRequest', id, { reason: 'SELF_APPROVAL' });
       throw new ForbiddenException({ statusCode: 403, code: 'SELF_APPROVAL', message: 'A refund must be approved by a different person than the one who requested it.' });
     }
-    const res = await this.prisma.rentalRefundRequest.updateMany({
+    const res = await this.prisma.refundRequest.updateMany({
       where: { id, tenantId: this.tenantContext.requireId, status: 'REQUESTED' },
       data: { status: 'APPROVED', approvedById: actor.id, approvedAt: new Date() },
     });
     if (res.count === 0) throw new ConflictException('The request is no longer waiting for approval. Reload.');
-    await this.audit.log('REFUND_APPROVED', 'RentalRefundRequest', id, { amount: Number(r.amount), retainedAmount: Number(r.retainedAmount) });
+    await this.audit.log('REFUND_APPROVED', 'RefundRequest', id, { amount: Number(r.amount), retainedAmount: Number(r.retainedAmount) });
     return this.loadRequest(id);
   }
 
   async reject(id: string, dto: RejectRentalRefundDto, actor: { id: string }) {
-    const res = await this.prisma.rentalRefundRequest.updateMany({
+    const res = await this.prisma.refundRequest.updateMany({
       where: { id, tenantId: this.tenantContext.requireId, status: { in: ['REQUESTED', 'APPROVED'] } },
       data: { status: 'REJECTED', rejectedById: actor.id, rejectionReason: dto.reason },
     });
     if (res.count === 0) throw new ConflictException('The request can no longer be rejected (paid or already closed).');
-    await this.audit.log('REFUND_REJECTED', 'RentalRefundRequest', id, { reason: dto.reason });
+    await this.audit.log('REFUND_REJECTED', 'RefundRequest', id, { reason: dto.reason });
     return this.loadRequest(id);
   }
 
@@ -198,7 +200,7 @@ export class RentalMoneyService {
     // money out. (The approver may pay out: with one owner a three-person
     // rule would make every payout impossible.)
     if (req.requestedById === actor.id) {
-      await this.audit.log('REFUND_PAYOUT_DENIED', 'RentalRefundRequest', id, { reason: 'PAYOUT_BY_REQUESTER' });
+      await this.audit.log('REFUND_PAYOUT_DENIED', 'RefundRequest', id, { reason: 'PAYOUT_BY_REQUESTER' });
       throw new ForbiddenException({ statusCode: 403, code: 'PAYOUT_BY_REQUESTER', message: 'The person who requested a refund cannot also pay it out.' });
     }
     const reference = dto.reference ? normalizeReference(dto.reference) : null;
@@ -219,7 +221,7 @@ export class RentalMoneyService {
     try {
       payout = await this.prisma.$transaction(async (tx) => {
         await this.lock(tx, req.rentalOrderId);
-        const fresh = await tx.rentalRefundRequest.findFirst({ where: { id, tenantId } });
+        const fresh = await tx.refundRequest.findFirst({ where: { id, tenantId, subject: 'RENTAL' } });
         if (!fresh || fresh.status !== 'APPROVED') throw new ConflictException('Only an APPROVED request can be paid. Reload.');
         const { rental, payments, requests, balances } = await this.state(tx, req.rentalOrderId);
         const others = requests.filter((r: any) => r.id !== id);
@@ -256,7 +258,7 @@ export class RentalMoneyService {
             },
           });
         }
-        const claim = await tx.rentalRefundRequest.updateMany({
+        const claim = await tx.refundRequest.updateMany({
           where: { id, tenantId, status: 'APPROVED' },
           data: { status: 'PAID', paidById: actor.id, paidAt: new Date(), payoutMethod: dto.method, payoutReference: reference },
         });
@@ -278,7 +280,7 @@ export class RentalMoneyService {
       if (e?.code === 'P2002') throw new ConflictException('That payout reference has already been used.');
       throw e;
     }
-    await this.audit.log('REFUND_PAID', 'RentalRefundRequest', id, {
+    await this.audit.log('REFUND_PAID', 'RefundRequest', id, {
       paymentId: payout?.id ?? null, method: dto.method, reference, amount: Number(req.amount), retainedAmount: Number(req.retainedAmount),
     });
     return this.loadRequest(id);
@@ -294,7 +296,7 @@ export class RentalMoneyService {
     const req = await this.loadRequest(id);
     await this.prisma.$transaction(async (tx) => {
       await this.lock(tx, req.rentalOrderId);
-      const res = await tx.rentalRefundRequest.updateMany({
+      const res = await tx.refundRequest.updateMany({
         where: { id, tenantId, status: 'PAID' },
         data: { status: 'FAILED', failedById: actor.id, failedAt: new Date(), failureReason: dto.reason },
       });
@@ -308,13 +310,13 @@ export class RentalMoneyService {
         data: { holdState: 'REFUND_DUE' },
       });
     });
-    await this.audit.log('REFUND_FAILED', 'RentalRefundRequest', id, { reason: dto.reason });
+    await this.audit.log('REFUND_FAILED', 'RefundRequest', id, { reason: dto.reason });
     return this.loadRequest(id);
   }
 
   async listRequests(status?: string) {
-    return this.prisma.rentalRefundRequest.findMany({
-      where: { tenantId: this.tenantContext.requireId, ...(status ? { status } : {}) },
+    return this.prisma.refundRequest.findMany({
+      where: { tenantId: this.tenantContext.requireId, subject: 'RENTAL', ...(status ? { status } : {}) },
       orderBy: { createdAt: 'desc' },
       take: 200,
       include: { rentalOrder: { select: { rentalNumber: true, status: true, holdState: true } } },

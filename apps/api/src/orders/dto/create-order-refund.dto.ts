@@ -11,7 +11,19 @@ import {
 export const ORDER_REFUND_METHODS = ['MOBILE_MONEY', 'BANK_TRANSFER', 'CASH', 'GATEWAY'] as const;
 export type OrderRefundMethod = (typeof ORDER_REFUND_METHODS)[number];
 
-/** Body of POST /orders/:id/refunds (admin, `orders:refund`). */
+/** R1b: body of POST /orders/:id/refunds — a REQUEST (`orders:refund`). */
+export class RequestOrderRefundDto {
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 })
+  @IsPositive()
+  @Max(1_000_000_000)
+  amount!: number;
+
+  @IsString()
+  @MaxLength(500)
+  reason!: string;
+}
+
+/** Payout of an APPROVED order refund (built by RefundRequestsService.pay). */
 export class CreateOrderRefundDto {
   /** Amount to refund in TZS (positive, ≤ collected − already refunded). */
   @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 })

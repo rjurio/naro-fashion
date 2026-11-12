@@ -674,6 +674,7 @@ model Order {
   @@index([channel])
   @@index([posSessionId])
   @@index([promoCodeId])
+  refundRequests RefundRequest[]
 }
 
 model OrderItem {
@@ -726,7 +727,7 @@ model Payment {
   layaway     Layaway?     @relation(fields: [layawayId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   refundOf    Payment?     @relation("PaymentRefunds", fields: [refundOfPaymentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   refunds     Payment[]    @relation("PaymentRefunds")
-  refundRequest RentalRefundRequest? @relation(fields: [refundRequestId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  refundRequest RefundRequest? @relation(fields: [refundRequestId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   @@unique([tenantId, transactionRef])
   @@index([tenantId])
@@ -745,12 +746,12 @@ model Payment {
 /// to its source collection), never an edit of the collection. A deposit
 /// return can retain part of the deposit (damage) with a reason; that part
 /// is income only once the request is paid. Never automatic.
-model RentalRefundRequest {
+model RefundRequest {
   id              String    @id @default(cuid())
   tenantId        String?
-  rentalOrderId   String
+  rentalOrderId   String?
   kind            String    // CANCELLATION | DEPOSIT_RETURN | OVERPAYMENT
-  component       String    // RENTAL_FEE | DEPOSIT | LATE_FEE
+  component       String?    // RENTAL_FEE | DEPOSIT | LATE_FEE
   amount          Decimal   @db.Decimal(12, 2)   // paid back to the customer
   retainedAmount  Decimal   @db.Decimal(12, 2) @default(0) // kept (deposit damage); income once PAID
   reason          String
@@ -770,13 +771,28 @@ model RentalRefundRequest {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  rentalOrder RentalOrder @relation(fields: [rentalOrderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  // Unified refund workflow (R1b): exactly one target per subject —
+  // RENTAL → rentalOrderId; ORDER / POS_SALE → orderId; LAYAWAY → layawayId.
+  subject         String    @default("RENTAL") // RENTAL | ORDER | POS_SALE | LAYAWAY
+  orderId         String?
+  layawayId       String?
+  lines           Json?     // POS_RETURN: { items, refundMethod, reason, note } executed at payout
+  exchangeNumber  String?   // EXCHANGE_DIFFERENCE: the exchange that owes the customer
+  retryOfId       String?   // RETRY: the FAILED request it re-pays
+
+  rentalOrder RentalOrder? @relation(fields: [rentalOrderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  order       Order?       @relation(fields: [orderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  layaway     Layaway?     @relation(fields: [layawayId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   payout      Payment?
 
   @@unique([tenantId, payoutReference])
   @@index([tenantId])
   @@index([rentalOrderId])
+  @@index([orderId])
+  @@index([layawayId])
+  @@index([subject, status])
   @@index([status])
+  @@map("RentalRefundRequest")
 }
 
 model WebhookEvent {
@@ -981,7 +997,7 @@ model RentalOrder {
   product  Product        @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   variant  ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   payments Payment[]
-  refundRequests RentalRefundRequest[]
+  refundRequests RefundRequest[]
   rentalUnit RentalUnit? @relation(fields: [rentalUnitId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   checklist RentalChecklistEntry[]
   reminders RentalPreparationReminder[]
@@ -1790,6 +1806,11 @@ model Layaway {
   status         String    @default("ACTIVE") // ACTIVE, COMPLETED, CANCELLED, EXPIRED
   completedAt    DateTime?
   cancelledAt    DateTime?
+  // R1b: a cancellation records who, why and what happens to the money paid
+  // (REFUND_REQUESTED / NO_PAYMENTS). Payments are never deleted or forfeited.
+  cancelReason         String?
+  cancelledByAdminId   String?
+  financialDisposition String?
   note           String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -1804,6 +1825,7 @@ model Layaway {
   @@index([status])
   @@index([dueDate])
   @@index([posSessionId])
+  refundRequests RefundRequest[]
 }
 
 model PosExchange {
@@ -2021,4 +2043,19 @@ model RentalUnitTrackingChange {
 
   @@index([tenantId])
   @@index([productId, status])
+}
+
+/// R1 rollback safety switch: once R3 (mandatory checklist) sets
+/// checklistRequired, any build without the checklist gate refuses every
+/// rental hand-over (fail closed). Changed only via
+/// PUT /rental-handover-safeguard (rentals:handover-safeguard, audited).
+model RentalHandoverSafeguard {
+  id                String    @id @default(cuid())
+  tenantId          String?   @unique
+  checklistRequired Boolean   @default(false)
+  reason            String?
+  changedById       String?
+  changedAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 }

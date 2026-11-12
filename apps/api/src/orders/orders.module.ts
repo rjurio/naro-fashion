@@ -11,6 +11,6 @@ import { PaymentsModule } from '../payments/payments.module';
   imports: [PromoCodesModule, PaymentsModule],
   controllers: [OrdersController, OrderRefundsController],
   providers: [OrdersService, OrderExpiryCron, OrderRefundsService],
-  exports: [OrdersService],
+  exports: [OrdersService, OrderRefundsService],
 })
 export class OrdersModule {}
