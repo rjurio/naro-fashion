@@ -30,6 +30,9 @@ export default function CMSPagesPage() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The version the editor opened: sent as expectedUpdatedAt so a newer save
+  // (another admin, or a scripted update) is never silently overwritten.
+  const [editingUpdatedAt, setEditingUpdatedAt] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
@@ -53,6 +56,7 @@ export default function CMSPagesPage() {
 
   const openEdit = (p: CMSPage) => {
     setEditingId(p.id);
+    setEditingUpdatedAt(p.updatedAt || null);
     setForm({
       title: p.title || '', titleSwahili: p.titleSwahili || '', slug: p.slug || '',
       content: p.content || '', contentSwahili: p.contentSwahili || '', isPublished: p.isPublished,
@@ -67,7 +71,10 @@ export default function CMSPagesPage() {
     setSaving(true);
     try {
       if (editingId) {
-        const updated = await adminApi.updatePage(editingId, form);
+        const updated = await adminApi.updatePage(editingId, {
+          ...form,
+          ...(editingUpdatedAt ? { expectedUpdatedAt: editingUpdatedAt } : {}),
+        });
         setPages((prev) => prev.map((p) => (p.id === editingId ? { ...p, ...updated } : p)));
         toast.success('Page updated');
       } else {
@@ -75,8 +82,15 @@ export default function CMSPagesPage() {
         setPages((prev) => [created, ...prev]);
         toast.success('Page created');
       }
-      setShowForm(false); setEditingId(null); setForm(emptyForm);
-    } catch { toast.error('Failed to save page'); }
+      setShowForm(false); setEditingId(null); setEditingUpdatedAt(null); setForm(emptyForm);
+    } catch (err: any) {
+      if (err?.status === 409) {
+        // Keep the form open so the admin's text isn't lost.
+        toast.error('This page was changed by someone else since you opened it. Nothing was saved: copy your changes, then close and reopen the page to edit the latest version.');
+      } else {
+        toast.error('Failed to save page');
+      }
+    }
     finally { setSaving(false); }
   };
 
