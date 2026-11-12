@@ -478,6 +478,10 @@ describe('AuthService two-factor flows', () => {
       }
       // locked: even the right code on a new challenge gets the generic error
       await expect(service.verifyTwoFactorLogin(service.issueTwoFactorChallenge(admin), codeFor(secret))).rejects.toThrow(GENERIC_LOGIN_ERROR);
+      // the lock itself is audited once (actor system), separate from the per-code failures
+      const locks = (prisma.adminActivityLog.create as jest.Mock).mock.calls.map((c) => c[0].data).filter((d) => d.action === 'ADMIN_2FA_LOCKED');
+      expect(locks).toHaveLength(1);
+      expect(locks[0]).toMatchObject({ adminUserId: 'a1', details: { result: 'BLOCKED', actor: { type: 'system' }, step: '2fa' } });
       // the password step itself is NOT locked by code guesses
       await expect(service.validateUser('adm@x.tz', 'Correct1pass', null)).resolves.toMatchObject({ id: 'a1' });
       // recovery: a password reset clears the code-step limit
