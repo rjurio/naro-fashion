@@ -703,17 +703,30 @@ export class PaymentsService {
       throw new NotFoundException('Payment not found');
     }
 
-    const updated = await this.prisma.payment.update({
-      where: { id },
+    // The write is shop-scoped as well as the read above. A by-id write was
+    // safe only because of that read (one refactor away from a cross-shop
+    // update) and the runtime TENANT_SCOPE guard flagged it. A row that
+    // vanished or moved between the two answers exactly like an unknown id.
+    const written = await this.prisma.payment.updateMany({
+      where: { id, tenantId },
       data: {
         status: dto.status,
-        gatewayResponse: dto.gatewayResponse ?? undefined,
+        ...(dto.gatewayResponse != null ? { gatewayResponse: dto.gatewayResponse as any } : {}),
       },
+    });
+    if (written.count !== 1) {
+      throw new NotFoundException('Payment not found');
+    }
+    const updated = await this.prisma.payment.findFirst({
+      where: { id, tenantId },
       include: {
         order: { select: { id: true, orderNumber: true } },
         rentalOrder: { select: { id: true, rentalNumber: true } },
       },
     });
+    if (!updated) {
+      throw new NotFoundException('Payment not found');
+    }
 
     if (dto.status === 'COMPLETED') {
       // Shared roll-up: never flips a CANCELLED order to PAID, and advances
