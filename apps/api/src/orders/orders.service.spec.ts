@@ -37,6 +37,8 @@ function liveVariant(over: any = {}) {
 function makePrisma(cart: any[]) {
   const prisma: any = {
     $executeRaw: jest.fn().mockResolvedValue(1),
+    // P0b: open rental obligations for the products being bought (none by default).
+    rentalOrder: { findMany: jest.fn().mockResolvedValue([]) },
     cartItem: { findMany: jest.fn().mockResolvedValue(cart), deleteMany: jest.fn().mockResolvedValue({ count: cart.length }) },
     order: {
       count: jest.fn().mockResolvedValue(0),

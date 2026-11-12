@@ -661,6 +661,11 @@ export default function InventoryPage() {
               rows={2}
               className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-gold/50 resize-none"
             />
+            {adjustForm.type === 'RESTOCK' && (
+              <p className="mt-1 text-xs text-muted-foreground" data-testid="restock-note-hint">
+                Required for buy-or-rent gowns: a restock makes a sold gown available to rent again, so say where the gown came from.
+              </p>
+            )}
           </FormField>
         </div>
       </Modal>

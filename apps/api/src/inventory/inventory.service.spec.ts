@@ -20,7 +20,7 @@ describe('InventoryService.adjustStock — performedBy attribution', () => {
     };
     const prisma: any = {
       productVariant: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'var-1', stock: 10 }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'var-1', productId: 'prod-1', stock: 10 }),
         aggregate: jest.fn().mockResolvedValue({ _sum: { stock: 10 } }),
       },
       product: {

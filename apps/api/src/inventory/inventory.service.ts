@@ -136,6 +136,23 @@ export class InventoryService {
       where: { id: targetVariantId, tenantId },
     });
     if (!variant) throw new NotFoundException('Variant not found');
+    // The ledger row is filed under dto.productId: a variant of ANOTHER
+    // product would add stock there while recording a restock here (and could
+    // make a sold buy-or-rent gown look restocked).
+    if (variant.productId !== dto.productId) {
+      throw new BadRequestException('That variant does not belong to this product.');
+    }
+    // A RESTOCK of a buy-or-rent gown is the event that makes a SOLD gown
+    // rentable again (rentals/rental-sale-guard.ts), so it must say why.
+    if (dto.type === 'RESTOCK' && product.availabilityMode === 'BOTH' && (dto.note ?? '').trim().length < 5) {
+      throw new BadRequestException({
+        statusCode: 400,
+        error: 'Bad Request',
+        code: 'RESTOCK_REASON_REQUIRED',
+        message:
+          'Restocking a buy-or-rent gown makes it available to rent again. Add a note saying where the gown came from (at least 5 characters).',
+      });
+    }
     const quantityBefore = variant.stock;
     const quantityAfter = quantityBefore + quantityChange;
 
@@ -168,7 +185,16 @@ export class InventoryService {
         },
       });
     });
-    await this.auditService.log('ADJUST_STOCK', 'Inventory', dto.productId, { type: dto.type, quantity: dto.quantity });
+    await this.auditService.log('ADJUST_STOCK', 'Inventory', dto.productId, {
+      type: dto.type,
+      quantity: dto.quantity,
+      variantId: targetVariantId,
+      quantityBefore,
+      quantityAfter,
+      note: dto.note ?? null,
+      reference: dto.reference ?? null,
+      transactionId: (result as any)?.id ?? null,
+    });
     return result;
   }
 }

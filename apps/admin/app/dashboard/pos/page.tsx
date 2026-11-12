@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import adminApi from '../../../lib/api';
 import { isQueuedResult } from '@/lib/offline/outbox';
+import { offlineBlockedItems } from '@/lib/pos-sale-eligibility';
 import { useSyncStatus } from '@/contexts/SyncContext';
 import { usePosCatalog } from './hooks/usePosCatalog';
 import OfflineReceiptModal, { type OfflineReceiptData } from './components/OfflineReceiptModal';
@@ -172,6 +173,15 @@ export default function PosPage() {
     if (cartItems.length === 0 || processing) return;
     if (offline && !session?.id) {
       toast.error(NO_OFFLINE_SHIFT);
+      return;
+    }
+    // Buy-or-rent gowns are never sold offline: only the server knows whether
+    // one has been booked since this device's catalog snapshot.
+    const needOnline = offline ? offlineBlockedItems(cartItems) : [];
+    if (needOnline.length > 0) {
+      toast.error(
+        `${needOnline.map((i) => i.productName).join(', ')}: buy-or-rent gowns can only be sold while online, because their rental bookings must be checked. Remove them or reconnect.`,
+      );
       return;
     }
     setProcessing(true);
