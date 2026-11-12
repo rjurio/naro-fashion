@@ -119,3 +119,59 @@ describe('settlement with the stored whole-shilling amount (partial payments)', 
     expect(ok.rentalOrder.updateMany).toHaveBeenCalled();
   });
 });
+
+describe('cancellations, refunds, deposits and the payment cap', () => {
+  const makePrisma = (paid: number, stored: number, status: string) => ({
+    payment: { aggregate: jest.fn(async () => ({ _sum: { amount: paid } })) },
+    rentalOrder: {
+      findFirst: jest.fn(async () => ({ id: 'r1', rentalNumber: 'R1', status, downPaymentAmount: stored })),
+      updateMany: jest.fn(async () => ({ count: 1 })),
+    },
+  });
+
+  it('a CANCELLED booking never advances, even if enough was paid; its stored amount is untouched', async () => {
+    const prisma: any = makePrisma(63, 63, 'CANCELLED');
+    await new PaymentSettlementService(prisma).updateRentalPaymentStatus('r1', 't1');
+    expect(prisma.rentalOrder.updateMany).not.toHaveBeenCalled();
+    const svc = readFileSync(join(__dirname, 'rentals.service.ts'), 'utf8');
+    // no cancellation / status / reschedule path rewrites the stored down payment
+    expect((svc.match(/downPaymentAmount/g) ?? []).length).toBe(2); // computed once + stored once, in create()
+  });
+
+  it('only COMPLETED payments count towards the down payment (refunded or pending ones never do)', async () => {
+    const prisma: any = makePrisma(63, 63, 'ID_VERIFIED');
+    await new PaymentSettlementService(prisma).updateRentalPaymentStatus('r1', 't1');
+    expect(prisma.payment.aggregate).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ rentalOrderId: 'r1', status: 'COMPLETED' }) }));
+  });
+
+  it('the refundable deposit stays separate: the down payment is on the rental fee only', () => {
+    const svc = readFileSync(join(__dirname, 'rentals.service.ts'), 'utf8');
+    expect(svc).toMatch(/const totalRentalPrice = rentalPrice;/);
+    expect(svc).toMatch(/computeDownPayment\(totalRentalPrice, downPaymentPct\)/);
+    expect(computeDownPayment(250, 25)).toBe(63); // a 50 deposit changes nothing
+  });
+
+  it('the payment cap is unchanged (fee + deposit + late fee): paying the down payment leaves an exact whole balance', () => {
+    const pay = readFileSync(join(__dirname, '..', 'payments', 'payments.service.ts'), 'utf8');
+    expect(pay).toMatch(/Number\(rental\.totalRentalPrice\) \+\s*Number\(rental\.damageDeposit \?\? 0\) \+\s*Number\(rental\.lateFee \?\? 0\)/);
+    expect(pay).not.toMatch(/downPaymentAmount/);
+    const fee = 250, deposit = 50;
+    const dp = computeDownPayment(fee, 25);
+    expect(fee + deposit - dp).toBe(237); // what is left to pay after the down payment
+  });
+
+  it('there is ONE place that creates a booking, and it uses computeDownPayment (future staff/POS bookings must reuse it)', () => {
+    const { execSync } = require('child_process');
+    const hits: string = execSync('git grep -l "rentalOrder.create(" -- "*.ts"', { cwd: join(__dirname, '..'), encoding: 'utf8' });
+    const files = hits.split('\n').filter((f: string) => f && !f.endsWith('.spec.ts'));
+    expect(files).toEqual(['rentals/rentals.service.ts']);
+  });
+
+  it('admin screens show the STORED down payment, never a recomputed one', () => {
+    for (const rel of ['components/rental/OverdueRentals.tsx', 'components/rental/UpcomingPickups.tsx']) {
+      const src = readFileSync(join(__dirname, '..', '..', '..', 'admin', rel), 'utf8');
+      expect(src).toMatch(/Number\(rental\.downPaymentAmount\)/);
+      expect(src).not.toMatch(/\* ?0\.25|\/ ?100\)/);
+    }
+  });
+});
