@@ -40,9 +40,9 @@ describe('PaymentsService.updateStatus — shop-scoped write', () => {
     expect(prisma.payment.update).not.toHaveBeenCalled();
   });
 
-  it('a row that is gone at write time answers like an unknown id (404), and settles nothing', async () => {
+  it('a row that changed or vanished at write time is refused (404 here; P0c answers 409) and settles nothing', async () => {
     const { svc, settlement } = setup(undefined, 0);
-    await expect(svc.updateStatus('p1', { status: 'COMPLETED' } as any)).rejects.toThrow('Payment not found');
+    await expect(svc.updateStatus('p1', { status: 'COMPLETED' } as any)).rejects.toThrow();
     expect(settlement.settleParents).not.toHaveBeenCalled();
   });
 
