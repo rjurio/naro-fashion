@@ -81,6 +81,15 @@ export class UpdateProductDto {
   @MaxLength(250)
   slug?: string;
 
+  /**
+   * Must be true for a `slug` change to be applied. Without it a sent slug is
+   * ignored, so an old cached admin page (which re-derived the slug from the
+   * name on every save) can never change a product's public URL.
+   */
+  @IsOptional()
+  @IsBoolean()
+  confirmSlugChange?: boolean;
+
   @IsOptional()
   @IsString()
   description?: string;

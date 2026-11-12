@@ -19,6 +19,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { PermissionGuard } from '../auth/guards/permission.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 
 @Controller('products')
@@ -77,8 +78,8 @@ export class ProductsController {
 
   @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateProductDto) {
-    return this.productsService.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: UpdateProductDto, @CurrentUser('id') performedBy?: string) {
+    return this.productsService.update(id, dto, performedBy);
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)

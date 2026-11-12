@@ -25,7 +25,7 @@ interface VariantRow {
 export interface ProductFormData {
   name: string;
   nameSwahili: string;
-  slug: string;
+  slug?: string;
   description: string;
   descriptionSwahili: string;
   price: number;
@@ -44,13 +44,19 @@ export interface ProductFormData {
   sizeGuideId?: string;
   model3dUrl: string | null;
   model3dPosterUrl: string | null;
-  variants: VariantRow[];
+  /** Existing variants (with id) carry no stock: stock changes only through Inventory. */
+  variants: Array<Omit<VariantRow, 'stock'> & { stock?: number }>;
   published: boolean;
 }
 
 interface Props {
   initialData?: any;
   onSubmit: (data: ProductFormData) => Promise<void>;
+  /**
+   * Latest stock per variant id (e.g. from a 409 STOCK_EDIT_NOT_ALLOWED).
+   * Only the stock figures are replaced; every other unsaved edit is kept.
+   */
+  latestStock?: Record<string, number> | null;
   submitLabel: string;
 }
 
@@ -77,7 +83,7 @@ function flattenCategoryTree(
   return out;
 }
 
-export default function ProductForm({ initialData, onSubmit, submitLabel }: Props) {
+export default function ProductForm({ initialData, onSubmit, submitLabel, latestStock }: Props) {
   const { toast } = useToast();
   const [categories, setCategories] = useState<any[]>([]);
   const [sizeGuides, setSizeGuides] = useState<{ id: string; name: string }[]>([]);
@@ -169,12 +175,16 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
     if (mode === 'RENTAL_ONLY' || mode === 'BOTH') setShowRental(true);
   }, [initialData]);
 
-  // Auto-generate slug from name
+  // New products only: suggest the web address from the name. When EDITING,
+  // the stored slug is shown as-is and is never re-derived from the name, so
+  // renaming a product can't silently change its public URL (old links,
+  // shared links and the /rentals/<slug> booking page keep working).
+  const isEdit = !!initialData;
   useEffect(() => {
-    if (name) {
+    if (!isEdit && name) {
       setSlug(name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
     }
-  }, [name]);
+  }, [name, isEdit]);
 
   // Auto-generate SKU: category prefix (3 chars) + name prefix (3 chars) + random 3 digits
   useEffect(() => {
@@ -196,6 +206,13 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
     setVariants((prev) => prev.map((v, i) => i === index ? { ...v, [field]: value } : v));
   };
 
+  // Merge the latest stock into the existing variants WITHOUT touching any
+  // other field the admin may have edited (prices, names, rental terms...).
+  useEffect(() => {
+    if (!latestStock) return;
+    setVariants((prev) => prev.map((v) => (v.id && latestStock[v.id] !== undefined ? { ...v, stock: latestStock[v.id] } : v)));
+  }, [latestStock]);
+
   const addVariant = () => setVariants((prev) => [...prev, emptyVariant()]);
 
   const removeVariant = (index: number) => {
@@ -211,10 +228,12 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
     // (otherwise they'd be recreated, orphaning stock/order history); new
     // rows are sent without one (and without isActive). Existing rows carry
     // their isActive so a re-enabled soft-disabled variant sends `true`.
+    // Existing rows NEVER send stock: stock changes go through Inventory
+    // (audited). Only a new variant may carry its opening stock.
     const validVariants = variants
       .filter((v) => v.name.trim())
-      .map(({ id, isActive, ...rest }) =>
-        id ? { id, ...rest, ...(isActive !== undefined ? { isActive } : {}) } : rest,
+      .map(({ id, isActive, stock, ...rest }) =>
+        id ? { id, ...rest, ...(isActive !== undefined ? { isActive } : {}) } : { ...rest, stock },
       );
 
     setSubmitting(true);
@@ -222,7 +241,8 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
       await onSubmit({
         name: name.trim(),
         nameSwahili: nameSwahili.trim(),
-        slug: slug.trim(),
+        // never sent when editing: the API keeps the existing web address
+        ...(isEdit ? {} : { slug: slug.trim() }),
         description: description.trim(),
         descriptionSwahili: descriptionSwahili.trim(),
         price,
@@ -270,7 +290,10 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
         </div>
         <div>
           <InfoLabel label="URL Slug" tooltip="The URL-friendly version of the product name used in the web address (e.g. /products/elegant-evening-gown). Auto-generated from the English name." />
-          <input value={slug} readOnly className={`${inputCls} bg-[hsl(var(--muted))] cursor-not-allowed`} placeholder="Auto-generated from name" />
+          <input value={slug} readOnly className={`${inputCls} bg-[hsl(var(--muted))] cursor-not-allowed`} placeholder="Auto-generated from name" data-testid="product-slug" />
+          {isEdit && (
+            <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">The web address stays the same when you rename the product, so existing links keep working.</p>
+          )}
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -499,8 +522,18 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
                 </div>
               </div>
               <div>
-                <InfoLabel label="Stock" tooltip="Number of units available in inventory for this variant. Updated automatically when orders are placed." />
-                <input type="number" min={0} value={v.stock || ''} onChange={(e) => updateVariant(i, 'stock', Number(e.target.value))} className={inputCls} />
+                {v.id ? (
+                  <>
+                    <InfoLabel label="Stock" tooltip="Current stock. It changes automatically with sales, refunds and rentals. To correct it, use Inventory (it records who changed it and why)." />
+                    <div className={`${inputCls} bg-[hsl(var(--muted))] cursor-not-allowed`} data-testid="variant-stock-readonly">{v.stock ?? 0}</div>
+                    <a href="/dashboard/inventory" className="text-xs text-brand-gold hover:underline">Adjust in Inventory</a>
+                  </>
+                ) : (
+                  <>
+                    <InfoLabel label="Opening stock" tooltip="Units you have of this NEW variant. Recorded in the inventory history. Later changes are made in Inventory." />
+                    <input type="number" min={0} value={v.stock || ''} onChange={(e) => updateVariant(i, 'stock', Number(e.target.value))} className={inputCls} />
+                  </>
+                )}
               </div>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
@@ -134,6 +134,25 @@ const publicProductDetailSelect = {
     },
   },
 } as const;
+
+/** 400 / 409 codes for an explicit web-address (slug) change. */
+export const INVALID_SLUG = 'INVALID_SLUG';
+export const SLUG_TAKEN = 'SLUG_TAKEN';
+/** lower-case letters and digits in groups separated by single hyphens, 3–200 chars */
+export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export function isValidSlug(s: string): boolean {
+  return typeof s === 'string' && s.length >= 3 && s.length <= 200 && SLUG_PATTERN.test(s);
+}
+/** Turn any name into slug characters (no uniqueness here). */
+export function slugify(s: string): string {
+  return String(s ?? '')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+    .slice(0, 180).replace(/-+$/g, '');
+}
+
+/** 409 code: the product form tried to change an existing variant's stock. */
+export const STOCK_EDIT_NOT_ALLOWED = 'STOCK_EDIT_NOT_ALLOWED';
 
 @Injectable()
 export class ProductsService {
@@ -310,7 +329,7 @@ export class ProductsService {
 
   async create(dto: CreateProductDto) {
     const tenantId = this.tenantContext.requireId;
-    const slug = dto.slug || this.generateSlug(dto.name);
+    const slug = await this.uniqueSlugForCreate(tenantId, dto.slug, dto.name);
 
     await this.assertProductRefs(tenantId, { categoryId: dto.categoryId, sizeGuideId: dto.sizeGuideId });
 
@@ -561,7 +580,7 @@ export class ProductsService {
     };
   }
 
-  async update(id: string, dto: UpdateProductDto) {
+  async update(id: string, dto: UpdateProductDto, performedBy?: string) {
     const tenantId = this.tenantContext.requireId;
     const expectedUpdatedAt = parseExpectedUpdatedAt(dto.expectedUpdatedAt);
     const product = await this.prisma.product.findFirst({ where: { id, tenantId } });
@@ -572,9 +591,35 @@ export class ProductsService {
     await this.assertProductRefs(tenantId, { categoryId: dto.categoryId, sizeGuideId: dto.sizeGuideId });
 
     const data: any = {};
-    if (dto.name !== undefined) {
-      data.name = dto.name;
-      data.slug = this.generateSlug(dto.name);
+    // URL integrity (Nov 2026 fix): renaming a product never changes its web
+    // address. The slug changes only when a NEW slug is sent WITH
+    // confirmSlugChange: true, and it must already be valid and unused in this
+    // shop. A slug sent without the flag (old cached admin pages always sent
+    // a name-derived one) is ignored.
+    if (dto.name !== undefined) data.name = dto.name;
+    const requestedSlug = typeof dto.slug === 'string' ? dto.slug.trim() : '';
+    if (dto.confirmSlugChange === true && requestedSlug && requestedSlug !== product.slug) {
+      if (!isValidSlug(requestedSlug)) {
+        throw new BadRequestException({
+          statusCode: 400,
+          error: 'Bad Request',
+          code: INVALID_SLUG,
+          message: 'The web address may use only lower-case letters, digits and single hyphens (3–200 characters).',
+        });
+      }
+      const taken = await this.prisma.product.findFirst({
+        where: { tenantId, slug: requestedSlug, id: { not: id } },
+        select: { id: true },
+      });
+      if (taken) {
+        throw new ConflictException({
+          statusCode: 409,
+          error: 'Conflict',
+          code: SLUG_TAKEN,
+          message: 'Another product in this shop already uses this web address.',
+        });
+      }
+      data.slug = requestedSlug;
     }
     if (dto.nameSwahili !== undefined) data.nameSwahili = dto.nameSwahili;
     if (dto.description !== undefined) data.description = dto.description;
@@ -618,7 +663,7 @@ export class ProductsService {
         // cascades (so it silently emptied every customer's cart and changed
         // the variant ids under them).
         if (dto.variants !== undefined) {
-          await this.syncVariants(tx, { id, slug: product.slug }, tenantId, dto.variants);
+          await this.syncVariants(tx, { id, slug: product.slug }, tenantId, dto.variants, performedBy);
         }
 
         // Handle images: delete all existing, re-create from dto (nothing
@@ -661,9 +706,21 @@ export class ProductsService {
    *  - payload row WITHOUT an id (or with an id that isn't this product's)
    *    → create, with tenantId.
    *  - existing variant absent from the payload → hard-delete only when no
-   *    OrderItem / RentalOrder references it; otherwise soft-disable
-   *    (`isActive: false`) so history stays intact. Cart lines pointing at
-   *    a removed/disabled variant are dropped either way.
+   *    OrderItem / RentalOrder references it AND it holds no stock;
+   *    otherwise soft-disable (`isActive: false`) so history and the stock
+   *    record stay intact. Cart lines pointing at a removed/disabled variant
+   *    are dropped either way.
+   *
+   * STOCK (Nov 2026 fix): the product form never changes the stock of an
+   * EXISTING variant. Stock moves only through the stock workflows (sales,
+   * refunds, rentals, POS) and Inventory → adjust, which write an
+   * InventoryTransaction with who and why. A payload that still carries a
+   * stock value for an existing variant must equal the current stock
+   * (re-reading it inside this transaction); any difference — a deliberate
+   * edit or a page loaded before a sale — is refused with 409
+   * STOCK_EDIT_NOT_ALLOWED before anything is written, so a stale form can
+   * never overwrite newer stock. A NEW variant may start with opening stock,
+   * recorded as an ADJUSTMENT transaction (never a RESTOCK).
    *
    * Exposed (not private) for the regression spec.
    */
@@ -672,12 +729,31 @@ export class ProductsService {
     product: { id: string; slug: string },
     tenantId: string,
     variants: UpdateVariantDto[],
+    performedBy?: string,
   ) {
     const existing = await tx.productVariant.findMany({
       where: { productId: product.id, tenantId },
-      select: { id: true, sku: true },
+      select: { id: true, sku: true, stock: true },
     });
     const existingById = new Map(existing.map((v) => [v.id, v]));
+
+    // Refuse any stock change on an existing variant BEFORE writing anything.
+    const stockConflicts = variants
+      .map((v) => ({ v, current: v.id ? existingById.get(v.id) : undefined }))
+      .filter(({ v, current }) => current && v.stock !== undefined && v.stock !== null && Number(v.stock) !== current.stock)
+      .map(({ v, current }) => ({ variantId: current!.id, submitted: Number(v.stock), current: current!.stock }));
+    if (stockConflicts.length > 0) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        code: STOCK_EDIT_NOT_ALLOWED,
+        message:
+          'Nothing was saved. The stock shown on this page is out of date: it changed after the page was opened ' +
+          '(a sale, return or Inventory adjustment). Stock can only be changed in Inventory, which records who changed it and why. ' +
+          'Load the current stock, then save your changes again.',
+        variants: stockConflicts,
+      });
+    }
     const keep = new Set<string>();
     const summary = { updated: 0, created: 0, deleted: 0, disabled: 0 };
     const stamp = Date.now().toString(36);
@@ -699,13 +775,14 @@ export class ProductsService {
             color: v.color,
             colorHex: v.colorHex,
             price: v.price,
-            ...(v.stock !== undefined ? { stock: v.stock } : {}),
+            // stock is deliberately never written here (see the note above)
             ...(v.isActive !== undefined ? { isActive: v.isActive } : {}),
           },
         });
         summary.updated++;
       } else {
-        await tx.productVariant.create({
+        const opening = Math.max(0, Math.trunc(Number(v.stock ?? 0)) || 0);
+        const created = await tx.productVariant.create({
           data: {
             tenantId,
             productId: product.id,
@@ -716,9 +793,25 @@ export class ProductsService {
             color: v.color,
             colorHex: v.colorHex,
             price: v.price,
-            stock: v.stock ?? 0,
+            stock: opening,
           },
         });
+        if (opening > 0) {
+          await tx.inventoryTransaction.create({
+            data: {
+              tenantId,
+              productId: product.id,
+              variantId: created.id,
+              type: 'ADJUSTMENT',
+              quantityBefore: 0,
+              quantityChange: opening,
+              quantityAfter: opening,
+              reference: 'product-form:new-variant',
+              note: 'Opening stock for a new variant added in the product form',
+              performedBy: performedBy ?? null,
+            },
+          });
+        }
         summary.created++;
       }
     }
@@ -733,8 +826,11 @@ export class ProductsService {
         ...orderRefs.map((r) => r.variantId),
         ...rentalRefs.map((r) => r.variantId),
       ]);
-      const toDisable = removed.filter((vid) => referenced.has(vid));
-      const toDelete = removed.filter((vid) => !referenced.has(vid));
+      // A variant that still holds stock is kept (disabled), so the stock
+      // never disappears without an inventory record.
+      const holdsStock = new Set(existing.filter((v) => (v.stock ?? 0) > 0).map((v) => v.id));
+      const toDisable = removed.filter((vid) => referenced.has(vid) || holdsStock.has(vid));
+      const toDelete = removed.filter((vid) => !referenced.has(vid) && !holdsStock.has(vid));
 
       await tx.cartItem.deleteMany({ where: { variantId: { in: removed } } });
       if (toDisable.length > 0) {
@@ -851,6 +947,24 @@ export class ProductsService {
     await this.prisma.product.delete({ where: { id } });
     await this.auditService.log('PERMANENT_DELETE', 'Product', id);
     return { message: 'Product permanently deleted' };
+  }
+
+  /**
+   * New products: a clean slug from the given slug or the name; if it is
+   * already used in this shop (including soft-deleted rows, which the unique
+   * index still counts), a short time suffix makes it unique.
+   */
+  private async uniqueSlugForCreate(tenantId: string, requested: string | undefined, name: string): Promise<string> {
+    let base = slugify(requested || name);
+    if (base.length < 3) base = `product-${base || 'item'}`.replace(/-+$/g, '');
+    const exists = async (s: string) =>
+      !!(await this.prisma.product.findFirst({ where: { tenantId, slug: s }, select: { id: true } }));
+    if (!(await exists(base))) return base;
+    for (let i = 0; i < 5; i++) {
+      const candidate = `${base}-${Date.now().toString(36)}${i ? i : ''}`;
+      if (!(await exists(candidate))) return candidate;
+    }
+    return `${base}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   }
 
   private generateSlug(name: string): string {
