@@ -36,7 +36,7 @@ export class ReviewerTwoFactorGuard implements CanActivate {
 
     const enrolled = user.isPlatformAdmin
       ? (await this.prisma.platformAdmin.findFirst({ where: { id: user.id }, select: { is2FAEnabled: true } }))?.is2FAEnabled
-      : (await this.prisma.adminUser.findFirst({ where: { id: user.id, deletedAt: null }, select: { is2FAEnabled: true } }))?.is2FAEnabled;
+      : (await this.prisma.adminUser.findFirst({ where: { id: user.id, tenantId: user.tenantId ?? null, deletedAt: null }, select: { is2FAEnabled: true } }))?.is2FAEnabled;
     if (enrolled) return true;
     throw new ForbiddenException({
       statusCode: 403,
