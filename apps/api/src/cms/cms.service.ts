@@ -299,11 +299,13 @@ export class CmsService {
   async createPage(dto: CreatePageDto) {
     // Sanitize admin-authored HTML at write time — storefront renders page
     // content via dangerouslySetInnerHTML, so this is the authoritative XSS
-    // guard for all consumers.
+    // guard for all consumers. BOTH languages: the Swahili body is rendered
+    // the same way and used to be stored raw (spread from the DTO).
     const page = await this.prisma.page.create({
       data: {
         ...dto,
         content: sanitizeRichText(dto.content),
+        ...(dto.contentSwahili !== undefined && { contentSwahili: sanitizeRichText(dto.contentSwahili) }),
         tenantId: this.tenantContext.requireId,
       },
     });
@@ -315,7 +317,10 @@ export class CmsService {
     const page = await this.prisma.page.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
     if (!page || page.deletedAt) throw new NotFoundException('Page not found');
     const data: any = { ...dto };
+    // Same sanitizer for both languages (see createPage). A field the request
+    // doesn't send is left as stored — nothing is rewritten unasked.
     if (dto.content !== undefined) data.content = sanitizeRichText(dto.content);
+    if (dto.contentSwahili !== undefined) data.contentSwahili = sanitizeRichText(dto.contentSwahili);
     const updated = await this.prisma.page.update({ where: { id }, data });
     await this.auditService.log('UPDATE', 'Page', id);
     return updated;
