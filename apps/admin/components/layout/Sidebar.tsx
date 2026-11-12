@@ -103,6 +103,7 @@ const navItems: NavItem[] = [
       { label: 'Active Rentals', href: '/dashboard/rentals', icon: CalendarClock },
       { label: 'Rental Requests', href: '/dashboard/rentals/requests', icon: ClipboardCheck },
       { label: 'Checklists', href: '/dashboard/rentals/checklists', icon: ClipboardList },
+      { label: 'Physical Gowns', href: '/dashboard/rentals/gowns', icon: ClipboardCheck },
       { label: 'Policies', href: '/dashboard/rentals/policies', icon: FileText },
     ],
   },
