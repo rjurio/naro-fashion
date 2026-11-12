@@ -10,6 +10,13 @@
 
 <p>Your National ID verification is complete. You are now eligible to rent items from {{businessName}}.</p>
 
+{{#if deadline}}
+<div class="info-box">
+  <p><span class="label">Your booking:</span> {{rentalNumbers}}</p>
+  <p>Please pay the down payment by <strong>{{deadline}}</strong> to confirm it. If it is not received by then, the booking will be released and the item made available to other customers.</p>
+</div>
+{{/if}}
+
 <p style="text-align: center;">
   <a href="{{storeUrl}}/categories?availability=RENTAL_ONLY" class="btn-primary">Browse Rentals</a>
 </p>
@@ -23,8 +30,15 @@
 
 <p>Unfortunately, we were unable to verify your ID. Please review the reason above and submit a new verification request with the correct information.</p>
 
+{{#if deadline}}
+<div class="info-box">
+  <p><span class="label">Your booking:</span> {{rentalNumbers}}</p>
+  <p>To keep it, please submit a new ID by <strong>{{deadline}}</strong>. Once you have submitted it, the booking waits while we review it. If no new ID is received by then, the booking will be released.</p>
+</div>
+{{/if}}
+
 <p style="text-align: center;">
-  <a href="{{storeUrl}}/account/verification" class="btn-primary">Submit New Verification</a>
+  <a href="{{storeUrl}}/account/id-verification" class="btn-primary">Submit New Verification</a>
 </p>
 {{/if}}
 

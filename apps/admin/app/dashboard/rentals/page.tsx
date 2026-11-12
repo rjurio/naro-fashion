@@ -19,6 +19,7 @@ import PendingSyncPill from '@/components/offline/PendingSyncPill';
 import { useStaleRecordDialog } from '@/components/offline/StaleRecordDialog';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
+import RentalHoldBanner from '@/components/rental/RentalHoldBanner';
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -34,6 +35,9 @@ interface Rental {
   status: string;
   idVerified: boolean;
   pickupTime?: string;
+  /** Unconfirmed-booking hold (API rentals/rental-hold.ts). */
+  holdState?: string | null;
+  holdExpiresAt?: string | null;
   weddingDate?: string;
   weddingLocation?: string;
   weddingRegion?: string;
@@ -65,6 +69,7 @@ interface Template {
 }
 
 type TabKey = 'active' | 'requests' | 'overdue' | 'cancelled';
+
 
 const tabs: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: 'active', label: 'Active Rentals', icon: CalendarClock },
@@ -301,6 +306,7 @@ function RentalDetailsSection({ rental, onUpdate, online }: { rental: Rental; on
             Edit
           </button>
         </div>
+        <RentalHoldBanner rental={rental} online={online} onUpdate={onUpdate} />
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div><p className={labelClass}>Pickup Time</p><p className={valueClass}>{rental.pickupTime || '—'}</p></div>
           <div><p className={labelClass}>Wedding Date</p><p className={valueClass}>{rental.weddingDate ? new Date(rental.weddingDate as string).toLocaleDateString() : '—'}</p></div>

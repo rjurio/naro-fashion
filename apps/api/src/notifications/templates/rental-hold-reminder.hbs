@@ -1,0 +1,32 @@
+<h2 style="color: #1A1A1A; margin-top: 0;">Action needed for your booking</h2>
+
+<p>Dear {{customerName}},</p>
+
+<div class="info-box">
+  <p><span class="label">Booking:</span> {{rentalNumber}}</p>
+  {{#if productName}}
+  <p><span class="label">Item:</span> {{productName}}</p>
+  {{/if}}
+  <p>{{instruction}}</p>
+  {{#if amountDue}}
+  <p><span class="label">Down payment due:</span> TZS {{amountDue}}</p>
+  {{/if}}
+  <p><span class="label">Please do this by:</span> <strong>{{deadline}}</strong></p>
+</div>
+
+<p>If it is not done by then, the booking will be released and the item made available to other customers.</p>
+
+<p style="text-align: center;">
+  {{#if isId}}
+  <a href="{{storeUrl}}/account/id-verification" class="btn-primary">Upload my ID</a>
+  {{else}}
+  <a href="{{storeUrl}}/account/rentals" class="btn-primary">My rentals</a>
+  {{/if}}
+</p>
+
+<p>If you have any questions, please contact our support team.</p>
+
+<p>
+  Best regards,<br />
+  <strong style="color: #D4AF37;">{{businessName}} Team</strong>
+</p>

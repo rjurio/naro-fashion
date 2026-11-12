@@ -1002,6 +1002,10 @@ class AdminApiClient {
   markRentalReady(id: string) {
     return this.patch<any>(`/rentals/${id}/ready`, {});
   }
+  /** Give an unconfirmed booking a new, bounded deadline (rentals:update-status; audited). */
+  extendRentalHold(id: string, body: { until: string; note: string }) {
+    return this.patch<any>(`/rentals/${id}/hold/extend`, body);
+  }
   getActiveRentals() {
     return this.get<any>('/rentals/admin', { params: { status: 'ACTIVE' } });
   }

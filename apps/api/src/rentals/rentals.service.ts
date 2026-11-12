@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { conflictException } from '../common/offline-sync.util';
@@ -15,10 +16,17 @@ import { ownerScope } from '../auth/util/ownership';
 import { Decimal } from '@prisma/client/runtime/library';
 import {
   NON_BLOCKING_RENTAL_STATUSES,
+  UNPAID_HOLD_STATUSES,
   assertRentalTransition,
   computeLateFee,
   resolveReturnedAt,
+  transitionRequiresApprovedId,
+  ID_NOT_APPROVED,
+  ID_NOT_APPROVED_MESSAGE,
 } from './rental-rules';
+import { customerIdState, hasApprovedId, lockCustomerIdState } from '../id-verification/id-approval';
+import { decideHold, MAX_STAFF_EXTENSION_DAYS, pickupCutoff, pickupExpiryAt } from './rental-hold';
+import { ExtendRentalHoldDto } from './dto/rental-hold-actions.dto';
 
 @Injectable()
 export class RentalsService {
@@ -140,14 +148,6 @@ export class RentalsService {
     const totalRentalPrice = rentalPrice;
     const downPaymentAmount = totalRentalPrice * (downPaymentPct / 100);
 
-    // Check ID verification status
-    const idDoc = await this.prisma.customerIDDocument.findFirst({
-      where: { userId, verificationStatus: 'APPROVED', tenantId },
-    });
-    const initialStatus = idDoc
-      ? 'ID_VERIFIED'
-      : 'PENDING_ID_VERIFICATION';
-
     const rentalNumber = `RNT-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     // The pre-check above (checkAvailability) is a fast fail for UX, but it and
@@ -180,6 +180,22 @@ export class RentalsService {
         );
       }
 
+      // National ID: read under the per-customer lock ID approval also takes,
+      // so a booking and an approval for the same customer never interleave
+      // (else the booking could be stored PENDING_ID_VERIFICATION right after
+      // the approval reconciled the customer's waiting bookings). A request
+      // without an approved ID is still accepted (owner rule 2026-11-12).
+      await lockCustomerIdState(tx, tenantId, userId);
+      const approved = await hasApprovedId(tx, tenantId, userId);
+      const initialStatus = approved ? 'ID_VERIFIED' : 'PENDING_ID_VERIFICATION';
+
+      // Explicit hold deadline (rentals/rental-hold.ts, owner rules
+      // 2026-11-12): no ID yet -> 48 h to submit one; ID waiting for staff
+      // review -> paused; ID approved -> 48 h to pay the down payment, or no
+      // payment deadline when none is due. Read under the same lock.
+      const idState = approved ? 'APPROVED' : (await customerIdState(tx, tenantId, userId)).state;
+      const hold = decideHold({ idState, downPaymentAmount: Number(downPaymentAmount), at: new Date() });
+
       return tx.rentalOrder.create({
         data: {
           tenantId,
@@ -194,6 +210,8 @@ export class RentalsService {
           downPaymentAmount,
           damageDeposit: depositAmount,
           status: initialStatus,
+          holdState: hold.holdState,
+          holdExpiresAt: hold.holdExpiresAt,
           notes: dto.notes,
           pickupTime: dto.pickupTime,
           weddingDate: dto.weddingDate ? new Date(dto.weddingDate) : undefined,
@@ -318,7 +336,33 @@ export class RentalsService {
     // actualReturnDate + late fee), CANCELLED only before dispatch.
     assertRentalTransition(rental.status, status);
 
+    // National ID (owner rule 2026-11-12): while the item is in the shop, no
+    // transition other than cancelling may happen without an APPROVED ID —
+    // checked against the customer's documents now, whatever the rental's
+    // status says. Covers every jump (e.g. PENDING_ID_VERIFICATION straight
+    // to READY_FOR_PICKUP / ACTIVE) and offline replays.
+    await this.assertApprovedIdFor(rental, status);
+
     const data: any = { status };
+    if (status === 'ID_VERIFIED') {
+      // Staff moved the booking to ID_VERIFIED by hand (the approved ID was
+      // just checked): same fresh payment window as an ID approval.
+      Object.assign(
+        data,
+        decideHold({ idState: 'APPROVED', downPaymentAmount: Number(rental.downPaymentAmount), at: new Date() }),
+      );
+    }
+    if (status === 'CANCELLED') {
+      // Money still held on a cancelled booking is flagged REFUND_DUE: an
+      // outstanding liability, never forfeited and never treated as refunded.
+      // Recording the payout belongs to the rental refund ledger (proposed
+      // release after P0c), not to this flag.
+      const held = await this.netPaid(rental.id);
+      if (held > 0) {
+        data.holdState = 'REFUND_DUE';
+        data.holdExpiresAt = null;
+      }
+    }
     if (status === 'RETURNED') {
       // Offline replays carry the real return time (validated, ≤30 days old).
       const resolved = resolveReturnedAt(returnedAtRaw, new Date());
@@ -365,10 +409,79 @@ export class RentalsService {
         variant: { select: { id: true, name: true } },
       },
     });
-    await this.auditService.log('UPDATE_STATUS', 'Rental', id, { from: rental.status, to: status });
+    await this.auditService.log('UPDATE_STATUS', 'Rental', id, {
+      from: rental.status,
+      to: status,
+      ...(data.holdState !== undefined && { holdState: data.holdState, holdExpiresAt: data.holdExpiresAt }),
+    });
     return updated;
   }
 
+  /** COMPLETED minus REFUNDED payments on a rental (money still held). */
+  private async netPaid(rentalOrderId: string): Promise<number> {
+    const tenantId = this.tenantContext.requireId;
+    const [c, r] = await Promise.all([
+      this.prisma.payment.aggregate({ _sum: { amount: true }, where: { rentalOrderId, tenantId, status: 'COMPLETED' } }),
+      this.prisma.payment.aggregate({ _sum: { amount: true }, where: { rentalOrderId, tenantId, status: 'REFUNDED' } }),
+    ]);
+    return Math.max(0, Math.round((Number(c._sum.amount ?? 0) - Number(r._sum.amount ?? 0)) * 100) / 100);
+  }
+
+  /**
+   * Staff give an unconfirmed booking a new deadline (rentals/rental-hold.ts):
+   * e.g. a PAYMENT_REVIEW booking whose customer will pay the rest, or a
+   * customer who asked for more time. Bounded: in the future, at most
+   * MAX_STAFF_EXTENSION_DAYS (7) from now, and never past the end of the
+   * pickup day (reschedule first). PAYMENT_REVIEW returns to the waiting
+   * state for what is still missing. Under the per-customer lock, CAS on the
+   * observed hold, audited (HOLD_EXTENDED). A new deadline also re-arms the
+   * customer reminder.
+   */
+  async extendHold(id: string, dto: ExtendRentalHoldDto) {
+    const tenantId = this.tenantContext.requireId;
+    const until = new Date(dto.until);
+    const now = new Date();
+    if (isNaN(until.getTime()) || until.getTime() <= now.getTime() + 60_000) {
+      throw new BadRequestException('The new deadline must be in the future.');
+    }
+    if (until.getTime() > now.getTime() + MAX_STAFF_EXTENSION_DAYS * 86_400_000) {
+      throw new BadRequestException(`A deadline can be extended by at most ${MAX_STAFF_EXTENSION_DAYS} days at a time.`);
+    }
+    const rental = await this.prisma.rentalOrder.findFirst({ where: { id, tenantId } });
+    if (!rental) throw new NotFoundException('Rental order not found');
+    const extendable = ['PAYMENT_REVIEW', 'AWAITING_ID', 'ID_REJECTED', 'AWAITING_DOWN_PAYMENT'];
+    if (!UNPAID_HOLD_STATUSES.includes(rental.status) || !extendable.includes(rental.holdState ?? '')) {
+      throw new BadRequestException(
+        `Only an unconfirmed booking waiting for the customer or for payment review can be extended (status ${rental.status}, hold ${rental.holdState ?? 'none'}).`,
+      );
+    }
+    if (rental.pickupDate.getTime() < pickupCutoff(now).getTime()) {
+      throw new BadRequestException('The pickup day has passed: reschedule the pickup first.');
+    }
+    if (until.getTime() > pickupExpiryAt(rental.pickupDate).getTime()) {
+      throw new BadRequestException('The new deadline is after the end of the pickup day: reschedule the pickup first.');
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      await lockCustomerIdState(tx, tenantId, rental.userId);
+      let nextState = rental.holdState as string;
+      if (nextState === 'PAYMENT_REVIEW') {
+        nextState = (await hasApprovedId(tx, tenantId, rental.userId)) ? 'AWAITING_DOWN_PAYMENT' : 'AWAITING_ID';
+      }
+      const res = await tx.rentalOrder.updateMany({
+        where: { id, tenantId, status: rental.status, holdState: rental.holdState, holdExpiresAt: rental.holdExpiresAt },
+        data: { holdState: nextState, holdExpiresAt: until },
+      });
+      return res.count > 0 ? nextState : null;
+    });
+    if (!result) throw new ConflictException('The booking changed meanwhile. Reload and try again.');
+    await this.auditService.log('HOLD_EXTENDED', 'Rental', id, {
+      from: { holdState: rental.holdState, holdExpiresAt: rental.holdExpiresAt },
+      to: { holdState: result, holdExpiresAt: until },
+      note: dto.note,
+    });
+    return this.findOne(id, { isAdmin: true });
+  }
   async markReadyForPickup(id: string) {
     const rental = await this.prisma.rentalOrder.findFirst({
       where: { id, tenantId: this.tenantContext.requireId },
@@ -376,6 +489,8 @@ export class RentalsService {
     if (!rental) {
       throw new NotFoundException('Rental order not found');
     }
+    // "Ready for pickup" tells staff the item can be handed over: same ID rule.
+    await this.assertApprovedIdFor(rental, 'READY_FOR_PICKUP');
 
     const marked = await this.prisma.rentalOrder.update({
       where: { id },
@@ -383,6 +498,30 @@ export class RentalsService {
     });
     await this.auditService.log('MARK_READY', 'Rental', id);
     return marked;
+  }
+
+  /**
+   * Refuse (422 ID_NOT_APPROVED, audited) a transition that needs an approved
+   * National ID when the rental's customer has none. See
+   * transitionRequiresApprovedId (rental-rules.ts).
+   */
+  private async assertApprovedIdFor(
+    rental: { id: string; status: string; userId: string | null },
+    target: string,
+  ): Promise<void> {
+    if (!transitionRequiresApprovedId(rental.status, target)) return;
+    const tenantId = this.tenantContext.requireId;
+    if (await hasApprovedId(this.prisma, tenantId, rental.userId)) return;
+    await this.auditService.log('UPDATE_STATUS_DENIED', 'Rental', rental.id, {
+      from: rental.status,
+      to: target,
+      reason: ID_NOT_APPROVED,
+    });
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      code: ID_NOT_APPROVED,
+      message: ID_NOT_APPROVED_MESSAGE,
+    });
   }
 
   async getAvailability(
@@ -460,6 +599,11 @@ export class RentalsService {
       product: { select: { id: true, name: true, slug: true } },
       variant: { select: { id: true, name: true } },
     };
+
+    // A booking flagged NO_SHOW_REVIEW that staff reschedule to a live pickup day is back to normal.
+    if (data.pickupDate && rental.holdState === 'NO_SHOW_REVIEW' && data.pickupDate.getTime() >= pickupCutoff(new Date()).getTime()) {
+      data.holdState = null;
+    }
 
     const datesChanged = data.returnDate !== undefined || data.pickupDate !== undefined;
     if (!datesChanged) {

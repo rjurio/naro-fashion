@@ -56,6 +56,41 @@ const CANCELLABLE_FROM = new Set([
 export const DEFAULT_RENTAL_HOLD_TTL_HOURS = 48;
 
 /**
+ * National ID rule (owner-approved 2026-11-12):
+ *  - a booking REQUEST may be sent before the ID is verified
+ *    (it starts as PENDING_ID_VERIFICATION);
+ *  - one APPROVED CustomerIDDocument per customer account, reused for later
+ *    bookings until it is no longer APPROVED;
+ *  - a booking cannot be confirmed, nor the item handed over / dispatched,
+ *    without an approved ID.
+ *
+ * So while the item is still in the shop, every transition except staying
+ * unverified or cancelling needs an approved ID — checked against the
+ * customer's documents at the moment of the transition, never inferred from
+ * the rental's current status (a status can be stale or set by hand).
+ *
+ * Once the item has left the shop (ITEM_DISPATCHED onwards) no ID check is
+ * applied: return, inspection and closing must always remain possible, and a
+ * booking already handed over is never re-judged.
+ *
+ * Legacy / unknown statuses count as "still in the shop" (fail-safe).
+ */
+const HANDED_OVER_STATUSES: ReadonlySet<string> = new Set(
+  (RENTAL_WORKFLOW as readonly string[]).slice((RENTAL_WORKFLOW as readonly string[]).indexOf('ITEM_DISPATCHED')),
+);
+const NO_ID_NEEDED_TARGETS: ReadonlySet<string> = new Set(['PENDING_ID_VERIFICATION', 'CANCELLED']);
+
+export function transitionRequiresApprovedId(from: string, to: string): boolean {
+  if (HANDED_OVER_STATUSES.has(from)) return false;
+  return !NO_ID_NEEDED_TARGETS.has(to);
+}
+
+/** Error code returned (422) when a transition is refused for want of an approved ID. */
+export const ID_NOT_APPROVED = 'ID_NOT_APPROVED';
+export const ID_NOT_APPROVED_MESSAGE =
+  "This customer has no approved National ID. Approve the customer's ID before confirming the booking, marking it ready or handing over the item.";
+
+/**
  * Throws unless `from → to` is a legal admin transition:
  *  - forward-only along RENTAL_WORKFLOW;
  *  - may NOT jump over RETURNED: RETURNED is the only step that stamps
