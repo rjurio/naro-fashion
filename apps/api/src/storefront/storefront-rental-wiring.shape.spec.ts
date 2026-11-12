@@ -177,6 +177,32 @@ describe('storefront rental wiring', () => {
     expect(adminCms).not.toMatch(/key: 'rental_section_features'[^\n]*\d+% down payment/);
   });
 
+  it('ID notices and the FAQ heading follow the approved National ID policy (owner, 2026-11-12)', () => {
+    const en = JSON.parse(read('messages/en.json'));
+    const sw = JSON.parse(read('messages/sw.json'));
+    // Approved FAQ headings, item-neutral.
+    expect(at(en, 'pages.faqRentals')).toBe('How does renting work?');
+    expect(at(sw, 'pages.faqRentals')).toBe('Ninawezaje kukodi bidhaa?');
+    // Booking page: request first; ID once per account; confirmation AND
+    // hand-over/dispatch only after approval.
+    const bookEn: string = at(en, 'rentals.idVerificationRequiredDesc');
+    expect(bookEn).toMatch(/send this booking request before your National ID \(NIDA\) is verified/);
+    expect(bookEn).toMatch(/only once for your account/);
+    expect(bookEn).toMatch(/confirmed, and the item is handed over or sent to you, only after your ID is approved/);
+    const bookSw: string = at(sw, 'rentals.idVerificationRequiredDesc');
+    expect(bookSw).toMatch(/Unaweza kutuma ombi hili la kukodi kabla Kitambulisho chako cha Taifa \(NIDA\) hakijathibitishwa/);
+    expect(bookSw).toMatch(/mara moja tu kwa akaunti yako/);
+    expect(bookSw).toMatch(/Uhifadhi wako utathibitishwa, na bidhaa itakabidhiwa au kutumwa kwako, baada tu ya kitambulisho chako kuidhinishwa/);
+    // Account page no longer says an ID is needed merely to rent (book).
+    expect(at(en, 'account.idNeedToVerify')).toBe('Verify your National ID once so your rental bookings can be confirmed.');
+    expect(at(sw, 'account.idNeedToVerify')).toMatch(/mara moja ili uhifadhi wako wa kukodi uweze kuthibitishwa/);
+    for (const k of ['pages.faqRentals', 'rentals.idVerificationRequiredDesc', 'account.idNeedToVerify']) {
+      // item-neutral, and no online payment implied
+      expect([k, /gown/i.test(at(en, k)), /gaun/i.test(at(sw, k))]).toEqual([k, false, false]);
+      expect([k, /online|pay/i.test(at(en, k)), /mtandaoni|kadi|lipa/i.test(at(sw, k))]).toEqual([k, false, false]);
+    }
+  });
+
   it('the FAQ explains the down payment without implying online payment, and says 0 % still has obligations', () => {
     const en = JSON.parse(read('messages/en.json'));
     const sw = JSON.parse(read('messages/sw.json'));

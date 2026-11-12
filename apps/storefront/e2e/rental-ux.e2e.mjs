@@ -549,17 +549,34 @@ async function main() {
     await p.close();
   });
 
+  console.log('\nNational ID notice (approved policy)');
+  await check('booking page ID notice: request before ID, once per account, confirmation + hand-over only after approval (EN + SW)', async () => {
+    setMode({});
+    const p = await open(desktop, '/rentals/rental-gown-01');
+    await p.getByText(/send this booking request before your National ID \(NIDA\) is verified/).waitFor();
+    const en = await p.locator('body').innerText();
+    assert(/only once for your account/.test(en) && /handed over or sent to you, only after your ID is approved/.test(en), 'EN notice incomplete');
+    await p.close();
+    const q = await open(sw, '/rentals/rental-gown-01');
+    await q.getByText(/Unaweza kutuma ombi hili la kukodi kabla Kitambulisho chako cha Taifa/).waitFor();
+    const s2 = await q.locator('body').innerText();
+    assert(/mara moja tu kwa akaunti yako/.test(s2) && /bidhaa itakabidhiwa au kutumwa kwako, baada tu ya kitambulisho chako kuidhinishwa/.test(s2), 'SW notice incomplete');
+    await q.close();
+  });
+
   console.log('\nFAQ (policy-neutral wording)');
   await check('FAQ rentals answer (owner wording): no fixed %, no online payment, down payment only if any, fee + deposit before pickup (EN + SW)', async () => {
     setMode({});
     const p = await open(desktop, '/pages/faq');
     await p.getByText(/the down payment required, if any/).waitFor();
+    await p.getByText('How does renting work?', { exact: true }).waitFor();
     const en = await p.locator('body').innerText();
     const ans = en.slice(en.indexOf('Choose the item you want to rent'), en.indexOf('upload your ID from your account.') + 33);
     assert(ans.length > 50 && !/\d\s*%/.test(ans) && /No payment is taken online/.test(ans) && /one-time National ID \(NIDA\)/.test(ans), `EN: ${ans}`);
     await p.close();
     const q = await open(sw, '/pages/faq');
     await q.getByText(/kiasi cha kianzio kinachohitajika, ikiwa kipo/).waitFor();
+    await q.getByText('Ninawezaje kukodi bidhaa?', { exact: true }).waitFor();
     const swTxt = await q.locator('body').innerText();
     const swAns = swTxt.slice(swTxt.indexOf('Chagua bidhaa unayotaka kukodi'), swTxt.indexOf('kupitia akaunti yako.') + 21);
     assert(swAns.length > 50 && !/\d\s*%/.test(swAns) && /amana inayorejeshwa/.test(swAns) && /Kitambulisho cha Taifa \(NIDA\) mara moja/.test(swAns), `SW: ${swAns}`);
