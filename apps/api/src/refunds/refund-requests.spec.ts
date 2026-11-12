@@ -90,7 +90,10 @@ describe('RefundRequestsService', () => {
     const m = make({ ...order, subject: 'POS_SALE', kind: 'POS_RETURN', lines: { items: [{ orderItemId: 'i1', quantity: 1 }], reason: 'size' } });
     await m.s.pay('r1', { method: 'CASH' }, { id: 'finance' });
     expect(m.pos.executeSaleRefund).toHaveBeenCalledWith('o1', expect.objectContaining({ items: [{ orderItemId: 'i1', quantity: 1 }], refundMethod: 'CASH' }), 'finance', 'r1', null);
-    expect(m.prisma.refundRequest.updateMany.mock.calls[1][0].data.amount).toBe(900);
+    const paidCall = m.prisma.refundRequest.updateMany.mock.calls.find((c: any) => c[0].data?.status === 'PAID');
+    expect(paidCall[0].data.amount).toBe(900);
+    const disp = m.prisma.refundRequest.updateMany.mock.calls.find((c: any) => c[0].data?.lines);
+    expect(disp[0].data.lines.goodsDisposition).toBe('RESTOCKED');
   });
 
   it('a payout error puts the request back to APPROVED (never left PAYING, never PAID)', async () => {
@@ -138,11 +141,14 @@ describe('PosService: a POS refund is only a request; a layaway cancellation nev
       orderItem: { updateMany: jest.fn() },
     };
     const s = pos(tx);
-    const out = await s.refundSale('o1', { items: [{ orderItemId: 'i1', quantity: 1 }], refundMethod: 'CASH', reason: 'wrong size' }, 'cashier');
+    // A condition is required: what was handed back decides its disposition at payout.
+    await expect(s.refundSale('o1', { items: [{ orderItemId: 'i1', quantity: 1 }], refundMethod: 'CASH', reason: 'wrong size' }, 'cashier')).rejects.toThrow(/condition/);
+    const out = await s.refundSale('o1', { items: [{ orderItemId: 'i1', quantity: 1, condition: 'RESALEABLE' }], refundMethod: 'CASH', reason: 'wrong size' }, 'cashier');
     expect(out).toMatchObject({ status: 'REQUESTED', estimatedAmount: 500 });
     expect(tx.payment.create).not.toHaveBeenCalled();
     expect(tx.orderItem.updateMany).not.toHaveBeenCalled();
     expect(tx.refundRequest.create.mock.calls[0][0].data).toMatchObject({ subject: 'POS_SALE', kind: 'POS_RETURN', requestedById: 'cashier' });
+    expect(tx.refundRequest.create.mock.calls[0][0].data.lines.goodsDisposition).toBe('HELD_PENDING_REFUND');
   });
 
   it('refundSale: units already in an open request cannot be requested again; a reason is required', async () => {
