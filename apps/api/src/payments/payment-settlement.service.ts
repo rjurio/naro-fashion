@@ -1,3 +1,4 @@
+import { rentalBalances } from '../rentals/rental-ledger';
 import { Injectable, Logger } from '@nestjs/common';
 import { hasApprovedId } from '../id-verification/id-approval';
 import { createHash } from 'crypto';
@@ -342,6 +343,15 @@ export class PaymentSettlementService {
 
     const totalPaid = await this.sumCompleted({ rentalOrderId }, tenantId);
     const downPaymentDue = Number(rental.downPaymentAmount);
+    // Rental money ledger: only RENTAL_FEE money (incl. unallocated online
+    // payments, applied fee first) counts towards the down payment — a
+    // deposit payment never confirms a booking.
+    const rows = await this.prisma.payment.findMany({
+      where: { rentalOrderId, tenantId },
+      select: { amount: true, status: true, component: true },
+    });
+    const ledger = rentalBalances(rental, rows);
+    const feePaid = ledger.collected.RENTAL_FEE;
 
     if (rental.status === 'CANCELLED' && totalPaid > 0) {
       // e.g. a gateway payment that completed after the booking was released
@@ -362,7 +372,8 @@ export class PaymentSettlementService {
       return;
     }
 
-    if (totalPaid >= downPaymentDue && rental.status === 'ID_VERIFIED') {
+    const confirmable = ['ID_VERIFIED', 'DOWN_PAYMENT_PAID'].includes(rental.status);
+    if (confirmable && ledger.downPaymentCovered) {
       // Owner rule 2026-11-12: never confirm without an APPROVED National ID,
       // whatever the rental's status says (it may have been set by hand).
       if (!(await hasApprovedId(this.prisma, tenantId, rental.userId))) {
@@ -371,13 +382,18 @@ export class PaymentSettlementService {
         );
         return;
       }
-      await this.prisma.rentalOrder.updateMany({
-        where: { id: rentalOrderId, tenantId, status: 'ID_VERIFIED' },
-        data: { status: 'DOWN_PAYMENT_PAID' },
+      // The whole rental fee received → FULLY_PAID; else the down payment → DOWN_PAYMENT_PAID.
+      const target = ledger.feeFullyPaid ? 'FULLY_PAID' : 'DOWN_PAYMENT_PAID';
+      if (target === rental.status) return;
+      const res = await this.prisma.rentalOrder.updateMany({
+        where: { id: rentalOrderId, tenantId, status: rental.status },
+        data: { status: target },
       });
-      this.logger.log(
-        `Rental ${rental.rentalNumber} down payment of ${totalPaid} TZS received — advanced to DOWN_PAYMENT_PAID`,
-      );
+      if (res.count > 0) {
+        this.logger.log(
+          `Rental ${rental.rentalNumber}: ${feePaid} TZS of the rental fee received (down payment ${downPaymentDue}) — advanced to ${target}`,
+        );
+      }
     }
   }
 }

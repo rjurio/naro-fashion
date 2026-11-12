@@ -424,6 +424,8 @@ describe('API-level access control', () => {
     expect(offenders.sort()).toEqual([
       'id-verification/id-verification.service.ts',
       'payments/payment-settlement.service.ts',
+      // POS rental MVP M1: writes holdState REFUND_SETTLED / REFUND_DUE only, never a status.
+      'rentals/rental-money.service.ts',
       'rentals/rentals.service.ts',
       'scheduler/scheduler.service.ts',
     ]);

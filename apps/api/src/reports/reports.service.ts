@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { eatMonthBounds } from './eat-time.util';
+import { rentalBalances, RENTAL_COMPONENTS } from '../rentals/rental-ledger';
 import { CreateFinancialPeriodDto } from './dto/create-financial-period.dto';
 
 /** Order paymentStatus values that count as realised sales revenue. */
@@ -30,6 +31,83 @@ export class ReportsService {
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
   ) {}
+
+  /**
+   * Rental money ledger report (POS rental MVP, M1) — cash basis, per
+   * component, for one EAT month, plus point-in-time liabilities:
+   *  - collected / refunded in the month by component (deposit money is NOT
+   *    revenue; it's shown separately);
+   *  - retained deposit (damage) from refund requests PAID in the month: income;
+   *  - rentalIncome = fee + late fee collected − fee + late fee refunded + retained;
+   *  - depositsHeld (now): Σ deposit held over all rentals — a liability;
+   *  - refundsOutstanding (now): money held on CANCELLED bookings + APPROVED
+   *    requests not yet paid.
+   * Read-only. The income statement is unchanged (it stays accrual by booking).
+   */
+  async getRentalLedgerReport(period: string) {
+    const tenantId = this.tenantContext.requireId;
+    let start: Date;
+    let end: Date;
+    try {
+      ({ start, end } = eatMonthBounds(period));
+    } catch {
+      throw new BadRequestException('period must be YYYY-MM');
+    }
+    const zero = () => ({ RENTAL_FEE: 0, DEPOSIT: 0, LATE_FEE: 0, UNALLOCATED: 0 });
+    const collected = zero();
+    const refunded = zero();
+    const monthRows = await this.prisma.payment.findMany({
+      where: { tenantId, rentalOrderId: { not: null }, status: { in: ['COMPLETED', 'REFUNDED'] }, createdAt: { gte: start, lte: end } },
+      select: { amount: true, status: true, component: true },
+    });
+    for (const p of monthRows) {
+      const key = (RENTAL_COMPONENTS as readonly string[]).includes(p.component ?? '') ? (p.component as keyof typeof collected) : 'UNALLOCATED';
+      (p.status === 'COMPLETED' ? collected : refunded)[key] += Number(p.amount);
+    }
+    const retainedAgg = await this.prisma.rentalRefundRequest.aggregate({
+      where: { tenantId, status: 'PAID', paidAt: { gte: start, lte: end } },
+      _sum: { retainedAmount: true },
+    });
+    const retained = Number(retainedAgg._sum.retainedAmount ?? 0);
+
+    // Point-in-time liabilities, from every rental holding money.
+    const rentals = await this.prisma.rentalOrder.findMany({
+      where: { tenantId, payments: { some: { status: 'COMPLETED' } } },
+      select: {
+        id: true, status: true, totalRentalPrice: true, damageDeposit: true, lateFee: true, downPaymentAmount: true,
+        payments: { select: { amount: true, status: true, component: true } },
+        refundRequests: { select: { component: true, amount: true, retainedAmount: true, status: true } },
+      },
+      take: 5000,
+    });
+    let depositsHeld = 0;
+    let heldOnCancelled = 0;
+    for (const r of rentals) {
+      const b = rentalBalances(r, r.payments, r.refundRequests);
+      depositsHeld += b.held.DEPOSIT;
+      if (r.status === 'CANCELLED') heldOnCancelled += b.totalHeld;
+    }
+    const approvedAgg = await this.prisma.rentalRefundRequest.aggregate({
+      where: { tenantId, status: 'APPROVED' },
+      _sum: { amount: true },
+    });
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const income =
+      collected.RENTAL_FEE + collected.LATE_FEE - refunded.RENTAL_FEE - refunded.LATE_FEE + retained;
+    return {
+      period,
+      collected: Object.fromEntries(Object.entries(collected).map(([k, v]) => [k, r2(v)])),
+      refunded: Object.fromEntries(Object.entries(refunded).map(([k, v]) => [k, r2(v)])),
+      retainedDepositIncome: r2(retained),
+      rentalIncome: r2(income),
+      unallocatedNote: 'UNALLOCATED = online / pre-ledger payments with no component (allocated fee first per rental).',
+      liabilitiesNow: {
+        depositsHeld: r2(depositsHeld),
+        heldOnCancelledBookings: r2(heldOnCancelled),
+        approvedRefundsUnpaid: r2(Number(approvedAgg._sum.amount ?? 0)),
+      },
+    };
+  }
 
   async getRentalsByProduct(params: { page?: number; limit?: number }) {
     const tenantId = this.tenantContext.requireId;

@@ -26,6 +26,15 @@ const PERMISSIONS = [
   // it; SUPER_ADMIN holds every permission. Grant it explicitly.
   { code: 'id-verification:review', name: 'Review National ID Documents', module: 'id-verification', action: 'review' },
   { code: 'rentals:manage-checklist', name: 'Manage Rental Checklists', module: 'rentals', action: 'manage-checklist' },
+  // POS rental MVP (walk-in rentals + rental money ledger). Not in
+  // MANAGER_DEFAULT_GRANTS: existing roles don't get them; SUPER_ADMIN holds
+  // every permission. Grant explicitly per role.
+  { code: 'rentals:create', name: 'Create Walk-in Rental Bookings', module: 'rentals', action: 'create' },
+  { code: 'rentals:record-payment', name: 'Record Rental Payments', module: 'rentals', action: 'record-payment' },
+  { code: 'rentals:release', name: 'Hand Over Rental Items', module: 'rentals', action: 'release' },
+  { code: 'rentals:refund-request', name: 'Request Rental Refunds', module: 'rentals', action: 'refund-request' },
+  { code: 'refunds:approve', name: 'Approve Refunds (second person)', module: 'payments', action: 'approve-refund' },
+  { code: 'rentals:manage-inventory', name: 'Manage Rental Units', module: 'rentals', action: 'manage-inventory' },
   // customers
   { code: 'customers:view', name: 'View Customers', module: 'customers', action: 'view' },
   { code: 'customers:suspend', name: 'Suspend Customers', module: 'customers', action: 'suspend' },

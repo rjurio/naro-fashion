@@ -15,6 +15,8 @@ export const MANAGER_EXCLUDED = [
   // P0c: confirming card / mobile money manually is granted per person by the
   // owner, never automatically (not even to MANAGER on a fresh install).
   'payments:confirm-manual',
+  // POS rental MVP: refund approval is the second-person finance control.
+  'refunds:approve',
 ];
 
 export const STAFF_CODES = [

@@ -87,9 +87,12 @@ describe('one rule everywhere (after PR #3: the storefront displays the server q
 
 describe('settlement with the stored whole-shilling amount (partial payments)', () => {
   const makePrisma = (paid: number, stored: number, status = 'ID_VERIFIED') => ({
-    payment: { aggregate: jest.fn(async () => ({ _sum: { amount: paid } })) },
+    payment: {
+      aggregate: jest.fn(async () => ({ _sum: { amount: paid } })),
+      findMany: jest.fn(async () => [{ amount: paid, status: 'COMPLETED', component: null }]),
+    },
     rentalOrder: {
-      findFirst: jest.fn(async () => ({ id: 'r1', rentalNumber: 'R1', status, userId: 'u1', downPaymentAmount: stored })),
+      findFirst: jest.fn(async () => ({ id: 'r1', rentalNumber: 'R1', status, userId: 'u1', downPaymentAmount: stored, totalRentalPrice: 1000 })),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
     // National ID (PR #16): settlement confirms only a customer with an approved ID.
@@ -118,9 +121,12 @@ describe('settlement with the stored whole-shilling amount (partial payments)', 
 
 describe('cancellations, refunds, deposits and the payment cap', () => {
   const makePrisma = (paid: number, stored: number, status: string) => ({
-    payment: { aggregate: jest.fn(async () => ({ _sum: { amount: paid } })) },
+    payment: {
+      aggregate: jest.fn(async () => ({ _sum: { amount: paid } })),
+      findMany: jest.fn(async () => [{ amount: paid, status: 'COMPLETED', component: null }]),
+    },
     rentalOrder: {
-      findFirst: jest.fn(async () => ({ id: 'r1', rentalNumber: 'R1', status, userId: 'u1', downPaymentAmount: stored })),
+      findFirst: jest.fn(async () => ({ id: 'r1', rentalNumber: 'R1', status, userId: 'u1', downPaymentAmount: stored, totalRentalPrice: 1000 })),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
     // National ID (PR #16): settlement confirms only a customer with an approved ID.

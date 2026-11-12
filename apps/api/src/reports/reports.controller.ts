@@ -28,6 +28,13 @@ export class ReportsController {
     return this.service.getRentalHistoryForProduct(productId, { page: page ? +page : 1, limit: limit ? +limit : 25 });
   }
 
+  /** Rental money ledger (cash basis, per component) + deposit / refund liabilities. */
+  @Get('rentals/ledger')
+  @RequiresPermission('reports:view')
+  rentalLedger(@Query('period') period: string) {
+    return this.service.getRentalLedgerReport(period);
+  }
+
   @Get('financials/income-statement')
   @RequiresPermission('reports:view')
   getIncomeStatement(@Query('period') period: string) {

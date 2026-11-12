@@ -54,6 +54,9 @@ export const HOLD_STATES = [
   'NO_DOWN_PAYMENT',
   'PAYMENT_REVIEW',
   'REFUND_DUE',
+  // POS rental MVP (M1): every pound held on a cancelled booking was paid back
+  // through the refund ledger (REFUNDED rows), never by a flag alone.
+  'REFUND_SETTLED',
   'NO_SHOW_REVIEW',
 ] as const;
 export type HoldState = (typeof HOLD_STATES)[number];

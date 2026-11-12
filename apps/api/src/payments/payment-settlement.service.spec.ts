@@ -9,11 +9,18 @@ import {
 } from './payment-settlement.service';
 
 function makePrisma(overrides: Record<string, any> = {}) {
+  const payment: any = {
+    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 0 } }),
+  };
+  // Rental money ledger: settlement reads the rows; mirror the mocked sum as
+  // one unallocated COMPLETED row (= what the old aggregate represented).
+  payment.findMany = jest.fn(async () => {
+    const a = await payment.aggregate();
+    return [{ amount: a?._sum?.amount ?? 0, status: 'COMPLETED', component: null }];
+  });
   return {
-    payment: {
-      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 0 } }),
-    },
+    payment,
     order: {
       findFirst: jest.fn(),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -149,11 +156,11 @@ describe('PaymentSettlementService parent roll-up', () => {
     prisma.payment.aggregate.mockResolvedValue({ _sum: { amount: 250 } });
     const svc = new PaymentSettlementService(prisma);
 
-    prisma.rentalOrder.findFirst.mockResolvedValue({ id: 'r1', rentalNumber: 'R1', status: 'PENDING_ID_VERIFICATION', downPaymentAmount: 250 });
+    prisma.rentalOrder.findFirst.mockResolvedValue({ id: 'r1', rentalNumber: 'R1', status: 'PENDING_ID_VERIFICATION', downPaymentAmount: 250, totalRentalPrice: 1000 });
     await svc.updateRentalPaymentStatus('r1', 't1');
     expect(prisma.rentalOrder.updateMany).not.toHaveBeenCalled();
 
-    prisma.rentalOrder.findFirst.mockResolvedValue({ id: 'r1', rentalNumber: 'R1', status: 'ID_VERIFIED', userId: 'u1', downPaymentAmount: 250 });
+    prisma.rentalOrder.findFirst.mockResolvedValue({ id: 'r1', rentalNumber: 'R1', status: 'ID_VERIFIED', userId: 'u1', downPaymentAmount: 250, totalRentalPrice: 1000 });
     await svc.updateRentalPaymentStatus('r1', 't1');
     expect(prisma.rentalOrder.updateMany).toHaveBeenCalledWith({
       where: { id: 'r1', tenantId: 't1', status: 'ID_VERIFIED' },
@@ -165,7 +172,7 @@ describe('PaymentSettlementService parent roll-up', () => {
     const prisma = makePrisma();
     prisma.payment.aggregate.mockResolvedValue({ _sum: { amount: 250 } });
     prisma.customerIDDocument.findFirst.mockResolvedValue(null);
-    prisma.rentalOrder.findFirst.mockResolvedValue({ id: 'r1', rentalNumber: 'R1', status: 'ID_VERIFIED', userId: 'u1', downPaymentAmount: 250 });
+    prisma.rentalOrder.findFirst.mockResolvedValue({ id: 'r1', rentalNumber: 'R1', status: 'ID_VERIFIED', userId: 'u1', downPaymentAmount: 250, totalRentalPrice: 1000 });
     await new PaymentSettlementService(prisma).updateRentalPaymentStatus('r1', 't1');
     expect(prisma.rentalOrder.updateMany).not.toHaveBeenCalled();
     expect(prisma.customerIDDocument.findFirst).toHaveBeenCalledWith({
