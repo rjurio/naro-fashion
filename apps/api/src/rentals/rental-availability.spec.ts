@@ -493,7 +493,7 @@ describe('non-gown rentable items (the bridal bouquet)', () => {
     const r = db.state.rentals[0];
     expect(Number(r.totalRentalPrice)).toBe(250);
     expect(Number(r.damageDeposit)).toBe(50);
-    expect(Number(r.downPaymentAmount)).toBe(62.5);
+    expect(Number(r.downPaymentAmount)).toBe(63); // 62.50 rounded up to a whole shilling (down-payment.ts)
   });
 
   it('uses its own 2-day buffer (not the 7-day gown default)', async () => {

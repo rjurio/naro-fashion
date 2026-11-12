@@ -1,3 +1,4 @@
+import { computeDownPayment } from './down-payment';
 import {
   Injectable,
   NotFoundException,
@@ -134,7 +135,8 @@ export class RentalsService {
       25;
 
     const totalRentalPrice = rentalPrice;
-    const downPaymentAmount = totalRentalPrice * (downPaymentPct / 100);
+    // The one down-payment rule: rounded UP to a whole shilling (down-payment.ts).
+    const downPaymentAmount = computeDownPayment(totalRentalPrice, downPaymentPct);
 
     // Check ID verification status
     const idDoc = await this.prisma.customerIDDocument.findFirst({
