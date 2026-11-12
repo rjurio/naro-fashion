@@ -41,7 +41,7 @@ export class ReviewerTwoFactorGuard implements CanActivate {
     throw new ForbiddenException({
       statusCode: 403,
       code: TWO_FA_REQUIRED,
-      message: 'Reviewing National IDs needs two-factor sign-in. Turn it on in your admin profile, then try again.',
+      message: 'Reviewing National IDs needs two-factor sign-in. Turn it on in Settings → Two-factor, then try again.',
     });
   }
 }
