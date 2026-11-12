@@ -108,11 +108,10 @@ function isNetworkFailure(err: unknown): boolean {
 // ===== Order refunds (POST/GET /orders/:id/refunds) =====
 export type OrderRefundMethod = 'MOBILE_MONEY' | 'BANK_TRANSFER' | 'CASH' | 'GATEWAY';
 
+/** R1b: requesting an order refund (approval + payout happen in Admin → Refunds). */
 export interface CreateOrderRefundInput {
   amount: number;
-  method: OrderRefundMethod;
-  reference?: string;
-  note?: string;
+  reason: string;
 }
 
 export interface OrderRefundRow {
@@ -1061,6 +1060,19 @@ class AdminApiClient {
   posRentalReturn(id: string, body: { condition: string; notes?: string; unitStatus?: string }) {
     return this.post<any>(`/pos-rentals/${id}/return`, body);
   }
+  // ----- Unified refund workflow (R1b): approve / reject / pay out / failed / retry
+  refundRequests(params?: { subject?: string; status?: string }) {
+    return this.get<any[]>('/refund-requests', { params: params as any });
+  }
+  decideRefundRequest(id: string, verb: 'approve' | 'reject' | 'fail', body: Record<string, unknown> = {}) {
+    return this.patch<any>(`/refund-requests/${id}/${verb}`, body);
+  }
+  payRefundRequest(id: string, body: { method: string; reference?: string; verificationNote?: string }) {
+    return this.patch<any>(`/refund-requests/${id}/pay`, body);
+  }
+  retryRefundRequest(id: string, reason: string) {
+    return this.post<any>(`/refund-requests/${id}/retry`, { reason });
+  }
   rentalRefundRequest(rentalId: string, body: Record<string, unknown>) {
     return this.post<any>(`/rental-money/rentals/${rentalId}/refund-requests`, body);
   }
@@ -1777,8 +1789,8 @@ class AdminApiClient {
   posCompleteLayaway(id: string) {
     return this.post<any>(`/pos/layaways/${id}/complete`, {});
   }
-  posCancelLayaway(id: string) {
-    return this.post<any>(`/pos/layaways/${id}/cancel`, {});
+  posCancelLayaway(id: string, reason: string) {
+    return this.post<any>(`/pos/layaways/${id}/cancel`, { reason });
   }
 
   // ===== POS - Exchange =====

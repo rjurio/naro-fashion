@@ -36,6 +36,8 @@ const PERMISSIONS = [
   { code: 'refunds:approve', name: 'Approve Refunds (second person)', module: 'payments', action: 'approve-refund' },
   { code: 'rentals:manage-inventory', name: 'Manage Rental Units', module: 'rentals', action: 'manage-inventory' },
   // R2: the independent reviewer who approves a physical count before a product switches to per-gown availability.
+  // R1 rollback safety switch (break-glass; never auto-granted).
+  { code: 'rentals:handover-safeguard', name: 'Change the Rental Hand-over Safety Switch', module: 'rentals', action: 'handover-safeguard' },
   { code: 'rentals:approve-unit-tracking', name: 'Approve Gown Counts (second person)', module: 'rentals', action: 'approve-unit-tracking' },
   // customers
   { code: 'customers:view', name: 'View Customers', module: 'customers', action: 'view' },
@@ -110,7 +112,9 @@ const PERMISSIONS = [
   // controllers; SUPER_ADMIN + platform admins bypass in PermissionGuard.
   { code: 'payments:manage', name: 'Manage Payments (manual confirm / refund)', module: 'payments', action: 'manage' },
   { code: 'payment-methods:manage', name: 'Manage Payment Methods & Gateway Credentials', module: 'payment-methods', action: 'manage' },
-  { code: 'pos:refund', name: 'Issue POS Refunds', module: 'pos', action: 'refund' },
+  // R1b: a POS refund is now a REQUEST (approval + payout by others).
+  { code: 'pos:refund', name: 'Request POS Refunds', module: 'pos', action: 'refund' },
+  { code: 'pos:layaway-cancel', name: 'Cancel Layaways (creates a refund request for money paid)', module: 'pos', action: 'layaway-cancel' },
   { code: 'payments:confirm-manual', name: 'Confirm card / mobile-money payments manually (terminal slip / SMS evidence)', module: 'payments', action: 'confirm-manual' },
   { code: 'payments:reverse', name: 'Reverse a manually confirmed payment', module: 'payments', action: 'reverse' },
   { code: 'finance:close', name: 'Close Financial Periods', module: 'finance', action: 'close' },

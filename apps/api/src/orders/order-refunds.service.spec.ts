@@ -57,6 +57,8 @@ function makePrisma(opts: {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     paymentMethod: { findFirst: jest.fn().mockResolvedValue(null) },
+    // R1b: a cash payout comes out of the payer's own open shift.
+    posSession: { findFirst: jest.fn().mockResolvedValue({ id: 'sess-1' }) },
   };
   prisma.$transaction = jest.fn((fn: any) => fn(prisma));
   return prisma;
@@ -102,7 +104,7 @@ describe('OrderRefundsService.createRefund', () => {
       return Promise.resolve({ id: 'o1', orderNumber: 'NARO-1', paymentStatus: 'REFUND_PENDING', channel: 'ONLINE' });
     });
     const { svc } = makeService(prisma);
-    await svc.createRefund('o1', { amount: 1000, method: 'CASH' } as any, ADMIN);
+    await svc.executeRefund('o1', { amount: 1000, method: 'CASH' } as any, ADMIN, 'rr1');
     expect(seq.slice(0, 3)).toEqual(['tx', 'lock', 'order']);
     const sql = (prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray).join('?');
     expect(sql).toMatch(/pg_advisory_xact_lock\(hashtext\('refund:order:' \|\| \?::text\)\)/);
@@ -112,7 +114,7 @@ describe('OrderRefundsService.createRefund', () => {
   it('records a positive REFUNDED payment with kind ORDER_REFUND and audits before/after', async () => {
     const prisma = makePrisma({ completed: 50000, refunded: 0 });
     const { svc, audit } = makeService(prisma);
-    const res = await svc.createRefund('o1', { amount: 50000, method: 'MOBILE_MONEY', reference: ' MP123 ', note: 'Cancelled' } as any, ADMIN);
+    const res = await svc.executeRefund('o1', { amount: 50000, method: 'MOBILE_MONEY', reference: ' MP123 ', note: 'Cancelled' } as any, ADMIN, 'rr1');
     const data = prisma.payment.create.mock.calls[0][0].data;
     expect(data).toMatchObject({
       tenantId: T,
@@ -139,14 +141,14 @@ describe('OrderRefundsService.createRefund', () => {
   it('stores a null transactionRef when no reference is given', async () => {
     const prisma = makePrisma();
     const { svc } = makeService(prisma);
-    await svc.createRefund('o1', { amount: 100, method: 'CASH' } as any, ADMIN);
+    await svc.executeRefund('o1', { amount: 100, method: 'CASH' } as any, ADMIN, 'rr1');
     expect(prisma.payment.create.mock.calls[0][0].data.transactionRef).toBeNull();
   });
 
   it('caps at collected − already refunded (COMPLETED and REFUNDED sums, tenant-scoped)', async () => {
     const prisma = makePrisma({ completed: 50000, refunded: 30000 });
     const { svc } = makeService(prisma);
-    await expect(svc.createRefund('o1', { amount: 20000.01, method: 'CASH' } as any, ADMIN)).rejects.toThrow(/exceeds the refundable balance \(20000\)/);
+    await expect(svc.executeRefund('o1', { amount: 20000.01, method: 'CASH' } as any, ADMIN, 'rr1')).rejects.toThrow(/exceeds the refundable balance \(20000\)/);
     expect(prisma.payment.create).not.toHaveBeenCalled();
     expect(prisma.order.updateMany).not.toHaveBeenCalled();
     for (const call of prisma.payment.aggregate.mock.calls) {
@@ -159,7 +161,7 @@ describe('OrderRefundsService.createRefund', () => {
   it('allows exactly the remaining balance and then reports REFUNDED', async () => {
     const prisma = makePrisma({ completed: 50000, refunded: 30000, order: { id: 'o1', orderNumber: 'N', paymentStatus: 'PARTIALLY_REFUNDED', channel: 'ONLINE' } });
     const { svc } = makeService(prisma);
-    const res = await svc.createRefund('o1', { amount: 20000, method: 'BANK_TRANSFER' } as any, ADMIN);
+    const res = await svc.executeRefund('o1', { amount: 20000, method: 'BANK_TRANSFER' } as any, ADMIN, 'rr1');
     expect(res.paymentStatus).toBe('REFUNDED');
     expect(prisma.order.updateMany.mock.calls[0][0]).toEqual({
       where: { id: 'o1', tenantId: T, paymentStatus: 'PARTIALLY_REFUNDED' },
@@ -170,13 +172,13 @@ describe('OrderRefundsService.createRefund', () => {
   it('rejects when nothing is left to refund', async () => {
     const prisma = makePrisma({ completed: 50000, refunded: 50000, order: { id: 'o1', orderNumber: 'N', paymentStatus: 'PAID', channel: 'ONLINE' } });
     const { svc } = makeService(prisma);
-    await expect(svc.createRefund('o1', { amount: 1, method: 'CASH' } as any, ADMIN)).rejects.toThrow(/Nothing left to refund/);
+    await expect(svc.executeRefund('o1', { amount: 1, method: 'CASH' } as any, ADMIN, 'rr1')).rejects.toThrow(/Nothing left to refund/);
   });
 
   it('partial refund on a PAID (not cancelled) order → PARTIALLY_REFUNDED', async () => {
     const prisma = makePrisma({ order: { id: 'o1', orderNumber: 'N', paymentStatus: 'PAID', channel: 'ONLINE' } });
     const { svc } = makeService(prisma);
-    const res = await svc.createRefund('o1', { amount: 5000, method: 'CASH' } as any, ADMIN);
+    const res = await svc.executeRefund('o1', { amount: 5000, method: 'CASH' } as any, ADMIN, 'rr1');
     expect(res.paymentStatus).toBe('PARTIALLY_REFUNDED');
     expect(res.refundable).toBe(45000);
   });
@@ -184,28 +186,28 @@ describe('OrderRefundsService.createRefund', () => {
   it('partial refund on a REFUND_PENDING order stays REFUND_PENDING', async () => {
     const prisma = makePrisma();
     const { svc } = makeService(prisma);
-    const res = await svc.createRefund('o1', { amount: 5000, method: 'CASH' } as any, ADMIN);
+    const res = await svc.executeRefund('o1', { amount: 5000, method: 'CASH' } as any, ADMIN, 'rr1');
     expect(res.paymentStatus).toBe('REFUND_PENDING');
   });
 
   it.each(['PENDING', 'FAILED', 'CANCELLED', 'REFUNDED', 'UNPAID'])('rejects paymentStatus %s', async (ps) => {
     const prisma = makePrisma({ order: { id: 'o1', orderNumber: 'N', paymentStatus: ps, channel: 'ONLINE' } });
     const { svc } = makeService(prisma);
-    await expect(svc.createRefund('o1', { amount: 100, method: 'CASH' } as any, ADMIN)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.executeRefund('o1', { amount: 100, method: 'CASH' } as any, ADMIN, 'rr1')).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.payment.create).not.toHaveBeenCalled();
   });
 
   it('rejects POS sales (refunded from POS)', async () => {
     const prisma = makePrisma({ order: { id: 'o1', orderNumber: 'N', paymentStatus: 'PAID', channel: 'POS' } });
     const { svc } = makeService(prisma);
-    await expect(svc.createRefund('o1', { amount: 100, method: 'CASH' } as any, ADMIN)).rejects.toThrow(/POS/);
+    await expect(svc.executeRefund('o1', { amount: 100, method: 'CASH' } as any, ADMIN, 'rr1')).rejects.toThrow(/POS/);
   });
 
   it('rejects zero / negative amounts', async () => {
     for (const amount of [0, -5]) {
       const prisma = makePrisma();
       const { svc } = makeService(prisma);
-      await expect(svc.createRefund('o1', { amount, method: 'CASH' } as any, ADMIN)).rejects.toBeInstanceOf(BadRequestException);
+      await expect(svc.executeRefund('o1', { amount, method: 'CASH' } as any, ADMIN, 'rr1')).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.$transaction).not.toHaveBeenCalled();
     }
   });
@@ -213,21 +215,21 @@ describe('OrderRefundsService.createRefund', () => {
   it('tenant scoping: order lookup is by id AND tenantId; another tenant\'s order → 404', async () => {
     const prisma = makePrisma({ order: null });
     const { svc } = makeService(prisma);
-    await expect(svc.createRefund('o_other', { amount: 100, method: 'CASH' } as any, ADMIN)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(svc.executeRefund('o_other', { amount: 100, method: 'CASH' } as any, ADMIN, 'rr1')).rejects.toBeInstanceOf(NotFoundException);
     expect(prisma.order.findFirst.mock.calls[0][0].where).toEqual({ id: 'o_other', tenantId: T });
   });
 
   it('CAS on the validated paymentStatus — a racing cancel → 409, no refund row survives', async () => {
     const prisma = makePrisma({ flipCount: 0, order: { id: 'o1', orderNumber: 'N', paymentStatus: 'PAID', channel: 'ONLINE' } });
     const { svc } = makeService(prisma);
-    await expect(svc.createRefund('o1', { amount: 100, method: 'CASH' } as any, ADMIN)).rejects.toBeInstanceOf(ConflictException);
+    await expect(svc.executeRefund('o1', { amount: 100, method: 'CASH' } as any, ADMIN, 'rr1')).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.payment.create).not.toHaveBeenCalled();
   });
 
   it('duplicate reference within the tenant → 409', async () => {
     const prisma = makePrisma({ refClash: true });
     const { svc } = makeService(prisma);
-    await expect(svc.createRefund('o1', { amount: 100, method: 'CASH', reference: 'MP1' } as any, ADMIN)).rejects.toBeInstanceOf(ConflictException);
+    await expect(svc.executeRefund('o1', { amount: 100, method: 'CASH', reference: 'MP1' } as any, ADMIN, 'rr1')).rejects.toBeInstanceOf(ConflictException);
     const refLookup = prisma.payment.findFirst.mock.calls.find((c: any) => c[0].where.transactionRef);
     expect(refLookup[0].where).toEqual({ tenantId: T, transactionRef: 'MP1' });
   });
@@ -235,7 +237,7 @@ describe('OrderRefundsService.createRefund', () => {
   it.each(['SELCOM', 'CLICKPESA_MIXX'])('GATEWAY via %s → 400 "record a manual refund" (provider unsupported)', async (code) => {
     const prisma = makePrisma({ sourcePayment: { providerCode: code, transactionRef: 'NARO-1', providerTransactionId: 'g1' } });
     const { svc, audit } = makeService(prisma);
-    await expect(svc.createRefund('o1', { amount: 100, method: 'GATEWAY' } as any, ADMIN)).rejects.toThrow(
+    await expect(svc.executeRefund('o1', { amount: 100, method: 'GATEWAY' } as any, ADMIN, 'rr1')).rejects.toThrow(
       `Gateway refunds are not available for ${code}; record a manual refund`,
     );
     expect(audit.log).not.toHaveBeenCalled();
@@ -244,7 +246,7 @@ describe('OrderRefundsService.createRefund', () => {
   it('GATEWAY with no completed gateway payment → 400 before any write', async () => {
     const prisma = makePrisma({ sourcePayment: null });
     const { svc } = makeService(prisma);
-    await expect(svc.createRefund('o1', { amount: 100, method: 'GATEWAY' } as any, ADMIN)).rejects.toThrow(/record a manual refund/);
+    await expect(svc.executeRefund('o1', { amount: 100, method: 'GATEWAY' } as any, ADMIN, 'rr1')).rejects.toThrow(/record a manual refund/);
     expect(prisma.order.updateMany).not.toHaveBeenCalled();
     expect(prisma.payment.create).not.toHaveBeenCalled();
   });
@@ -254,7 +256,7 @@ describe('OrderRefundsService.createRefund', () => {
     const registry = { has: () => true, resolve: () => provider };
     const prisma = makePrisma({ sourcePayment: { providerCode: 'SELCOM', transactionRef: 'NARO-1', providerTransactionId: 'g1' } });
     const { svc } = makeService(prisma, registry);
-    await svc.createRefund('o1', { amount: 100, method: 'GATEWAY' } as any, ADMIN);
+    await svc.executeRefund('o1', { amount: 100, method: 'GATEWAY' } as any, ADMIN, 'rr1');
     expect(provider.refund).toHaveBeenCalledWith(expect.objectContaining({ amount: 100, transactionRef: 'NARO-1', providerTransactionId: 'g1' }), undefined);
     expect(prisma.payment.updateMany.mock.calls[0][0].where).toEqual({ id: 'refund_1', tenantId: T });
     expect(prisma.payment.updateMany.mock.calls[0][0].data.providerTransactionId).toBe('GW-R1');

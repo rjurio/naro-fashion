@@ -36,6 +36,7 @@ import {
   verifyTenders,
 } from './payment-verification';
 import { withConfirmation } from '../payments/payment-confirmation';
+import { OPEN_REFUND_STATUSES, openClaimedAmount, openClaimedQuantities, REFUND_KINDS } from '../refunds/refund-rules';
 export interface PosActor {
   id: string;
   role?: string;
@@ -1266,7 +1267,73 @@ export class PosService {
   // REFUNDS
   // ============================================================
 
+  /**
+   * R1b: a POS refund is a REQUEST (owner: no instant cashier refund, threshold
+   * TZS 0). Nothing is restocked and no money moves here: the lines and the
+   * estimated amount are reserved against the sale, and the refund runs at
+   * payout (executeSaleRefund) by someone other than the requester, after an
+   * independent approval.
+   */
   async refundSale(orderId: string, dto: PosRefundDto, cashierId: string) {
+    const tenantId = this.tenantContext.requireId;
+    const reason = dto.reason?.trim();
+    if (!reason) throw new BadRequestException('A refund needs a reason.');
+    const request = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('refund:order:' || ${orderId}::text))`;
+      const order = await tx.order.findFirst({ where: { id: orderId, tenantId }, include: { items: true, payments: true } });
+      if (!order) throw new NotFoundException('Sale not found.');
+      if (order.channel !== 'POS') throw new BadRequestException('Only POS sales can be refunded from POS.');
+      if (order.status === 'REFUNDED' || order.paymentStatus === 'REFUNDED') throw new BadRequestException('This sale has already been refunded.');
+      if (order.status === 'CANCELLED') throw new BadRequestException('Cancelled sales cannot be refunded.');
+      const open = await tx.refundRequest.findMany({ where: { tenantId, orderId, status: { in: OPEN_REFUND_STATUSES } } });
+      const reservedQty = openClaimedQuantities(open);
+      const items: Array<{ orderItemId: string; quantity: number }> = [];
+      let estimate = 0;
+      const wanted = !dto.items || dto.items.length === 0
+        ? order.items.map((i) => ({ orderItemId: i.id, quantity: i.quantity - i.refundedQuantity - (reservedQty.get(i.id) ?? 0) })).filter((x) => x.quantity > 0)
+        : dto.items;
+      for (const w of wanted) {
+        const item = order.items.find((i) => i.id === w.orderItemId);
+        if (!item) throw new BadRequestException(`Order item ${w.orderItemId} not found.`);
+        const reserved = reservedQty.get(item.id) ?? 0;
+        const remaining = item.quantity - item.refundedQuantity - reserved;
+        if (w.quantity > remaining) {
+          throw new BadRequestException(
+            `Cannot request more than the remaining ${remaining} unit(s) for this item (refunded ${item.refundedQuantity}, waiting in open requests ${reserved}, of ${item.quantity}).`,
+          );
+        }
+        items.push({ orderItemId: item.id, quantity: w.quantity });
+        estimate += refundValueForUnits(item, order, item.refundedQuantity + reserved, w.quantity);
+      }
+      if (items.length === 0) throw new BadRequestException('Nothing left to refund on this sale (or it is already requested).');
+      const alreadyRefunded = order.payments.filter((p) => p.status === 'REFUNDED').reduce((s, p) => s + Number(p.amount), 0);
+      const hasReversal = order.payments.some((p) => p.status === 'REVERSED');
+      const received = order.payments.filter((p) => p.status === 'COMPLETED').reduce((s, p) => s + Number(p.amount), 0);
+      const base = hasReversal ? Math.min(Number(order.total), received) : Number(order.total);
+      const room = round2(base - alreadyRefunded - openClaimedAmount(open));
+      estimate = Math.min(round2(estimate), Math.max(0, room));
+      if (estimate <= 0) throw new BadRequestException('Nothing left to refund on this sale (or it is already requested).');
+      return tx.refundRequest.create({
+        data: {
+          tenantId, subject: 'POS_SALE', kind: REFUND_KINDS.POS_RETURN, orderId, amount: estimate, reason,
+          status: 'REQUESTED', requestedById: cashierId,
+          lines: { items, refundMethod: dto.refundMethod, reason, note: dto.note ?? null } as any,
+        },
+      });
+    });
+    await this.audit?.log('REFUND_REQUESTED', 'RefundRequest', request.id, {
+      subject: 'POS_SALE', kind: REFUND_KINDS.POS_RETURN, orderId, amount: Number(request.amount), items: (request.lines as any)?.items,
+    });
+    return { status: 'REQUESTED', refundRequest: request, estimatedAmount: Number(request.amount) };
+  }
+
+  /**
+   * Executes an APPROVED POS_RETURN request at payout (called only by
+   * RefundRequestsService.pay, never by a route): the original, tested refund
+   * logic — atomic per-line claims, restock, cumulative caps — paid out of the
+   * PAYER's own open shift and linked to the request.
+   */
+  async executeSaleRefund(orderId: string, dto: PosRefundDto, cashierId: string, refundRequestId: string, reference?: string | null) {
     const tenantId = this.tenantContext.requireId;
     const isFullRefund = !dto.items || dto.items.length === 0;
 
@@ -1383,17 +1450,20 @@ export class PosService {
       }
       refundAmount = Math.min(refundAmount, Math.max(0, remainingPaid));
 
-      await tx.payment.create({
+      const paymentRow = await tx.payment.create({
         data: {
           tenantId,
           orderId: order.id,
           amount: refundAmount,
           method: dto.refundMethod,
           status: 'REFUNDED',
+          transactionRef: reference ?? null,
+          refundRequestId,
           gatewayResponse: {
             posSessionId: session?.id ?? null,
             cashierId,
             reason: dto.reason ?? null,
+            kind: REFUND_KINDS.POS_RETURN,
           },
         },
       });
@@ -1414,7 +1484,7 @@ export class PosService {
         },
       });
 
-      return { refundAmount, isFullRefund: fullyRefunded };
+      return { refundAmount, isFullRefund: fullyRefunded, paymentId: paymentRow.id };
     });
   }
 
@@ -1809,19 +1879,50 @@ export class PosService {
     });
   }
 
-  async cancelLayaway(id: string) {
+  /**
+   * R1b: cancelling a layaway needs `pos:layaway-cancel` (controller) and a
+   * reason. Every instalment stays on record; money still held becomes ONE
+   * explicit refund request for the full amount (financialDisposition
+   * REFUND_REQUESTED). Nothing is forfeited: any reduction is a human,
+   * independently approved decision on that request.
+   */
+  async cancelLayaway(id: string, reason: string, actorId: string) {
     const tenantId = this.tenantContext.requireId;
-    // Conditional transition — can't race a concurrent completeLayaway.
-    const claim = await this.prisma.layaway.updateMany({
-      where: { id, tenantId, status: 'ACTIVE' },
-      data: { status: 'CANCELLED', cancelledAt: new Date() },
+    const why = reason?.trim();
+    if (!why || why.length < 5) throw new BadRequestException('Cancelling a layaway needs a reason (at least 5 characters).');
+    const out = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('refund:layaway:' || ${id}::text))`;
+      const lay = await tx.layaway.findFirst({ where: { id, tenantId }, include: { payments: true } });
+      if (!lay) throw new NotFoundException('Layaway not found.');
+      const held = round2(
+        lay.payments.filter((p) => p.status === 'COMPLETED').reduce((s, p) => s + Number(p.amount), 0) -
+          lay.payments.filter((p) => p.status === 'REFUNDED').reduce((s, p) => s + Number(p.amount), 0),
+      );
+      const disposition = held > 0 ? 'REFUND_REQUESTED' : 'NO_PAYMENTS';
+      // Conditional transition — can't race a concurrent completeLayaway.
+      const claim = await tx.layaway.updateMany({
+        where: { id, tenantId, status: 'ACTIVE' },
+        data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: why, cancelledByAdminId: actorId, financialDisposition: disposition },
+      });
+      if (claim.count === 0) throw new BadRequestException('This layaway is no longer active.');
+      const request = held > 0
+        ? await tx.refundRequest.create({
+            data: {
+              tenantId, subject: 'LAYAWAY', kind: REFUND_KINDS.LAYAWAY_CANCELLATION, layawayId: id, amount: held,
+              reason: `Layaway ${lay.layawayNumber} cancelled: ${why}`, status: 'REQUESTED', requestedById: actorId,
+            },
+          })
+        : null;
+      return { held, disposition, request, layawayNumber: lay.layawayNumber };
     });
-    if (claim.count === 0) {
-      const layaway = await this.prisma.layaway.findFirst({ where: { id, tenantId } });
-      if (!layaway) throw new NotFoundException('Layaway not found.');
-      throw new BadRequestException('This layaway is no longer active.');
+    await this.audit?.log('LAYAWAY_CANCELLED', 'Layaway', id, {
+      layawayNumber: out.layawayNumber, reason: why, heldAmount: out.held, financialDisposition: out.disposition, refundRequestId: out.request?.id ?? null,
+    });
+    if (out.request) {
+      await this.audit?.log('REFUND_REQUESTED', 'RefundRequest', out.request.id, { subject: 'LAYAWAY', layawayId: id, amount: out.held });
     }
-    return this.prisma.layaway.findFirst({ where: { id, tenantId } });
+    const layaway = await this.prisma.layaway.findFirst({ where: { id, tenantId } });
+    return { ...layaway, refundRequest: out.request };
   }
 
   // ============================================================
@@ -1870,6 +1971,7 @@ export class PosService {
     const exchangeNumber = `EXC-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     const exchangeTenders: Array<{ id: string; verification: PaymentVerification | null; amount: number; method: string }> = [];
+    let exchangeRefundRequestId: string | null = null;
     return this.prisma.$transaction(async (tx) => {
       // P0b: replacement items are sold — not gowns committed to a rental.
       if (newVariants.length) {
@@ -1951,10 +2053,13 @@ export class PosService {
       returnTotal = round2(returnTotal);
 
       const priceDifference = round2(newTotal - returnTotal); // + = customer owes
-      if (priceDifference !== 0 && !dto.settlementMethod) {
-        throw new BadRequestException('A settlement method is required when the exchange has a price difference.');
+      // R1b: only money COMING IN is settled at the till. When the customer is
+      // owed, the goods swap goes ahead and the difference becomes a refund
+      // request (independent approval + payout by someone else).
+      if (priceDifference > 0 && !dto.settlementMethod) {
+        throw new BadRequestException('A settlement method is required when the customer pays a difference.');
       }
-      if (dto.settlementMethod === 'CASH' && priceDifference !== 0 && !session) {
+      if (dto.settlementMethod === 'CASH' && priceDifference > 0 && !session) {
         throw new BadRequestException('Open a shift before settling an exchange in cash.');
       }
 
@@ -2042,7 +2147,7 @@ export class PosService {
       //   toward that order's cumulative refund cap in refundSale).
       const tag = { posSessionId: session?.id ?? null, cashierId, exchangeNumber };
       // P0c: a non-cash settlement (either direction) needs evidence + `payments:confirm-manual`.
-      const [settle] = priceDifference !== 0
+      const [settle] = priceDifference > 0
         ? await this.verifyPosTenders(
             [{ method: dto.settlementMethod!, amount: Math.abs(priceDifference), transactionRef: dto.settlementRef, approvalCode: dto.settlementApprovalCode }],
             cashierId,
@@ -2064,18 +2169,15 @@ export class PosService {
         });
         if (settle?.verification) exchangeTenders.push({ id: row?.id, verification: settle.verification, amount: priceDifference, method: dto.settlementMethod! });
       } else if (priceDifference < 0) {
-        const row = await tx.payment.create({
+        const owed = await tx.refundRequest.create({
           data: {
-            tenantId,
-            orderId: originalOrder.id,
-            amount: Math.abs(priceDifference),
-            method: dto.settlementMethod!,
-            status: 'REFUNDED',
-            transactionRef: settle?.transactionRef ?? null,
-            gatewayResponse: settleTag,
+            tenantId, subject: 'POS_SALE', kind: REFUND_KINDS.EXCHANGE_DIFFERENCE, orderId: originalOrder.id,
+            amount: Math.abs(priceDifference), reason: dto.reason?.trim() || `Exchange ${exchangeNumber}: customer is owed the difference`,
+            status: 'REQUESTED', requestedById: cashierId, exchangeNumber,
+            lines: { suggestedMethod: dto.settlementMethod ?? null } as any,
           },
         });
-        if (settle?.verification) exchangeTenders.push({ id: row?.id, verification: settle.verification, amount: Math.abs(priceDifference), method: dto.settlementMethod! });
+        exchangeRefundRequestId = owed.id;
       }
 
       // Original order bookkeeping: fully returned → REFUNDED, else PARTIAL.
@@ -2117,7 +2219,16 @@ export class PosService {
       return exchange;
     }).catch((e) => this.rethrowDuplicateRef(e)).then(async (exchange) => {
       await this.auditManualConfirmations(exchangeTenders, { kind: 'POS_EXCHANGE', exchangeNumber });
-      return exchange;
+      await this.audit?.log('POS_EXCHANGE', 'Order', exchange.originalOrderId, {
+        exchangeNumber, cashierId, returnTotal: Number(exchange.returnTotal), newTotal: Number(exchange.newTotal),
+        priceDifference: Number(exchange.priceDifference), refundRequestId: exchangeRefundRequestId,
+      });
+      if (exchangeRefundRequestId) {
+        await this.audit?.log('REFUND_REQUESTED', 'RefundRequest', exchangeRefundRequestId, {
+          subject: 'POS_SALE', kind: REFUND_KINDS.EXCHANGE_DIFFERENCE, exchangeNumber, amount: Math.abs(Number(exchange.priceDifference)),
+        });
+      }
+      return { ...exchange, refundRequestId: exchangeRefundRequestId };
     });
   }
 

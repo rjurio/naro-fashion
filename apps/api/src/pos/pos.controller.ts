@@ -209,9 +209,11 @@ export class PosController {
     return this.posService.completeLayaway(id, cashierId);
   }
 
+  // R1b: was unpermissioned and unaudited. Paid instalments become an explicit refund request.
   @Post('layaways/:id/cancel')
-  cancelLayaway(@Param('id') id: string) {
-    return this.posService.cancelLayaway(id);
+  @RequiresPermission('pos:layaway-cancel')
+  cancelLayaway(@Param('id') id: string, @Body('reason') reason: string, @CurrentUser('id') actorId: string) {
+    return this.posService.cancelLayaway(id, reason, actorId);
   }
 
   // ============================================================
