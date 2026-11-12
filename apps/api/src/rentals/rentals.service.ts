@@ -595,14 +595,17 @@ export class RentalsService {
       this.prisma.payment.findMany({ where: { rentalOrderId: rental.id, tenantId }, select: { amount: true, status: true, component: true } }),
       this.prisma.rentalRefundRequest?.findMany?.({ where: { rentalOrderId: rental.id, tenantId }, select: { component: true, amount: true, retainedAmount: true, status: true } }) ?? [],
       this.prisma.address.count({ where: { userId: rental.userId } }),
-      this.prisma.rentalUnit?.count?.({ where: { tenantId, productId: rental.productId } }) ?? 0,
-      rental.rentalUnitId ? this.prisma.rentalUnit.findFirst({ where: { id: rental.rentalUnitId, tenantId }, select: { status: true } }) : null,
+      // A gown tag is required only once the product's per-gown tracking was
+      // activated by an approved count (registered-but-unactivated units
+      // don't change anything, as for availability).
+      this.prisma.product?.findFirst?.({ where: { id: rental.productId, tenantId }, select: { rentalUnitTrackingActivatedAt: true } }) ?? null,
+      rental.rentalUnitId ? this.prisma.rentalUnit.findFirst({ where: { id: rental.rentalUnitId, tenantId }, select: { status: true, trackingVerifiedAt: true } }) : null,
     ]);
     const b = rentalBalances(rental, payments, requests ?? []);
     if (!b.feeFullyPaid) missing.push('FULL_RENTAL_FEE');
     if (!b.depositFullyPaid) missing.push('DEPOSIT');
     if (addresses === 0) missing.push('ADDRESS');
-    if ((units ?? 0) > 0 && (!unit || unit.status !== 'ACTIVE')) missing.push('UNIT');
+    if ((units as any)?.rentalUnitTrackingActivatedAt && (!unit || unit.status !== 'ACTIVE' || !(unit as any).trackingVerifiedAt)) missing.push('UNIT');
     if (missing.length === 0) return;
     await this.auditService.log('RELEASE_BLOCKED', 'Rental', rental.id, { missing });
     throw new UnprocessableEntityException({

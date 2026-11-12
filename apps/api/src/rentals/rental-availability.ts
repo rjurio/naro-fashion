@@ -49,6 +49,8 @@ export interface RentableProduct {
   availabilityMode: string;
   isActive?: boolean | null;
   deletedAt?: Date | null;
+  /** Set only by an independently approved count (RentalUnitTrackingChange). */
+  rentalUnitTrackingActivatedAt?: Date | null;
 }
 
 export interface AvailabilityQuery {
@@ -98,9 +100,10 @@ export async function findRentalAvailabilityBlock(db: any, q: AvailabilityQuery)
 
 /**
  * The ONE availability rule, now unit-aware (POS rental MVP, M2):
- *  - a product with NO RentalUnit rows → the legacy rule below (one booking at
+ *  - a product NOT activated for per-gown tracking (or with no verified gown)
+ *    → the legacy rule below (one booking at
  *    a time per product, overdue blocks, BOTH-gown sale rules) — unchanged;
- *  - a product WITH units → at least one unit that is ACTIVE, fits the chosen
+ *  - an ACTIVATED product → at least one VERIFIED unit that is ACTIVE, fits the chosen
  *    variant (no fit rows = fits all), has no maintenance block and no
  *    blocking booking overlapping the buffered window, and is not out with a
  *    customer past its return date. A legacy booking with no unit takes one
@@ -115,14 +118,28 @@ export async function findRentalAvailability(db: any, q: AvailabilityQuery): Pro
 
   if (scope === 'booking' && !isRentableProduct(q.product)) return legacy('NOT_RENTABLE_PRODUCT');
 
+  // Per-gown availability ONLY for a product switched on by an approved,
+  // independently reviewed count — registering units never changes capacity
+  // by itself — and only with the gowns that count verified.
+  if (!(await isUnitTrackingActive(db, q))) return legacy(await legacyBlock(db, q, scope, now));
   const units: Array<{ id: string; code: string; status: string; fits: Array<{ variantId: string }>; blocks: Array<{ startsAt: Date; endsAt: Date }> }> =
     (await db.rentalUnit?.findMany?.({
-      where: { tenantId: q.tenantId, productId: q.product.id },
+      where: { tenantId: q.tenantId, productId: q.product.id, trackingVerifiedAt: { not: null } },
       select: { id: true, code: true, status: true, fits: { select: { variantId: true } }, blocks: { select: { startsAt: true, endsAt: true } } },
       orderBy: { code: 'asc' },
     })) ?? [];
   if (units.length > 0) return unitAvailability(db, q, units, scope, now);
   return legacy(await legacyBlock(db, q, scope, now));
+}
+
+/** True only when the product's per-gown tracking was activated by an approved count. */
+export async function isUnitTrackingActive(db: any, q: { tenantId: string; product: RentableProduct }): Promise<boolean> {
+  if (q.product.rentalUnitTrackingActivatedAt !== undefined) return !!q.product.rentalUnitTrackingActivatedAt;
+  const row = await db.product?.findFirst?.({
+    where: { id: q.product.id, tenantId: q.tenantId },
+    select: { rentalUnitTrackingActivatedAt: true },
+  });
+  return !!row?.rentalUnitTrackingActivatedAt;
 }
 
 async function unitAvailability(
