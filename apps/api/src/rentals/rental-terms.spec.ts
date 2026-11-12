@@ -111,11 +111,26 @@ describe('rentalTerms (what create() stores and the quote shows)', () => {
 });
 
 // ---------------------------------------------------------------- service
+/**
+ * Prisma mock: the given model methods, plus a default for any other call
+ * (findMany -> [], count -> 0, aggregate -> {_sum:{}}, others -> null). The
+ * shared availability rule (Release 1) makes several reads; the tests here
+ * are about money terms, not about which reads it makes.
+ */
+function autoPrisma(models: Record<string, any>) {
+  const dflt = (fn: string) => (fn === 'findMany' ? [] : fn === 'count' ? 0 : fn === 'aggregate' ? { _sum: {} } : null);
+  const model = (m: any = {}) =>
+    new Proxy(m, { get: (t, fn: string) => (fn in t ? t[fn] : (t[fn] = jest.fn().mockResolvedValue(dflt(fn)))) });
+  return new Proxy(models, {
+    get: (t, k: string) => (k in t ? (k.startsWith('$') ? t[k] : model(t[k])) : (t[k] = model())),
+  });
+}
+
 function makeService(product: any, policy: any) {
-  const prisma: any = {
+  const prisma: any = autoPrisma({
     product: { findFirst: jest.fn().mockResolvedValue(product) },
     rentalPolicy: { findFirst: jest.fn().mockResolvedValue(policy) },
-  };
+  });
   const svc = new RentalsService(prisma, { requireId: T } as any, { log: jest.fn() } as any);
   return { svc, prisma };
 }
@@ -229,18 +244,18 @@ describe('GET /rentals/terms-summary (the "How it works" step)', () => {
 // ---------------------------------------------------------------- booking
 function bookingService(product: any, policy: any) {
   const created: any[] = [];
-  const tx: any = {
+  const tx: any = autoPrisma({
     $executeRaw: jest.fn(),
     rentalOrder: {
       count: jest.fn().mockResolvedValue(0),
-      create: jest.fn().mockImplementation(({ data }) => { created.push(data); return data; }),
+      create: jest.fn().mockImplementation(({ data }: any) => { created.push(data); return data; }),
     },
-  };
+  });
   const user = { id: 'u1', firstName: 'A', lastName: 'B', phone: '0712', email: 'a@b.c', addresses: [{ id: 'a1' }] };
-  const prisma: any = {
+  const prisma: any = autoPrisma({
     user: { findUnique: jest.fn().mockResolvedValue(user) },
     product: {
-      findUnique: jest.fn().mockResolvedValue({ id: 'p1', tenantId: T, availabilityMode: 'BOTH', isActive: true, deletedAt: null, bufferDaysOverride: null, ...product }),
+      findUnique: jest.fn().mockResolvedValue({ id: 'p1', tenantId: T, availabilityMode: 'RENTAL_ONLY', isActive: true, deletedAt: null, bufferDaysOverride: null, ...product }),
       findFirst: jest.fn().mockResolvedValue({ id: 'p1', ...product }),
     },
     productVariant: { findUnique: jest.fn().mockResolvedValue({ id: 'v1', productId: 'p1', tenantId: T, isActive: true }) },
@@ -248,7 +263,7 @@ function bookingService(product: any, policy: any) {
     rentalOrder: { count: jest.fn().mockResolvedValue(0) },
     customerIDDocument: { findFirst: jest.fn().mockResolvedValue(null) },
     $transaction: jest.fn().mockImplementation((fn: any) => fn(tx)),
-  };
+  });
   const svc = new RentalsService(prisma, { requireId: T } as any, { log: jest.fn() } as any);
   return { svc, created, prisma };
 }
