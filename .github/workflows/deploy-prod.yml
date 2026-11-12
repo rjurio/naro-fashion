@@ -90,6 +90,69 @@ jobs:
       - name: Dependency audit (critical, prod deps)
         run: pnpm audit --prod --audit-level=critical
 
+  # Linux production builds of all three apps, on pull requests ONLY. It
+  # never deploys and never runs on the push to prod, so the guarded deploy
+  # path (verify -> deploy, deploy.sh builds on the VPS) is unchanged. No
+  # secrets and no database: the Next apps only need a public API URL baked
+  # in at build time, so a placeholder is used. Same sequential order and the
+  # same standalone checks as deploy.sh (verify_next_build).
+  build:
+    name: Production builds (api, storefront, admin)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: '1'
+      NEXT_PUBLIC_API_URL: https://api.build-check.invalid/api/v1
+      # The runner has ~16 GB; cap each build well below it. The VPS (2 GB)
+      # builds the same way, one app at a time.
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @naro/database exec prisma generate
+
+      - name: Build API (nest build)
+        run: |
+          pnpm --filter api build
+          test -f apps/api/dist/main.js
+
+      - name: Build storefront (next build, standalone)
+        run: pnpm --filter storefront build
+
+      - name: Build admin (next build, standalone)
+        run: pnpm --filter admin build
+
+      # The files deploy.sh's verify_next_build requires, plus the standalone
+      # server PM2 runs. A build that "succeeds" without them is broken.
+      - name: Check standalone output
+        run: |
+          for app in storefront admin; do
+            d="apps/${app}/.next"
+            for f in BUILD_ID routes-manifest.json; do
+              test -s "${d}/${f}" || { echo "::error::${app}: ${d}/${f} missing"; exit 1; }
+            done
+            test -f "${d}/standalone/apps/${app}/server.js" || { echo "::error::${app}: standalone server.js missing"; exit 1; }
+            test -d "${d}/static" || { echo "::error::${app}: .next/static missing"; exit 1; }
+            echo "${app}: BUILD_ID $(cat "${d}/BUILD_ID") ok"
+          done
+
   deploy:
     name: Deploy to VPS
     needs: verify
