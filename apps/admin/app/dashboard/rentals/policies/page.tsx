@@ -25,7 +25,7 @@ const defaultValues: PolicyValues = {
 
 const fields: { key: keyof PolicyValues; label: string; description: string; suffix: string; defaultVal: number }[] = [
   { key: 'bufferDays', label: 'Buffer Days Between Rentals', description: 'Minimum number of days required between the return of one rental and the start of the next for the same item.', suffix: 'days', defaultVal: 7 },
-  { key: 'downPaymentPercent', label: 'Down Payment Percentage', description: 'Percentage of the total rental amount that must be paid upfront to confirm a rental reservation.', suffix: '%', defaultVal: 25 },
+  { key: 'downPaymentPercent', label: 'Down Payment Percentage', description: 'Default down payment (% of the rental fee, not the deposit) for products set to "Inherit shop default". Products with a custom percentage keep theirs. Changes apply to new bookings only; existing bookings keep their amounts.', suffix: '%', defaultVal: 25 },
   { key: 'lateFeePerDay', label: 'Late Return Fee Per Day', description: 'Daily fee charged when a rental item is returned after the agreed return date.', suffix: 'TZS / day', defaultVal: 15000 },
   { key: 'maxRentalDuration', label: 'Maximum Rental Duration', description: 'The longest period a customer can rent a single item in one transaction.', suffix: 'days', defaultVal: 30 },
   { key: 'preparationReminder', label: 'Advance Preparation Reminder', description: 'System will send daily reminders starting this many days before pickup.', suffix: 'days before pickup', defaultVal: 8 },

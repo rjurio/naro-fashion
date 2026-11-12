@@ -7,6 +7,7 @@ import { useToast } from '@/contexts/ToastContext';
 import ImageUploader from './ImageUploader';
 import Model3dUploader from './Model3dUploader';
 import InfoLabel from '@/components/ui/InfoLabel';
+import RentalDownPaymentControl from './RentalDownPaymentControl';
 
 interface VariantRow {
   id?: string;
@@ -397,6 +398,8 @@ export default function ProductForm({ initialData, onSubmit, submitLabel, latest
               <InfoLabel label="Buffer Days Override" tooltip="Number of days blocked between rentals for cleaning and inspection. Overrides the global rental policy buffer (default 7 days)." />
               <input type="number" min={0} value={bufferDaysOverride ?? ''} onChange={(e) => setBufferDaysOverride(e.target.value ? Number(e.target.value) : null)} className={inputCls} />
             </div>
+            {/* Saved separately with its own permission; the form's Save never sends it. */}
+            <RentalDownPaymentControl productId={initialData?.id} />
           </div>
         </section>
       )}

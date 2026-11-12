@@ -56,22 +56,26 @@ export class RentalsService {
    * quote or book on amounts that can't be used.
    */
   private termsFor(
-    product: RentalTermsProduct & { rentalDownPaymentPct?: unknown },
+    product: RentalTermsProduct & { rentalDownPaymentPct?: unknown; rentalDownPaymentMode?: string | null },
     policy: RentalTermsPolicy | null | undefined,
     tenantId: string,
     productId: string,
   ): RentalTerms {
     const t = rentalTerms(product as RentalTermsProduct, policy);
     for (const setting of t.invalidSettings) {
-      const value = setting === 'product' ? product.rentalDownPaymentPct : policy?.defaultDownPaymentPct;
-      const key = `${tenantId}|${setting === 'product' ? productId : '-'}|${setting}|${String(value)}`;
+      const value =
+        setting === 'product' ? product.rentalDownPaymentPct
+          : setting === 'mode' ? product.rentalDownPaymentMode
+            : policy?.defaultDownPaymentPct;
+      const perProduct = setting !== 'shop';
+      const key = `${tenantId}|${perProduct ? productId : '-'}|${setting}|${String(value)}`;
       if (warnedSettings.has(key)) continue;
       if (warnedSettings.size >= MAX_WARNED) warnedSettings.clear();
       warnedSettings.add(key);
       termsLogger.warn(
-        `[RENTAL_TERMS] invalid ${setting === 'product' ? 'product' : 'shop'} down-payment % ignored ` +
-          `tenant=${tenantId}${setting === 'product' ? ` product=${productId}` : ''} value=${JSON.stringify(String(value)).slice(0, 40)} ` +
-          `→ using ${t.downPaymentSource === 'shop' ? 'the shop default' : 'the 25% fallback'} (${t.downPaymentPct}%)`,
+        `[RENTAL_TERMS] invalid ${setting === 'mode' ? 'product down-payment mode' : `${setting} down-payment %`} ignored ` +
+          `tenant=${tenantId}${perProduct ? ` product=${productId}` : ''} value=${JSON.stringify(String(value)).slice(0, 40)} ` +
+          `→ using ${t.downPaymentSource === 'product' ? "the product's stored %" : t.downPaymentSource === 'shop' ? 'the shop default' : 'the 25% fallback'} (${t.downPaymentPct}%)`,
       );
     }
     if (!t.usable) {
@@ -495,6 +499,7 @@ export class RentalsService {
         basePrice: true,
         rentalDepositAmount: true,
         rentalDownPaymentPct: true,
+        rentalDownPaymentMode: true,
       },
     });
     if (!product) {

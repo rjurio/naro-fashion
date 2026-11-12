@@ -351,6 +351,9 @@ export class ProductsService {
       sizeGuideId: dto.sizeGuideId || undefined,
       isFeatured: dto.isFeatured ?? false,
       isActive: dto.published !== false,
+      // New products inherit the shop's down-payment policy; they never get a
+      // permanent % of their own just by being created (see rental-terms.ts).
+      rentalDownPaymentMode: 'INHERIT',
       rentalPricePerDay: dto.rentalPricePerDay,
       latePenaltyPercent: dto.latePenaltyPercent,
       rentalDepositAmount: dto.rentalDepositAmount,
