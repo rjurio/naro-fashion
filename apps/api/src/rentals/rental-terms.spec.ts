@@ -156,7 +156,7 @@ describe('GET /rentals/quote/:productId', () => {
     expect(prisma.rentalPolicy.findFirst.mock.calls[0][0].where).toEqual({ tenantId: T });
     // reads only the price columns it needs
     expect(Object.keys(prisma.product.findFirst.mock.calls[0][0].select).sort()).toEqual(
-      ['basePrice', 'rentalDepositAmount', 'rentalDownPaymentMode', 'rentalDownPaymentPct', 'rentalPricePerDay'],
+      ['basePrice', 'latePenaltyPercent', 'rentalDepositAmount', 'rentalDownPaymentMode', 'rentalDownPaymentPct', 'rentalPricePerDay'],
     );
   });
 
@@ -165,12 +165,15 @@ describe('GET /rentals/quote/:productId', () => {
     await expect(svc.getQuote('nope')).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('returns six finite, non-negative amounts only: no ids, no policy internals, no source', async () => {
+  it('returns six finite, non-negative amounts + the late-fee terms only: no ids, no policy internals, no source', async () => {
     const { svc } = makeService(GOWN, { defaultDownPaymentPct: 30 });
     const q: any = await svc.getQuote('p1');
-    expect(Object.keys(q).sort()).toEqual(['deposit', 'downPayment', 'downPaymentPct', 'remaining', 'rentalFee', 'total']);
-    for (const v of Object.values(q)) expect(Number.isFinite(v) && (v as number) >= 0).toBe(true);
-    expect(q).toEqual({ rentalFee: 140000, deposit: 350000, downPaymentPct: 30, downPayment: 42000, total: 490000, remaining: 448000 });
+    const { lateFee, ...amounts } = q;
+    expect(Object.keys(amounts).sort()).toEqual(['deposit', 'downPayment', 'downPaymentPct', 'remaining', 'rentalFee', 'total']);
+    for (const v of Object.values(amounts)) expect(Number.isFinite(v) && (v as number) >= 0).toBe(true);
+    expect(amounts).toEqual({ rentalFee: 140000, deposit: 350000, downPaymentPct: 30, downPayment: 42000, total: 490000, remaining: 448000 });
+    // LF-2026-11: the same terms a booking made now would store (display only).
+    expect(Object.keys(lateFee).sort()).toEqual(['basis', 'capAmount', 'pct', 'perDay', 'text', 'version']);
   });
 
   it('unusable amounts → 422 RENTAL_TERMS_UNAVAILABLE, never a NaN quote', async () => {
@@ -380,7 +383,8 @@ describe('with PR #12: quote, stored booking, remaining fee and deposit agree (w
   const FRACTIONAL = { rentalPricePerDay: '250', basePrice: '500', rentalDepositAmount: '50', rentalDownPaymentPct: 25 };
   it('fee 250 at 25 % → down payment 63 (not 62.5), remaining 237, deposit 50, total 300', async () => {
     const q = await makeService(FRACTIONAL, null).svc.getQuote('p-frac');
-    expect(q).toEqual({ rentalFee: 250, deposit: 50, downPaymentPct: 25, downPayment: 63, total: 300, remaining: 237 });
+    const { lateFee: _lf, ...amounts } = q as any;
+    expect(amounts).toEqual({ rentalFee: 250, deposit: 50, downPaymentPct: 25, downPayment: 63, total: 300, remaining: 237 });
   });
   it('the booking stores the same 63 / 250 / 50, and the quoted 63 is accepted', async () => {
     const { svc, created } = bookingService(FRACTIONAL, null);

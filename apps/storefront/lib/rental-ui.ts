@@ -85,6 +85,8 @@ export interface RentalQuote {
   total: number;
   /** Total minus the down payment. */
   remaining: number;
+  /** LF-2026-11: the server's late-fee sentence (EN / SW); never computed here. */
+  lateFeeText?: { en: string; sw: string } | null;
 }
 
 /**
@@ -108,7 +110,9 @@ export function parseRentalQuote(res: unknown): RentalQuote | null {
     out[k] = n;
   }
   if (out.downPaymentPct > 100 || out.rentalFee <= 0 || out.downPayment > out.rentalFee) return null;
-  return out;
+  const lf = (r.lateFee as any)?.text;
+  const lateFeeText = lf && typeof lf.en === 'string' && typeof lf.sw === 'string' ? { en: lf.en, sw: lf.sw } : null;
+  return lateFeeText ? { ...out, lateFeeText } : out;
 }
 
 /** A 0 % policy: the quote is valid but asks for no down payment. */

@@ -8,7 +8,9 @@ import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import {
   CreateRentalRefundRequestDto,
+  DecideLateFeeWaiverDto,
   FailRentalRefundDto,
+  RequestLateFeeWaiverDto,
   PayRentalRefundDto,
   RejectRentalRefundDto,
   RentalMoneyService,
@@ -30,6 +32,25 @@ export class RentalMoneyController {
   @RequiresPermission('rentals:view')
   ledger(@Param('id') id: string) {
     return this.money.ledger(id);
+  }
+
+  // LF-2026-11 late-fee waivers: request (rentals:update-status), approve / reject (rentals:waive-late-fee, ≠ requester).
+  @Post('rentals/:id/late-fee-waivers')
+  @RequiresPermission('rentals:update-status')
+  requestLateFeeWaiver(@Param('id') id: string, @Body() dto: RequestLateFeeWaiverDto, @CurrentUser() user: any) {
+    return this.money.requestLateFeeWaiver(id, dto, user);
+  }
+
+  @Patch('late-fee-waivers/:id/approve')
+  @RequiresPermission('rentals:waive-late-fee')
+  approveLateFeeWaiver(@Param('id') id: string, @Body() dto: DecideLateFeeWaiverDto, @CurrentUser() user: any) {
+    return this.money.approveLateFeeWaiver(id, dto, user);
+  }
+
+  @Patch('late-fee-waivers/:id/reject')
+  @RequiresPermission('rentals:waive-late-fee')
+  rejectLateFeeWaiver(@Param('id') id: string, @Body() dto: RejectRentalRefundDto, @CurrentUser() user: any) {
+    return this.money.rejectLateFeeWaiver(id, dto, user);
   }
 
   @Post('rentals/:id/refund-requests')
