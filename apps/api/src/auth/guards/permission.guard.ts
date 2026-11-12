@@ -1,3 +1,4 @@
+import { recordSecurityEvent } from '../../audit/security-audit';
 import {
   Injectable,
   CanActivate,
@@ -63,11 +64,39 @@ export class PermissionGuard implements CanActivate {
     const codes = await this.resolvePermissions(user.id, user.tenantId ?? null);
     const allowed = required.some((code) => codes.has(code));
     if (!allowed) {
+      await this.recordDenial(context, user, required);
       throw new ForbiddenException(
         `Missing required permission: ${required.join(' or ')}`,
       );
     }
     return true;
+  }
+
+  // One audit row per admin + route per minute: a refused privileged action
+  // is recorded without letting a script flood the log.
+  private readonly lastDenial = new Map<string, number>();
+
+  private async recordDenial(context: ExecutionContext, user: any, required: string[]) {
+    const req = context.switchToHttp().getRequest();
+    const route = `${req.method} ${req.route?.path ?? String(req.originalUrl ?? req.url ?? '').split('?')[0]}`;
+    const key = `${user.id}|${route}`;
+    const now = Date.now();
+    const last = this.lastDenial.get(key);
+    if (last !== undefined && now - last < 60_000) return;
+    this.lastDenial.set(key, now);
+    if (this.lastDenial.size > 5000) {
+      for (const [k, t] of this.lastDenial) if (now - t >= 60_000) this.lastDenial.delete(k);
+    }
+    await recordSecurityEvent(this.prisma as any, {
+      action: 'PERMISSION_DENIED',
+      result: 'DENIED',
+      tenantId: user.tenantId ?? null,
+      actor: { type: 'admin', id: user.id, role: user.role ?? null },
+      targetType: 'Route',
+      targetId: route,
+      ipAddress: req.ip ?? null,
+      details: { required, targetAdminId: req.params?.id ?? null },
+    });
   }
 
   /**
