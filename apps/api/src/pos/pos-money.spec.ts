@@ -159,6 +159,7 @@ function makeService(order: any, opts: { claimCount?: number; session?: any } = 
     inventoryTransaction: { create: jest.fn().mockResolvedValue({}) },
     payment: { create: jest.fn().mockResolvedValue({}) },
     posExchange: { create: jest.fn().mockImplementation((a: any) => Promise.resolve(a.data)) },
+    refundRequest: { create: jest.fn().mockResolvedValue({ id: 'rr-x' }) },
   };
   const session = opts.session === undefined ? { id: 'sess-1', openingCash: 0 } : opts.session;
   const prisma: any = {
@@ -174,7 +175,7 @@ function makeService(order: any, opts: { claimCount?: number; session?: any } = 
 describe('PosService.refundSale', () => {
   it('refunds a discounted sale at the net amount paid and passes the cap', async () => {
     const { service, tx } = makeService(makeOrder());
-    const res = await service.refundSale('order-1', { refundMethod: 'CASH' } as any, 'cashier');
+    const res = await service.executeSaleRefund('order-1', { refundMethod: 'CASH' } as any, 'cashier', 'rr1');
     expect(res.refundAmount).toBe(24300); // not 30,000 (unitPrice × qty)
     expect(res.isFullRefund).toBe(true);
     const pay = tx.payment.create.mock.calls[0][0].data;
@@ -185,10 +186,10 @@ describe('PosService.refundSale', () => {
 
   it('claims refundedQuantity with an atomic guarded increment inside the tx', async () => {
     const { service, tx } = makeService(makeOrder());
-    await service.refundSale(
+    await service.executeSaleRefund(
       'order-1',
       { refundMethod: 'MPESA', items: [{ orderItemId: 'item-1', quantity: 2 }] } as any,
-      'cashier',
+      'cashier', 'rr1',
     );
     const args = tx.orderItem.updateMany.mock.calls[0][0];
     expect(args.where.refundedQuantity).toEqual({ lte: 1 }); // quantity 3 − 2
@@ -199,10 +200,10 @@ describe('PosService.refundSale', () => {
   it('fails (rolls back) when a concurrent refund already claimed the units', async () => {
     const { service, tx } = makeService(makeOrder(), { claimCount: 0 });
     await expect(
-      service.refundSale(
+      service.executeSaleRefund(
         'order-1',
         { refundMethod: 'MPESA', items: [{ orderItemId: 'item-1', quantity: 1 }] } as any,
-        'cashier',
+        'cashier', 'rr1',
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(tx.payment.create).not.toHaveBeenCalled();
@@ -211,7 +212,7 @@ describe('PosService.refundSale', () => {
   it('rejects a cash refund with no open shift', async () => {
     const { service } = makeService(makeOrder(), { session: null });
     await expect(
-      service.refundSale('order-1', { refundMethod: 'CASH' } as any, 'cashier'),
+      service.executeSaleRefund('order-1', { refundMethod: 'CASH' } as any, 'cashier', 'rr1'),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -220,10 +221,10 @@ describe('PosService.refundSale', () => {
     order.items[0].refundedQuantity = 2;
     const { service } = makeService(order);
     await expect(
-      service.refundSale(
+      service.executeSaleRefund(
         'order-1',
         { refundMethod: 'MPESA', items: [{ orderItemId: 'item-1', quantity: 2 }] } as any,
-        'cashier',
+        'cashier', 'rr1',
       ),
     ).rejects.toThrow(/remaining 1/);
   });
@@ -267,10 +268,12 @@ describe('PosService.createExchange', () => {
     expect(claim.where.refundedQuantity).toEqual({ lte: 2 });
     expect(claim.data.refundedQuantity).toEqual({ increment: 1 });
     expect(ex.returnTotal).toBe(8100);
-    // Customer is owed → REFUNDED payment on the original order, drawer-tagged.
-    const pay = tx.payment.create.mock.calls[0][0].data;
-    expect(pay).toMatchObject({ orderId: 'order-1', status: 'REFUNDED', amount: 8100, method: 'CASH' });
-    expect(pay.gatewayResponse.posSessionId).toBe('sess-1');
+    // R1b: customer is owed → a refund REQUEST on the original order (no money
+    // moves at the till; approval + payout by others), never a REFUNDED row.
+    expect(tx.payment.create).not.toHaveBeenCalled();
+    const req = tx.refundRequest.create.mock.calls[0][0].data;
+    expect(req).toMatchObject({ orderId: 'order-1', subject: 'POS_SALE', kind: 'EXCHANGE_DIFFERENCE', amount: 8100, status: 'REQUESTED', requestedById: 'cashier' });
+    expect(ex.refundRequestId).toBe('rr-x');
   });
 
   it('a concurrent exchange of the same line loses (claim count 0)', async () => {

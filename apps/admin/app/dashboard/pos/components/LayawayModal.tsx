@@ -80,11 +80,13 @@ export default function LayawayModal({ onClose }: Props) {
   };
 
   const handleCancel = async (id: string) => {
-    const ok = await confirm({ title: 'Cancel Layaway', message: 'Are you sure you want to cancel this layaway?', confirmLabel: 'Cancel Layaway', variant: 'danger' });
+    const ok = await confirm({ title: 'Cancel Layaway', message: 'Cancel this layaway? Any instalments paid stay on record and become a refund request for the full amount (approved and paid out by others).', confirmLabel: 'Cancel Layaway', variant: 'danger' });
     if (!ok) return;
+    const reason = (typeof window !== 'undefined' ? window.prompt('Reason for cancelling (at least 5 characters):') : '')?.trim() ?? '';
+    if (reason.length < 5) { toast.error('A reason is required to cancel a layaway.'); return; }
     try {
-      await adminApi.posCancelLayaway(id);
-      toast.success('Layaway cancelled');
+      const res = await adminApi.posCancelLayaway(id, reason);
+      toast.success(res?.refundRequest ? 'Layaway cancelled. The money paid is now a refund request (Refunds).' : 'Layaway cancelled (nothing had been paid).');
       loadLayaways();
     } catch (err: any) {
       toast.error(err.message || 'Failed to cancel');
