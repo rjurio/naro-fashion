@@ -298,6 +298,10 @@ export const rentalsApi = {
   getOne: (id: string) => api.get<any>(`/rentals/${id}`),
   checkAvailability: (productId: string, startDate: string, endDate: string) =>
     api.get<{ available: boolean }>(`/rentals/availability/${productId}?startDate=${startDate}&endDate=${endDate}`),
+  /** Server-computed money terms (display only; the booking stores its own). */
+  quote: (productId: string) => api.get<unknown>(`/rentals/quote/${encodeURIComponent(productId)}`),
+  /** Shop-level: does the default policy need a down payment at all? */
+  termsSummary: () => api.get<{ downPaymentRequired?: unknown }>('/rentals/terms-summary'),
 };
 
 export const reviewsApi = {

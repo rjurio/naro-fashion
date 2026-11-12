@@ -1,8 +1,10 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
   ConflictException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { conflictException } from '../common/offline-sync.util';
@@ -12,6 +14,24 @@ import { CreateRentalDto } from './dto/create-rental.dto';
 import { UpdateRentalDto } from './dto/update-rental.dto';
 import { QueryRentalsDto } from './dto/query-rentals.dto';
 import { ownerScope } from '../auth/util/ownership';
+import {
+  RentalTerms,
+  RentalTermsPolicy,
+  RentalTermsProduct,
+  publicQuote,
+  quotedTermsDiffer,
+  rentalTerms,
+  shopDownPaymentPct,
+} from './rental-terms';
+
+const termsLogger = new Logger('RentalTerms');
+// One warning per (tenant, product, setting, value): the quote is public and
+// can be called often; a bad setting is logged once per process, not per call.
+const warnedSettings = new Set<string>();
+const MAX_WARNED = 1000;
+
+export const RENTAL_TERMS_CHANGED = 'RENTAL_TERMS_CHANGED';
+export const RENTAL_TERMS_UNAVAILABLE = 'RENTAL_TERMS_UNAVAILABLE';
 import { Decimal } from '@prisma/client/runtime/library';
 import {
   NON_BLOCKING_RENTAL_STATUSES,
@@ -27,6 +47,42 @@ export class RentalsService {
     private readonly tenantContext: TenantContext,
     private readonly auditService: AuditService,
   ) {}
+
+  /**
+   * rentalTerms() plus the operational side: warn (ids and the bad value
+   * only, no customer data) about ignored invalid settings, and refuse to
+   * quote or book on amounts that can't be used.
+   */
+  private termsFor(
+    product: RentalTermsProduct & { rentalDownPaymentPct?: unknown },
+    policy: RentalTermsPolicy | null | undefined,
+    tenantId: string,
+    productId: string,
+  ): RentalTerms {
+    const t = rentalTerms(product as RentalTermsProduct, policy);
+    for (const setting of t.invalidSettings) {
+      const value = setting === 'product' ? product.rentalDownPaymentPct : policy?.defaultDownPaymentPct;
+      const key = `${tenantId}|${setting === 'product' ? productId : '-'}|${setting}|${String(value)}`;
+      if (warnedSettings.has(key)) continue;
+      if (warnedSettings.size >= MAX_WARNED) warnedSettings.clear();
+      warnedSettings.add(key);
+      termsLogger.warn(
+        `[RENTAL_TERMS] invalid ${setting === 'product' ? 'product' : 'shop'} down-payment % ignored ` +
+          `tenant=${tenantId}${setting === 'product' ? ` product=${productId}` : ''} value=${JSON.stringify(String(value)).slice(0, 40)} ` +
+          `→ using ${t.downPaymentSource === 'shop' ? 'the shop default' : 'the 25% fallback'} (${t.downPaymentPct}%)`,
+      );
+    }
+    if (!t.usable) {
+      termsLogger.warn(
+        `[RENTAL_TERMS] unusable rental amounts tenant=${tenantId} product=${productId} (no valid rental fee / deposit)`,
+      );
+      throw new UnprocessableEntityException({
+        code: RENTAL_TERMS_UNAVAILABLE,
+        message: 'This item has no valid rental price yet. Please contact the store.',
+      });
+    }
+    return t;
+  }
 
   async create(userId: string, dto: CreateRentalDto) {
     // Verify customer profile completeness before rental
@@ -126,19 +182,23 @@ export class RentalsService {
     //   latePenaltyPercent% of flat price per day late.
     // The stored totalRentalPrice here is the flat price at booking time;
     //   any late fee is assessed on actual return in the rental controller.
-    const rentalPrice = product.rentalPricePerDay
-      ? Number(product.rentalPricePerDay)
-      : Number(product.basePrice) * 0.1;
-    const depositAmount = product.rentalDepositAmount
-      ? Number(product.rentalDepositAmount)
-      : 0;
-    const downPaymentPct =
-      product.rentalDownPaymentPct ??
-      policy?.defaultDownPaymentPct ??
-      25;
-
-    const totalRentalPrice = rentalPrice;
-    const downPaymentAmount = totalRentalPrice * (downPaymentPct / 100);
+    // One rule for the money terms (rental-terms.ts), shared with the public
+    // quote the storefront displays: product % → shop default % → 25 %.
+    // The booking computes and stores its OWN amounts; the quote is advisory.
+    const terms = this.termsFor(product, policy, tenantId, dto.productId);
+    // If the customer was shown different amounts (a price or policy change
+    // after the page loaded), refuse rather than store terms they haven't seen.
+    if (quotedTermsDiffer(dto, terms)) {
+      throw new ConflictException({
+        code: RENTAL_TERMS_CHANGED,
+        message:
+          'The rental terms changed after this page was loaded. Please review the new amounts and request the booking again.',
+        current: publicQuote(terms),
+      });
+    }
+    const depositAmount = terms.deposit;
+    const totalRentalPrice = terms.rentalFee;
+    const downPaymentAmount = terms.downPayment;
 
     // Check ID verification status
     const idDoc = await this.prisma.customerIDDocument.findFirst({
@@ -391,8 +451,17 @@ export class RentalsService {
     endDate: Date,
   ) {
     const tenantId = this.tenantContext.requireId;
-    const product = await this.prisma.product.findUnique({
-      where: { id: productId, tenantId },
+    // Public endpoint: only active, rental-eligible products of THIS tenant.
+    // Anything else is the same 404 (no hint whether it exists/is hidden).
+    const product = await this.prisma.product.findFirst({
+      where: {
+        id: productId,
+        tenantId,
+        isActive: true,
+        deletedAt: null,
+        availabilityMode: { in: ['RENTAL_ONLY', 'BOTH'] },
+      },
+      select: { id: true, bufferDaysOverride: true },
     });
     if (!product) {
       throw new NotFoundException('Product not found');
@@ -400,6 +469,7 @@ export class RentalsService {
 
     const policy = await this.prisma.rentalPolicy.findFirst({
       where: { tenantId },
+      select: { bufferDaysBetweenRentals: true },
     });
     const bufferDays =
       product.bufferDaysOverride ?? policy?.bufferDaysBetweenRentals ?? 7;
@@ -411,7 +481,56 @@ export class RentalsService {
       bufferDays,
     );
 
-    return { productId, startDate, endDate, available, bufferDays };
+    // Minimal by design — this answer is visible to anonymous callers.
+    return { available };
+  }
+
+  /**
+   * PUBLIC: the money terms a booking of this product would store right now
+   * (rental-terms.ts, the same function create() uses). Same visibility as
+   * getAvailability: only active, rental-eligible products of THIS tenant,
+   * anything else is the same 404. Returns amounts only: no ids, no policy
+   * internals. Read fresh on every call, so a changed shop default shows at
+   * once. Display only: the booking re-computes and stores its own amount.
+   */
+  async getQuote(productId: string) {
+    const tenantId = this.tenantContext.requireId;
+    const product = await this.prisma.product.findFirst({
+      where: {
+        id: productId,
+        tenantId,
+        isActive: true,
+        deletedAt: null,
+        availabilityMode: { in: ['RENTAL_ONLY', 'BOTH'] },
+      },
+      select: {
+        rentalPricePerDay: true,
+        basePrice: true,
+        rentalDepositAmount: true,
+        rentalDownPaymentPct: true,
+      },
+    });
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+    const policy = await this.prisma.rentalPolicy.findFirst({
+      where: { tenantId },
+      select: { defaultDownPaymentPct: true },
+    });
+    return publicQuote(this.termsFor(product, policy, tenantId, productId));
+  }
+
+  /**
+   * PUBLIC, shop-level: only whether the shop's default needs a down payment
+   * at all (for the "How it works" step). No percentage, no other policy data.
+   */
+  async getTermsSummary() {
+    const tenantId = this.tenantContext.requireId;
+    const policy = await this.prisma.rentalPolicy.findFirst({
+      where: { tenantId },
+      select: { defaultDownPaymentPct: true },
+    });
+    return { downPaymentRequired: shopDownPaymentPct(policy?.defaultDownPaymentPct) > 0 };
   }
 
   async getUpcomingPickups(days: number) {

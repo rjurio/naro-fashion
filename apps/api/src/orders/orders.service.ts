@@ -19,7 +19,7 @@ import {
   resolveDeliveryFee,
   restockOrderItems,
 } from './order-lifecycle.util';
-import { QueryOrdersDto, AdminQueryOrdersDto } from './dto/query-orders.dto';
+import { QueryOrdersDto, AdminQueryOrdersDto, orderSortToOrderBy } from './dto/query-orders.dto';
 import { ownerScope, isAdminUser } from '../auth/util/ownership';
 import { Prisma } from '@prisma/client';
 
@@ -292,7 +292,7 @@ export class OrdersService {
     return this.withShippingFee(order);
   }
   async findAll(userId: string, query: QueryOrdersDto) {
-    const { status, page = 1, limit = 20 } = query;
+    const { status, sort, page = 1, limit = 20 } = query;
 
     const where: any = { tenantId: this.tenantContext.requireId, userId };
     if (status) {
@@ -304,7 +304,7 @@ export class OrdersService {
     const [orders, total] = await Promise.all([
       this.prisma.order.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: orderSortToOrderBy(sort),
         skip,
         take: limit,
         include: {
@@ -335,7 +335,7 @@ export class OrdersService {
   }
 
   async findAllAdmin(query: AdminQueryOrdersDto) {
-    const { search, status, startDate, endDate, page = 1, limit = 20 } = query;
+    const { search, status, sort, startDate, endDate, page = 1, limit = 20 } = query;
 
     const where: any = { tenantId: this.tenantContext.requireId };
 
@@ -370,7 +370,7 @@ export class OrdersService {
     const [orders, total] = await Promise.all([
       this.prisma.order.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: orderSortToOrderBy(sort),
         skip,
         take: limit,
         include: {

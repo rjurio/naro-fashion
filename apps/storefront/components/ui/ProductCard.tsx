@@ -3,10 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Heart, ShoppingCart, Star, Loader2 } from "lucide-react";
+import { Heart, ShoppingCart, Star, Loader2, Crown } from "lucide-react";
 import { cn, formatPrice } from "@/lib/utils";
 import { cartApi, wishlistApi, tokenStore } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { cardActions, rentalHref, type CardContext } from "@/lib/rental-ui";
 import Badge from "./Badge";
 import Button from "./Button";
 
@@ -24,6 +25,10 @@ interface ProductCardProps {
   isOnSale?: boolean;
   isRentable?: boolean;
   rentPrice?: number;
+  /** PURCHASE_ONLY | RENTAL_ONLY | BOTH. Falls back to isRentable ? BOTH : PURCHASE_ONLY. */
+  availabilityMode?: string;
+  /** "rentals" on the rentals catalogue: a card there never offers a purchase. */
+  context?: CardContext;
   defaultVariantId?: string;
   className?: string;
 }
@@ -42,6 +47,8 @@ export default function ProductCard({
   isOnSale = false,
   isRentable = false,
   rentPrice,
+  availabilityMode,
+  context = "shop",
   defaultVariantId,
   className,
 }: ProductCardProps) {
@@ -57,6 +64,16 @@ export default function ProductCard({
     : 0;
 
   const productHref = href ?? (slug ? `/products/${slug}` : `/products/${id}`);
+  const actions = cardActions(availabilityMode ?? (isRentable ? "BOTH" : "PURCHASE_ONLY"), context);
+  const showRentBadge = isRentable || actions.rent;
+
+  const handleRent = (e: React.MouseEvent) => {
+    // The card itself is a <Link>; a nested anchor is invalid HTML, so the
+    // Rent action is a button that navigates to the booking page.
+    e.preventDefault();
+    e.stopPropagation();
+    router.push(rentalHref(slug || id));
+  };
 
   const handleWishlistToggle = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -133,7 +150,7 @@ export default function ProductCard({
           {isOnSale && discount > 0 && (
             <Badge variant="sale">-{discount}%</Badge>
           )}
-          {isRentable && <Badge variant="rent">{t('product.rentAvailable')}</Badge>}
+          {showRentBadge && <Badge variant="rent">{t('product.rentAvailable')}</Badge>}
         </div>
 
         {/* Wishlist Button */}
@@ -156,25 +173,40 @@ export default function ProductCard({
           )}
         </button>
 
-        {/* Quick Add to Cart — always visible on mobile, hover-reveal on desktop */}
-        <div className="absolute bottom-3 left-3 right-3 z-20 opacity-100 translate-y-0 md:opacity-0 md:translate-y-2 md:group-hover:opacity-100 md:group-hover:translate-y-0 transition-all duration-300">
-          <Button
-            size="sm"
-            className="w-full gap-2"
-            onClick={handleAddToCart}
-            disabled={cartLoading}
-          >
-            {cartLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : cartMsg ? (
-              cartMsg
-            ) : (
-              <>
-                <ShoppingCart className="h-4 w-4" />
-                {t('product.addToCart')}
-              </>
-            )}
-          </Button>
+        {/* Quick actions — always visible on mobile, hover-reveal on desktop */}
+        <div className="absolute bottom-3 left-3 right-3 z-20 flex gap-2 opacity-100 translate-y-0 md:opacity-0 md:translate-y-2 md:group-hover:opacity-100 md:group-hover:translate-y-0 transition-all duration-300">
+          {actions.buy && (
+            <Button
+              size="sm"
+              className="flex-1 gap-2"
+              onClick={handleAddToCart}
+              disabled={cartLoading}
+              data-testid="card-add-to-cart"
+            >
+              {cartLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : cartMsg ? (
+                cartMsg
+              ) : (
+                <>
+                  <ShoppingCart className="h-4 w-4" />
+                  {actions.rent ? t('product.buy') : t('product.addToCart')}
+                </>
+              )}
+            </Button>
+          )}
+          {actions.rent && (
+            <Button
+              size="sm"
+              variant="secondary"
+              className="flex-1 gap-2"
+              onClick={handleRent}
+              data-testid="card-rent"
+            >
+              <Crown className="h-4 w-4" />
+              {t('product.rent')}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -215,7 +247,7 @@ export default function ProductCard({
         </div>
 
         {/* Rent price */}
-        {isRentable && rentPrice && (
+        {showRentBadge && rentPrice && (
           <p className="mt-1 text-xs text-gold-text">
             {t('product.rentFrom')} {formatPrice(rentPrice)}{t('product.perRental')}
           </p>
