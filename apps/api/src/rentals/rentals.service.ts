@@ -5,6 +5,7 @@ import {
   BadRequestException,
   ConflictException,
   UnprocessableEntityException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { conflictException } from '../common/offline-sync.util';
@@ -47,6 +48,12 @@ import { notAvailableForRental } from './rental-sale-guard';
 import { findRentalAvailability, findRentalAvailabilityBlock, RentalBlockReason } from './rental-availability';
 import { customerIdState, hasApprovedId, lockCustomerIdState } from '../id-verification/id-approval';
 import { decideHold, MAX_STAFF_EXTENSION_DAYS, pickupCutoff, pickupExpiryAt } from './rental-hold';
+import { rentalBalances } from './rental-ledger';
+import { userHasPermission } from '../auth/util/permission-check';
+
+/** Statuses that mean the item has been handed over. */
+const RELEASE_TARGETS = ['ITEM_DISPATCHED', 'ACTIVE'];
+const HANDED_OVER = ['ITEM_DISPATCHED', 'ACTIVE', 'RETURNED', 'INSPECTION', 'CLOSED'];
 import { ExtendRentalHoldDto } from './dto/rental-hold-actions.dto';
 
 @Injectable()
@@ -97,7 +104,20 @@ export class RentalsService {
     return t;
   }
 
-  async create(userId: string, dto: CreateRentalDto) {
+  /**
+   * The ONE booking path, shared by the storefront (ONLINE) and walk-in POS
+   * bookings (POS rental MVP, M3). Same availability rule, locks, ID rule,
+   * hold deadline and money terms; only the profile requirements differ:
+   *  - ONLINE: full name, phone, email and an address (unchanged);
+   *  - POS: full name and phone; email optional; the address is required
+   *    before HANDOVER (assertReleasable), not to book.
+   */
+  async create(
+    userId: string,
+    dto: CreateRentalDto,
+    opts: { channel?: 'ONLINE' | 'POS'; createdByAdminId?: string; termsAccepted?: boolean } = {},
+  ) {
+    const channel = opts.channel ?? 'ONLINE';
     // Verify customer profile completeness before rental
     const tenantId = this.tenantContext.requireId;
     const user = await this.prisma.user.findUnique({
@@ -117,15 +137,18 @@ export class RentalsService {
         'Please add your phone number to your profile before renting',
       );
     }
-    if (!user.email) {
+    if (channel === 'ONLINE' && !user.email) {
       throw new BadRequestException(
         'Please add your email address to your profile before renting',
       );
     }
-    if (user.addresses.length === 0) {
+    if (channel === 'ONLINE' && user.addresses.length === 0) {
       throw new BadRequestException(
         'Please add an address to your profile before renting',
       );
+    }
+    if (channel === 'POS' && opts.termsAccepted !== true) {
+      throw new BadRequestException('The customer must accept the rental terms before the booking is made.');
     }
 
     const product = await this.prisma.product.findUnique({
@@ -254,6 +277,9 @@ export class RentalsService {
           status: initialStatus,
           // M2: the physical unit, allocated under the per-product lock (null: legacy product).
           rentalUnitId: availability.unitId,
+          channel,
+          createdByAdminId: channel === 'POS' ? opts.createdByAdminId ?? null : null,
+          termsAcceptedAt: channel === 'POS' ? new Date() : null,
           holdState: hold.holdState,
           holdExpiresAt: hold.holdExpiresAt,
           notes: dto.notes,
@@ -386,6 +412,15 @@ export class RentalsService {
     // status says. Covers every jump (e.g. PENDING_ID_VERIFICATION straight
     // to READY_FOR_PICKUP / ACTIVE) and offline replays.
     await this.assertApprovedIdFor(rental, status);
+
+    // POS rental MVP (M3): handing the item over (dispatch / collection) is a
+    // separate permission and needs everything settled first.
+    if (RELEASE_TARGETS.includes(status) && !RELEASE_TARGETS.includes(rental.status) && !HANDED_OVER.includes(rental.status)) {
+      if (user && !(await userHasPermission(this.prisma as any, user, 'rentals:release'))) {
+        throw new ForbiddenException({ statusCode: 403, code: 'RELEASE_NOT_PERMITTED', message: 'Handing an item over needs the "rentals:release" permission.' });
+      }
+      await this.assertReleasable(rental);
+    }
 
     const data: any = { status };
     if (status === 'ID_VERIFIED') {
@@ -542,6 +577,41 @@ export class RentalsService {
     });
     await this.auditService.log('MARK_READY', 'Rental', id);
     return marked;
+  }
+
+  /**
+   * Handover gate (owner requirement, POS rental MVP M3): the item may leave
+   * the shop only when the customer has an approved National ID, the WHOLE
+   * rental fee and the WHOLE refundable deposit are received (rental money
+   * ledger), the customer has an address on file, and — on a unit-managed
+   * product — a unit is allocated and in service. 422 HANDOVER_BLOCKED with
+   * the list of what is missing; nothing written.
+   */
+  async assertReleasable(rental: Parameters<typeof rentalBalances>[0] & { id: string; userId: string; productId: string; rentalUnitId?: string | null }) {
+    const tenantId = this.tenantContext.requireId;
+    const missing: string[] = [];
+    if (!(await hasApprovedId(this.prisma, tenantId, rental.userId))) missing.push('APPROVED_ID');
+    const [payments, requests, addresses, units, unit] = await Promise.all([
+      this.prisma.payment.findMany({ where: { rentalOrderId: rental.id, tenantId }, select: { amount: true, status: true, component: true } }),
+      this.prisma.rentalRefundRequest?.findMany?.({ where: { rentalOrderId: rental.id, tenantId }, select: { component: true, amount: true, retainedAmount: true, status: true } }) ?? [],
+      this.prisma.address.count({ where: { userId: rental.userId } }),
+      this.prisma.rentalUnit?.count?.({ where: { tenantId, productId: rental.productId } }) ?? 0,
+      rental.rentalUnitId ? this.prisma.rentalUnit.findFirst({ where: { id: rental.rentalUnitId, tenantId }, select: { status: true } }) : null,
+    ]);
+    const b = rentalBalances(rental, payments, requests ?? []);
+    if (!b.feeFullyPaid) missing.push('FULL_RENTAL_FEE');
+    if (!b.depositFullyPaid) missing.push('DEPOSIT');
+    if (addresses === 0) missing.push('ADDRESS');
+    if ((units ?? 0) > 0 && (!unit || unit.status !== 'ACTIVE')) missing.push('UNIT');
+    if (missing.length === 0) return;
+    await this.auditService.log('RELEASE_BLOCKED', 'Rental', rental.id, { missing });
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      code: 'HANDOVER_BLOCKED',
+      missing,
+      outstanding: b.outstanding,
+      message: `The item can't be handed over yet: ${missing.join(', ')}.`,
+    });
   }
 
   /**

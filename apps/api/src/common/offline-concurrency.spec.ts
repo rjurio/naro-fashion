@@ -262,18 +262,22 @@ describe('Rentals — expectedStatus', () => {
       // The customer holds an approved National ID (needed to hand over the item).
       customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'doc1' })) },
     };
-    return { svc: new RentalsService(prisma, tenantContext, audit), prisma };
+    const svc = new RentalsService(prisma, tenantContext, audit);
+    // POS rental MVP (M3): the handover gate (full fee + deposit + address +
+    // unit) has its own tests; these cases are about the offline version check.
+    jest.spyOn(svc, 'assertReleasable').mockResolvedValue(undefined);
+    return { svc, prisma };
   }
 
   it('match → CAS update', async () => {
     const { svc, prisma } = make('READY_FOR_PICKUP');
-    await svc.updateStatus('r1', 'ITEM_DISPATCHED', 'READY_FOR_PICKUP', { isAdmin: true });
+    await svc.updateStatus('r1', 'ITEM_DISPATCHED', 'READY_FOR_PICKUP', { isAdmin: true, role: 'SUPER_ADMIN' });
     expect(prisma.rentalOrder.updateMany.mock.calls[0][0].where).toMatchObject({ id: 'r1', tenantId: 't1', status: 'READY_FOR_PICKUP' });
   });
 
   it('mismatch → 409 CONFLICT with current', async () => {
     const { svc, prisma } = make('ACTIVE');
-    const body = await conflictBody(svc.updateStatus('r1', 'ITEM_DISPATCHED', 'READY_FOR_PICKUP', { isAdmin: true }));
+    const body = await conflictBody(svc.updateStatus('r1', 'ITEM_DISPATCHED', 'READY_FOR_PICKUP', { isAdmin: true, role: 'SUPER_ADMIN' }));
     expect(body).toMatchObject({ code: 'CONFLICT', current: { id: 'r1', status: 'ACTIVE' } });
     expect(prisma.rentalOrder.updateMany).not.toHaveBeenCalled();
   });
