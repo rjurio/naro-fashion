@@ -164,33 +164,46 @@ describe('RentalsService.updateStatus — no confirmation or hand-over without a
 
 // ---------------------------------------------------------------------------
 describe('RentalsService.create — a request is accepted before the ID; the ID is read under the customer lock', () => {
+  // Any model / method not listed answers "nothing found", so the same test
+  // runs on production's booking path and on the release stack (availability
+  // rule, quotes), whose extra reads are irrelevant to the ID decision.
+  const empty = (): any => new Proxy({}, {
+    get: (_t, m: string) => jest.fn(async () => (m === 'findMany' ? [] : m === 'count' ? 0 : m === 'aggregate' ? { _sum: {}, _max: {} } : null)),
+  });
+  const auto = (known: Record<string, any>): any => new Proxy(known, {
+    get: (t, k: string) => (k in t ? t[k] : (t[k] = empty())),
+  });
   function make(approved: boolean) {
     const order: string[] = [];
-    const tx: any = {
-      $executeRaw: jest.fn(async (q: TemplateStringsArray, ...v: unknown[]) => {
+    const product = { id: 'p1', tenantId: 't1', isActive: true, availabilityMode: 'RENTAL_ONLY', rentalPricePerDay: 1000, rentalDepositAmount: 100, rentalDownPaymentPct: 25, bufferDaysOverride: 0, maxRentalDays: 7 };
+    const tx: any = auto({
+      $executeRaw: jest.fn(async (_q: TemplateStringsArray, ...v: unknown[]) => {
         order.push(`lock:${String(v[0])}`);
       }),
-      rentalOrder: {
+      rentalOrder: auto({
         count: jest.fn(async () => 0),
+        findMany: jest.fn(async () => []),
         create: jest.fn(async ({ data }: any) => data),
-      },
+      }),
       customerIDDocument: {
         findFirst: jest.fn(async () => {
           order.push('id-read');
           return approved ? { id: 'doc1' } : null;
         }),
       },
-    };
-    const prisma: any = {
+    });
+    const prisma: any = auto({
       user: { findUnique: jest.fn(async () => ({ firstName: 'A', lastName: 'B', phone: '1', email: 'a@b', addresses: [{}] })) },
-      product: { findUnique: jest.fn(async () => ({ id: 'p1', availabilityMode: 'RENTAL_ONLY', rentalPricePerDay: 1000, rentalDepositAmount: 100, rentalDownPaymentPct: 25, bufferDaysOverride: 0 })) },
-      productVariant: { findUnique: jest.fn(async () => ({ id: 'v1', productId: 'p1' })) },
-      rentalPolicy: { findFirst: jest.fn(async () => null) },
-      rentalOrder: { count: jest.fn(async () => 0) },
+      product: auto({ findUnique: jest.fn(async () => product), findFirst: jest.fn(async () => product) }),
+      productVariant: auto({
+        findUnique: jest.fn(async () => ({ id: 'v1', productId: 'p1', isActive: true })),
+        findFirst: jest.fn(async () => ({ id: 'v1', productId: 'p1', isActive: true })),
+      }),
+      rentalOrder: auto({ count: jest.fn(async () => 0), findMany: jest.fn(async () => []) }),
       // must NOT be used outside the transaction any more
       customerIDDocument: { findFirst: jest.fn(async () => { throw new Error('ID read outside the booking transaction'); }) },
       $transaction: jest.fn(async (cb: any) => cb(tx)),
-    };
+    });
     return { svc: new RentalsService(prisma, tenant, { log: jest.fn() } as any), tx, order };
   }
   const dto: any = { productId: 'p1', variantId: 'v1', startDate: '2027-01-10', returnDate: '2027-01-12', pickupDate: '2027-01-09' };
@@ -206,7 +219,10 @@ describe('RentalsService.create — a request is accepted before the ID; the ID 
     const { svc, order } = make(true);
     const r: any = await svc.create('u1', dto);
     expect(r.status).toBe('ID_VERIFIED');
-    expect(order).toEqual(['lock:p1', 'lock:rental-id:t1:u1', 'id-read']);
+    // the per-customer lock is taken after the product lock and before the ID read
+    expect(order.slice(-3)).toEqual(['lock:p1', 'lock:rental-id:t1:u1', 'id-read'].slice(-3));
+    expect(order.indexOf('lock:rental-id:t1:u1')).toBeGreaterThan(order.indexOf('lock:p1'));
+    expect(order.indexOf('id-read')).toBeGreaterThan(order.indexOf('lock:rental-id:t1:u1'));
   });
 });
 
