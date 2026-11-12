@@ -1064,6 +1064,28 @@ class AdminApiClient {
   rentalRefundRequest(rentalId: string, body: Record<string, unknown>) {
     return this.post<any>(`/rental-money/rentals/${rentalId}/refund-requests`, body);
   }
+  // ----- Physical gowns (R2): per-gown tracking only after an independently approved count
+  rentalUnits(productId: string) {
+    return this.get<any[]>('/rental-units', { params: { productId } });
+  }
+  createRentalUnit(body: { productId: string; code: string; label?: string; variantIds?: string[]; conditionNotes?: string }) {
+    return this.post<any>('/rental-units', body);
+  }
+  updateRentalUnit(id: string, body: { status?: string; variantIds?: string[]; label?: string; conditionNotes?: string; note?: string }) {
+    return this.patch<any>(`/rental-units/${id}`, body);
+  }
+  unitTracking(productId: string) {
+    return this.get<any>(`/rental-units/products/${productId}/tracking`);
+  }
+  requestUnitTracking(productId: string, body: { countedQuantity: number; note?: string }) {
+    return this.post<any>(`/rental-units/products/${productId}/tracking/requests`, body);
+  }
+  decideUnitTracking(id: string, verb: 'approve' | 'reject' | 'cancel', body: { note?: string } = {}) {
+    return this.patch<any>(`/rental-units/tracking/requests/${id}/${verb}`, body);
+  }
+  deactivateUnitTracking(productId: string, body: { reason: string }) {
+    return this.post<any>(`/rental-units/products/${productId}/tracking/deactivate`, body);
+  }
   /** Give an unconfirmed booking a new, bounded deadline (rentals:update-status; audited). */
   extendRentalHold(id: string, body: { until: string; note: string }) {
     return this.patch<any>(`/rentals/${id}/hold/extend`, body);
