@@ -25,7 +25,7 @@ interface VariantRow {
 export interface ProductFormData {
   name: string;
   nameSwahili: string;
-  slug: string;
+  slug?: string;
   description: string;
   descriptionSwahili: string;
   price: number;
@@ -175,12 +175,16 @@ export default function ProductForm({ initialData, onSubmit, submitLabel, latest
     if (mode === 'RENTAL_ONLY' || mode === 'BOTH') setShowRental(true);
   }, [initialData]);
 
-  // Auto-generate slug from name
+  // New products only: suggest the web address from the name. When EDITING,
+  // the stored slug is shown as-is and is never re-derived from the name, so
+  // renaming a product can't silently change its public URL (old links,
+  // shared links and the /rentals/<slug> booking page keep working).
+  const isEdit = !!initialData;
   useEffect(() => {
-    if (name) {
+    if (!isEdit && name) {
       setSlug(name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
     }
-  }, [name]);
+  }, [name, isEdit]);
 
   // Auto-generate SKU: category prefix (3 chars) + name prefix (3 chars) + random 3 digits
   useEffect(() => {
@@ -237,7 +241,8 @@ export default function ProductForm({ initialData, onSubmit, submitLabel, latest
       await onSubmit({
         name: name.trim(),
         nameSwahili: nameSwahili.trim(),
-        slug: slug.trim(),
+        // never sent when editing: the API keeps the existing web address
+        ...(isEdit ? {} : { slug: slug.trim() }),
         description: description.trim(),
         descriptionSwahili: descriptionSwahili.trim(),
         price,
@@ -285,7 +290,10 @@ export default function ProductForm({ initialData, onSubmit, submitLabel, latest
         </div>
         <div>
           <InfoLabel label="URL Slug" tooltip="The URL-friendly version of the product name used in the web address (e.g. /products/elegant-evening-gown). Auto-generated from the English name." />
-          <input value={slug} readOnly className={`${inputCls} bg-[hsl(var(--muted))] cursor-not-allowed`} placeholder="Auto-generated from name" />
+          <input value={slug} readOnly className={`${inputCls} bg-[hsl(var(--muted))] cursor-not-allowed`} placeholder="Auto-generated from name" data-testid="product-slug" />
+          {isEdit && (
+            <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">The web address stays the same when you rename the product, so existing links keep working.</p>
+          )}
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>

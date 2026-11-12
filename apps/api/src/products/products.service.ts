@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
@@ -134,6 +134,22 @@ const publicProductDetailSelect = {
     },
   },
 } as const;
+
+/** 400 / 409 codes for an explicit web-address (slug) change. */
+export const INVALID_SLUG = 'INVALID_SLUG';
+export const SLUG_TAKEN = 'SLUG_TAKEN';
+/** lower-case letters and digits in groups separated by single hyphens, 3–200 chars */
+export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export function isValidSlug(s: string): boolean {
+  return typeof s === 'string' && s.length >= 3 && s.length <= 200 && SLUG_PATTERN.test(s);
+}
+/** Turn any name into slug characters (no uniqueness here). */
+export function slugify(s: string): string {
+  return String(s ?? '')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+    .slice(0, 180).replace(/-+$/g, '');
+}
 
 /** 409 code: the product form tried to change an existing variant's stock. */
 export const STOCK_EDIT_NOT_ALLOWED = 'STOCK_EDIT_NOT_ALLOWED';
@@ -313,7 +329,7 @@ export class ProductsService {
 
   async create(dto: CreateProductDto) {
     const tenantId = this.tenantContext.requireId;
-    const slug = dto.slug || this.generateSlug(dto.name);
+    const slug = await this.uniqueSlugForCreate(tenantId, dto.slug, dto.name);
 
     await this.assertProductRefs(tenantId, { categoryId: dto.categoryId, sizeGuideId: dto.sizeGuideId });
 
@@ -575,9 +591,35 @@ export class ProductsService {
     await this.assertProductRefs(tenantId, { categoryId: dto.categoryId, sizeGuideId: dto.sizeGuideId });
 
     const data: any = {};
-    if (dto.name !== undefined) {
-      data.name = dto.name;
-      data.slug = this.generateSlug(dto.name);
+    // URL integrity (Nov 2026 fix): renaming a product never changes its web
+    // address. The slug changes only when a NEW slug is sent WITH
+    // confirmSlugChange: true, and it must already be valid and unused in this
+    // shop. A slug sent without the flag (old cached admin pages always sent
+    // a name-derived one) is ignored.
+    if (dto.name !== undefined) data.name = dto.name;
+    const requestedSlug = typeof dto.slug === 'string' ? dto.slug.trim() : '';
+    if (dto.confirmSlugChange === true && requestedSlug && requestedSlug !== product.slug) {
+      if (!isValidSlug(requestedSlug)) {
+        throw new BadRequestException({
+          statusCode: 400,
+          error: 'Bad Request',
+          code: INVALID_SLUG,
+          message: 'The web address may use only lower-case letters, digits and single hyphens (3–200 characters).',
+        });
+      }
+      const taken = await this.prisma.product.findFirst({
+        where: { tenantId, slug: requestedSlug, id: { not: id } },
+        select: { id: true },
+      });
+      if (taken) {
+        throw new ConflictException({
+          statusCode: 409,
+          error: 'Conflict',
+          code: SLUG_TAKEN,
+          message: 'Another product in this shop already uses this web address.',
+        });
+      }
+      data.slug = requestedSlug;
     }
     if (dto.nameSwahili !== undefined) data.nameSwahili = dto.nameSwahili;
     if (dto.description !== undefined) data.description = dto.description;
@@ -905,6 +947,24 @@ export class ProductsService {
     await this.prisma.product.delete({ where: { id } });
     await this.auditService.log('PERMANENT_DELETE', 'Product', id);
     return { message: 'Product permanently deleted' };
+  }
+
+  /**
+   * New products: a clean slug from the given slug or the name; if it is
+   * already used in this shop (including soft-deleted rows, which the unique
+   * index still counts), a short time suffix makes it unique.
+   */
+  private async uniqueSlugForCreate(tenantId: string, requested: string | undefined, name: string): Promise<string> {
+    let base = slugify(requested || name);
+    if (base.length < 3) base = `product-${base || 'item'}`.replace(/-+$/g, '');
+    const exists = async (s: string) =>
+      !!(await this.prisma.product.findFirst({ where: { tenantId, slug: s }, select: { id: true } }));
+    if (!(await exists(base))) return base;
+    for (let i = 0; i < 5; i++) {
+      const candidate = `${base}-${Date.now().toString(36)}${i ? i : ''}`;
+      if (!(await exists(candidate))) return candidate;
+    }
+    return `${base}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   }
 
   private generateSlug(name: string): string {
