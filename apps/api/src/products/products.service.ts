@@ -706,8 +706,9 @@ export class ProductsService {
         error: 'Conflict',
         code: STOCK_EDIT_NOT_ALLOWED,
         message:
-          'Stock cannot be changed from the product form. Use Inventory to adjust stock (it records who changed it and why). ' +
-          'If you did not change it, the stock was updated since this page was opened — reload and try again.',
+          'Nothing was saved. The stock shown on this page is out of date: it changed after the page was opened ' +
+          '(a sale, return or Inventory adjustment). Stock can only be changed in Inventory, which records who changed it and why. ' +
+          'Load the current stock, then save your changes again.',
         variants: stockConflicts,
       });
     }

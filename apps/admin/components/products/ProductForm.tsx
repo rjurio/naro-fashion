@@ -52,6 +52,11 @@ export interface ProductFormData {
 interface Props {
   initialData?: any;
   onSubmit: (data: ProductFormData) => Promise<void>;
+  /**
+   * Latest stock per variant id (e.g. from a 409 STOCK_EDIT_NOT_ALLOWED).
+   * Only the stock figures are replaced; every other unsaved edit is kept.
+   */
+  latestStock?: Record<string, number> | null;
   submitLabel: string;
 }
 
@@ -78,7 +83,7 @@ function flattenCategoryTree(
   return out;
 }
 
-export default function ProductForm({ initialData, onSubmit, submitLabel }: Props) {
+export default function ProductForm({ initialData, onSubmit, submitLabel, latestStock }: Props) {
   const { toast } = useToast();
   const [categories, setCategories] = useState<any[]>([]);
   const [sizeGuides, setSizeGuides] = useState<{ id: string; name: string }[]>([]);
@@ -196,6 +201,13 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
   const updateVariant = (index: number, field: keyof VariantRow, value: any) => {
     setVariants((prev) => prev.map((v, i) => i === index ? { ...v, [field]: value } : v));
   };
+
+  // Merge the latest stock into the existing variants WITHOUT touching any
+  // other field the admin may have edited (prices, names, rental terms...).
+  useEffect(() => {
+    if (!latestStock) return;
+    setVariants((prev) => prev.map((v) => (v.id && latestStock[v.id] !== undefined ? { ...v, stock: latestStock[v.id] } : v)));
+  }, [latestStock]);
 
   const addVariant = () => setVariants((prev) => [...prev, emptyVariant()]);
 

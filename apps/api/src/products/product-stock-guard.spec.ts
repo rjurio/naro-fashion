@@ -168,6 +168,32 @@ describe('product form never overwrites stock (API-level guard)', () => {
     expect(w.variants.get('withStock')).toMatchObject({ stock: 4, isActive: false });
   });
 
+  it('the 409 tells the admin that nothing was saved, that stock changed, and how to continue', async () => {
+    const w = world([{ id: 'v1', stock: 11 }]);
+    w.sell('v1');
+    const e = await err(w.service.update('p1', { variants: [{ id: 'v1', name: 'S', price: 1, stock: 11 }] } as any));
+    expect(e.getResponse().message).toMatch(/^Nothing was saved\./);
+    expect(e.getResponse().message).toMatch(/changed after the page was opened/);
+    expect(e.getResponse().message).toMatch(/only be changed in Inventory/);
+  });
+
+  it('DISABLED variants: re-enabling one keeps its stock; leaving one out keeps it disabled with its stock', async () => {
+    const w = world([{ id: 'on', stock: 2 }, { id: 'off', stock: 5 }]);
+    w.variants.get('off')!.isActive = false;
+    await w.service.update('p1', { variants: [{ id: 'on', name: 'S', price: 1 }, { id: 'off', name: 'M', price: 1, isActive: true }] } as any);
+    expect(w.variants.get('off')).toMatchObject({ isActive: true, stock: 5 });
+    await w.service.update('p1', { variants: [{ id: 'on', name: 'S', price: 1 }] } as any);
+    expect(w.variants.get('off')).toMatchObject({ isActive: false, stock: 5 });
+  });
+
+  it('the stock fix only reads stock, so a sale between two saves of the same page is preserved by both', async () => {
+    const w = world([{ id: 'v1', stock: 11 }]);
+    await w.service.update('p1', { price: 600, variants: [{ id: 'v1', name: 'S', price: 600 }] } as any);
+    w.sell('v1', 2);
+    await w.service.update('p1', { price: 650, variants: [{ id: 'v1', name: 'S', price: 650 }] } as any);
+    expect(w.variants.get('v1')).toMatchObject({ stock: 9, price: 650 });
+  });
+
   it('the authorised path is unchanged: Inventory → adjust still writes stock atomically with a ledger row', () => {
     const inv = readFileSync(join(__dirname, '..', 'inventory', 'inventory.service.ts'), 'utf8');
     expect(inv).toMatch(/stock: \{ increment: quantityChange \}/);
@@ -184,6 +210,24 @@ describe('admin product form (source check)', () => {
     const existingBranch = form.match(/id \? (\{ id, [^}]*\}[^:]*):/)?.[1] ?? '';
     expect(existingBranch).not.toMatch(/stock/);
     expect(form).toMatch(/: \{ \.\.\.rest, stock \}/);
+  });
+
+  it('after a stock 409 the edit page shows the current stock and keeps every other unsaved edit', () => {
+    const edit = readFileSync(join(__dirname, '..', '..', '..', 'admin', 'app', 'dashboard', 'products', '[id]', 'edit', 'page.tsx'), 'utf8');
+    // handled on the page: no navigation, no reload of the whole form
+    const handler = edit.slice(edit.indexOf("err.serverCode === 'STOCK_EDIT_NOT_ALLOWED'"), edit.indexOf('throw err;', edit.indexOf("err.serverCode === 'STOCK_EDIT_NOT_ALLOWED'")));
+    expect(handler).toMatch(/setLatestStock\(/);
+    expect(handler).toMatch(/Nothing was saved/);
+    expect(handler).toMatch(/return;/);
+    expect(handler).not.toMatch(/router\.push|load\(\)/);
+    expect(edit).toMatch(/<ProductForm latestStock=\{latestStock\}/);
+    // the form merges ONLY the stock field into existing variants
+    expect(form).toMatch(/latestStock\[v\.id\] !== undefined \? \{ \.\.\.v, stock: latestStock\[v\.id\] \} : v/);
+  });
+
+  it('approved inventory operations keep their audit trail (ledger row + audit log)', () => {
+    const inv = readFileSync(join(__dirname, '..', 'inventory', 'inventory.service.ts'), 'utf8');
+    expect(inv).toMatch(/auditService\.log\('ADJUST_STOCK'/);
   });
 
   it('existing variants show stock read-only with a link to Inventory', () => {
