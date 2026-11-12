@@ -103,6 +103,8 @@ function makeDb(opts: { mode?: string; stock?: number; rentals?: any[]; restockA
       },
       payment: { create: jest.fn().mockResolvedValue({}) },
       posSession: { update: jest.fn().mockResolvedValue({}) },
+      // National ID (PR #16): the booking reads the customer's approved ID inside the transaction.
+      customerIDDocument: { findFirst: jest.fn(async () => null) },
     };
     return tx;
   };

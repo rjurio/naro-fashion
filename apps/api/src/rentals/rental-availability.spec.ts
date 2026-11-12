@@ -88,6 +88,8 @@ function makeDb(opts: FakeOpts = {}) {
           .map((l) => ({ quantity: l.quantity, refundedQuantity: l.refundedQuantity ?? 0 }))),
     },
     layaway: { findMany: jest.fn(async ({ where }: any) => state.layaways.filter((l) => l.status === where.status)) },
+    // National ID (PR #16): the booking reads the customer's approved ID inside the transaction.
+    customerIDDocument: { findFirst: jest.fn(async () => null) },
   };
 
   const held = new Map<string, Promise<void>>();
@@ -322,7 +324,8 @@ describe('final booking validates again under the product lock', () => {
         return cb(tx);
       }));
     await db.rentals.create('u1', bookingFor(30) as any);
-    expect(order).toEqual(['lock', 'check', 'insert']);
+    // product lock, availability check, then the per-customer ID lock (PR #16), then the insert
+    expect(order).toEqual(['lock', 'check', 'lock', 'insert']);
   });
 
   it('two simultaneous bookings for the same dates: exactly one succeeds, even with seeded stock 10', async () => {
