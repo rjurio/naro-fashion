@@ -29,6 +29,7 @@ export const MANAGER_EXCLUDED = [
   // R1b unified refunds: cancelling a layaway holding money is granted per person.
   'pos:layaway-cancel',
   'rentals:handover-safeguard',
+  'rentals:waive-late-fee',
 ];
 
 export const STAFF_CODES = [

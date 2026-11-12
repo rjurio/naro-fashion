@@ -51,7 +51,8 @@ function mapRentalToOverdue(rental: any): OverdueItem {
     size: variant.size || variant.name || '',
     totalRentalPrice: Number(rental.totalRentalPrice) || 0,
     downPaymentAmount: Number(rental.downPaymentAmount) || 0,
-    lateFee: Number(rental.lateFee) || 0,
+    // LF-2026-11: accrued so far, from the booking's agreed terms (same calculation as at return).
+    lateFee: Number(rental.lateFeeAccrued ?? rental.lateFee) || 0,
     rentalStatus: rental.status || '',
     weddingDate: rental.weddingDate,
     weddingLocation: rental.weddingLocation,
@@ -258,7 +259,7 @@ export default function OverdueRentals() {
                   <p className="font-medium">{formatCurrency(selectedItem.depositAmount)}</p>
                 </div>
                 <div>
-                  <span className="text-[hsl(var(--muted-foreground))]">Late Fee</span>
+                  <span className="text-[hsl(var(--muted-foreground))]">Late fee so far</span>
                   <p className="font-semibold text-red-600">{formatCurrency(selectedItem.lateFee)}</p>
                 </div>
               </div>

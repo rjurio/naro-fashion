@@ -74,7 +74,7 @@ export class ReportsService {
     const rentals = await this.prisma.rentalOrder.findMany({
       where: { tenantId, payments: { some: { status: 'COMPLETED' } } },
       select: {
-        id: true, status: true, totalRentalPrice: true, damageDeposit: true, lateFee: true, downPaymentAmount: true,
+        id: true, status: true, totalRentalPrice: true, damageDeposit: true, lateFee: true, lateFeeWaived: true, downPaymentAmount: true,
         payments: { select: { amount: true, status: true, component: true } },
         refundRequests: { select: { component: true, amount: true, retainedAmount: true, status: true } },
       },
