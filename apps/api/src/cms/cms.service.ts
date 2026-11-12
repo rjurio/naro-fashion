@@ -193,6 +193,16 @@ export class UpdateInstagramPostDto {
   @IsOptional() @IsBoolean() isPinned?: boolean;
 }
 
+/** Fields the PUBLIC page list may return (no bodies, no drafts). */
+export const PUBLIC_PAGE_LIST_SELECT = {
+  id: true,
+  slug: true,
+  title: true,
+  titleSwahili: true,
+  isPublished: true,
+  updatedAt: true,
+} as const;
+
 @Injectable()
 export class CmsService {
   constructor(
@@ -261,9 +271,30 @@ export class CmsService {
 
   // --- Pages ---
 
+  /**
+   * ADMIN list (`GET /cms/pages/admin`, JwtAuthGuard + AdminGuard): every
+   * non-deleted page of the caller's shop, drafts included, full content.
+   */
   async findAllPages() {
     return this.prisma.page.findMany({
       where: { tenantId: this.tenantContext.requireId, deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * PUBLIC list (`@Public() GET /cms/pages`): anonymous visitors hit this.
+   * Published, non-deleted pages only, and display fields only — the
+   * storefront footer needs slug / title / isPublished to build its links;
+   * page bodies are fetched one at a time via `findPageBySlug`. Before this,
+   * the public list returned `findAllPages()` verbatim, so every draft page
+   * (title + full content) was readable by anyone holding the shop's tenant
+   * id, which the storefront exposes in a cookie.
+   */
+  async findPublishedPages() {
+    return this.prisma.page.findMany({
+      where: { tenantId: this.tenantContext.requireId, isPublished: true, deletedAt: null },
+      select: PUBLIC_PAGE_LIST_SELECT,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -280,8 +311,8 @@ export class CmsService {
    * `findBySlug` on products + size-guides (already fixed) and
    * categories (fixed in the same commit as this).
    *
-   * Admin endpoints use `findAllPages()` (no isPublished filter — drafts
-   * deliberately visible) via the CMS admin pages screen.
+   * The admin editor uses `findAllPages()` (no isPublished filter — drafts
+   * deliberately visible) via `GET /cms/pages/admin`.
    */
   async findPageBySlug(slug: string) {
     const page = await this.prisma.page.findFirst({
