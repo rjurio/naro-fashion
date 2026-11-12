@@ -296,13 +296,18 @@ export class NotificationsService {
     extra?: {
       customerPhone?: string;
       tenantId?: string | null;
+      /** Bookings this review affects (approved: awaiting the down payment; rejected: given a resubmission window). */
+      rentalNumbers?: string[];
+      /** Customer-facing deadline for those bookings, e.g. "14 Nov 2026, 15:00 EAT". */
+      deadline?: string;
     },
   ) {
-    this.logger.log(
-      `[ID VERIFICATION] Status: ${status} — notification to ${customerEmail}${reason ? ` — Reason: ${reason}` : ''}`,
-    );
+    // No address or reason in the log: the reason is staff-written free text
+    // and may contain personal details.
+    this.logger.log(`[ID VERIFICATION] Status: ${status} — customer notification queued`);
 
     const isApproved = status === 'APPROVED';
+    const rentalNumbers = extra?.rentalNumbers?.length ? extra.rentalNumbers.join(', ') : undefined;
 
     const bizName3 = await this.getBusinessName(extra?.tenantId);
     const domain3 = await this.getDomain(extra?.tenantId);
@@ -316,6 +321,8 @@ export class NotificationsService {
         context: {
           isApproved,
           reason,
+          rentalNumbers,
+          deadline: rentalNumbers ? extra?.deadline : undefined,
         },
       })
       .catch((err) =>
@@ -336,6 +343,39 @@ export class NotificationsService {
     }
 
     return { sent: true, channel: 'email+sms', status };
+  }
+
+  /**
+   * Tell the customer their unconfirmed booking was released by the hold
+   * expiry job (rentals/rental-hold.ts). Email only; called from the
+   * scheduler, so tenantId is explicit. The message is one of the fixed
+   * texts from holdExpiryMessage() — never free text.
+   */
+  async sendRentalHoldExpired(params: {
+    customerEmail: string;
+    customerName?: string;
+    rentalNumber: string;
+    productName?: string;
+    message: string;
+    tenantId: string | null;
+  }) {
+    this.logger.log(`[RENTAL HOLD] ${params.rentalNumber} released — customer notification queued`);
+    const bizName = await this.getBusinessName(params.tenantId);
+    this.emailService
+      .send({
+        to: params.customerEmail,
+        subject: `Booking ${params.rentalNumber} was released — ${bizName}`,
+        template: 'rental-hold-expired',
+        tenantId: params.tenantId,
+        context: {
+          customerName: params.customerName || 'Valued Customer',
+          rentalNumber: params.rentalNumber,
+          productName: params.productName,
+          message: params.message,
+        },
+      })
+      .catch((err) => this.logger.error(`[RENTAL HOLD] Email failed: ${err?.message}`));
+    return { sent: true, channel: 'email' };
   }
 
   /**

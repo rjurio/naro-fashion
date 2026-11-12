@@ -59,6 +59,8 @@ export default function IdVerificationQueue({ onChanged }: { onChanged?: () => v
         ? [`${r.idVerified} waiting booking${r.idVerified === 1 ? '' : 's'} moved to ID Verified`]
         : [];
       if (r?.confirmed > 0) parts.push(`${r.confirmed} confirmed (down payment already received)`);
+      if (r?.paymentDueBy) parts.push(`down payment due by ${new Date(r.paymentDueBy).toLocaleString()}`);
+      if (r?.expired > 0) parts.push(`${r.expired} already expired (released automatically)`);
       toast(parts.length ? `ID verified — ${parts.join(', ')}` : 'ID verified', 'success');
       setItems((prev) => prev.filter((v) => v.id !== id));
       onChanged?.();

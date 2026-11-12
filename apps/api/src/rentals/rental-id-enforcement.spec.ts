@@ -14,7 +14,6 @@ import { RentalsService } from './rentals.service';
 import { RentalsController } from './rentals.controller';
 import {
   RENTAL_WORKFLOW,
-  UNPAID_HOLD_STATUSES,
   transitionRequiresApprovedId,
   ID_NOT_APPROVED,
 } from './rental-rules';
@@ -23,7 +22,7 @@ import { IdVerificationController } from '../id-verification/id-verification.con
 import { PERMISSIONS_KEY } from '../auth/decorators/requires-permission.decorator';
 import { PermissionGuard } from '../auth/guards/permission.guard';
 import { MANAGER_DEFAULT_GRANTS } from '../permissions/permissions.service';
-import { SchedulerService } from '../scheduler/scheduler.service';
+import { MANAGER_EXCLUDED } from '../roles/system-roles.seeder';
 
 const tenant = { requireId: 't1' } as any;
 
@@ -149,7 +148,7 @@ describe('RentalsService.updateStatus — no confirmation or hand-over without a
       where: { id: 'r1', tenantId: 't1', status: 'PENDING_ID_VERIFICATION' },
       data: { status: 'ID_VERIFIED' },
     });
-    expect(audit.log).toHaveBeenCalledWith('UPDATE_STATUS', 'Rental', 'r1', { from: 'PENDING_ID_VERIFICATION', to: 'ID_VERIFIED' });
+    expect(audit.log).toHaveBeenCalledWith('UPDATE_STATUS', 'Rental', 'r1', expect.objectContaining({ from: 'PENDING_ID_VERIFICATION', to: 'ID_VERIFIED' }));
   });
 
   it('markReadyForPickup needs an approved ID too', async () => {
@@ -190,6 +189,7 @@ describe('RentalsService.create — a request is accepted before the ID; the ID 
           order.push('id-read');
           return approved ? { id: 'doc1' } : null;
         }),
+        findMany: jest.fn(async () => []),
       },
     });
     const prisma: any = auto({
@@ -240,6 +240,7 @@ describe('IdVerificationService.approve — reconciles waiting bookings, never m
       rentalOrder: {
         findMany: jest.fn(async () => opts.waiting ?? []),
         updateMany: jest.fn(async () => ({ count: 1 })),
+        count: jest.fn(async () => 0),
       },
     };
     const prisma: any = {
@@ -264,16 +265,33 @@ describe('IdVerificationService.approve — reconciles waiting bookings, never m
   });
 
   it('moves ONLY this customer\'s PENDING_ID_VERIFICATION bookings in this tenant, each with a status CAS', async () => {
-    const { svc, tx } = make({ waiting: [{ id: 'r1', rentalNumber: 'R1' }, { id: 'r2', rentalNumber: 'R2' }] });
+    const { svc, tx } = make({
+      waiting: [{ id: 'r1', rentalNumber: 'R1', downPaymentAmount: 250 }, { id: 'r2', rentalNumber: 'R2', downPaymentAmount: 0 }],
+    });
+    const before = Date.now();
     const res: any = await svc.approve('d1');
-    expect(tx.rentalOrder.findMany.mock.calls[0][0].where).toEqual({ tenantId: 't1', userId: 'u1', status: 'PENDING_ID_VERIFICATION' });
-    for (const id of ['r1', 'r2']) {
-      expect(tx.rentalOrder.updateMany).toHaveBeenCalledWith({
-        where: { id, tenantId: 't1', status: 'PENDING_ID_VERIFICATION' },
-        data: { status: 'ID_VERIFIED' },
-      });
-    }
-    expect(res.reconciled).toEqual({ idVerified: 2, confirmed: 0, rentalNumbers: ['R1', 'R2'] });
+    // live waiting bookings only: deadline paused or still running, pickup day not over
+    const live = {
+      tenantId: 't1',
+      userId: 'u1',
+      status: 'PENDING_ID_VERIFICATION',
+      pickupDate: { gte: expect.any(Date) },
+      OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: expect.any(Date) } }],
+    };
+    expect(tx.rentalOrder.findMany.mock.calls[0][0].where).toEqual(live);
+    // r1: a FRESH 48 h down-payment window from the approval
+    const r1 = tx.rentalOrder.updateMany.mock.calls.find((c: any) => c[0].where.id === 'r1')[0];
+    expect(r1.where).toEqual({ ...live, id: 'r1' });
+    expect(r1.data).toEqual({ status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT', holdExpiresAt: expect.any(Date) });
+    const due = r1.data.holdExpiresAt.getTime() - before;
+    expect(due).toBeGreaterThanOrEqual(48 * 3600e3 - 5e3);
+    expect(due).toBeLessThanOrEqual(48 * 3600e3 + 5e3);
+    // r2: 0 % down payment -> no payment deadline, NOT confirmed automatically
+    const r2 = tx.rentalOrder.updateMany.mock.calls.find((c: any) => c[0].where.id === 'r2')[0];
+    expect(r2.data).toEqual({ status: 'ID_VERIFIED', holdState: 'NO_DOWN_PAYMENT', holdExpiresAt: null });
+    expect(res.reconciled).toEqual({
+      idVerified: 2, confirmed: 0, rentalNumbers: ['R1', 'R2'], expired: 0, paymentDueBy: expect.any(String),
+    });
   });
 
   it('confirms a waiting booking only through the shared payment roll-up, and only when COMPLETED payments exist', async () => {
@@ -308,26 +326,49 @@ describe('IdVerificationService.approve — reconciles waiting bookings, never m
     await svc.approve('d1');
     expect(audit.log).toHaveBeenCalledWith('UPDATE_STATUS', 'Rental', 'r1', {
       from: 'PENDING_ID_VERIFICATION', to: 'ID_VERIFIED', source: 'ID_APPROVED', idDocumentId: 'd1',
+      holdState: 'NO_DOWN_PAYMENT', holdExpiresAt: null,
     });
-    expect(audit.log).toHaveBeenCalledWith('APPROVE_ID', 'CustomerIDDocument', 'd1', { idVerified: 1, confirmed: 0 });
+    expect(audit.log).toHaveBeenCalledWith('APPROVE_ID', 'CustomerIDDocument', 'd1', {
+      idVerified: 1, confirmed: 0, expired: 0, paymentDueBy: null,
+    });
   });
 
-  it('reject: CAS on PENDING, bookings untouched, audited', async () => {
+  it('reject: CAS on PENDING under the customer lock; paused bookings keep their status and get an explicit resubmission window; audited', async () => {
     const audit = { log: jest.fn() };
+    const calls: string[] = [];
+    const tx: any = {
+      $executeRaw: jest.fn(async (_q: TemplateStringsArray, ...v: unknown[]) => { calls.push(`lock:${String(v[0])}`); }),
+      customerIDDocument: {
+        updateMany: jest.fn(async () => { calls.push('doc-cas'); return { count: 1 }; }),
+        findFirst: jest.fn(async () => ({ id: 'd1', verificationStatus: 'REJECTED' })),
+      },
+      rentalOrder: {
+        findMany: jest.fn(async () => [{ rentalNumber: 'R1' }]),
+        updateMany: jest.fn(async () => ({ count: 1 })),
+      },
+    };
     const prisma: any = {
       customerIDDocument: {
         findFirst: jest.fn(async () => ({ id: 'd1', userId: 'u1', verificationStatus: 'PENDING', user: { email: null } })),
-        updateMany: jest.fn(async () => ({ count: 1 })),
       },
-      rentalOrder: { updateMany: jest.fn() },
+      $transaction: jest.fn(async (cb: any) => cb(tx)),
     };
     const svc = new IdVerificationService(prisma, {} as any, tenant, audit as any, {} as any);
     await svc.reject('d1', { reason: 'Blurred photo' });
-    expect(prisma.customerIDDocument.updateMany.mock.calls[0][0].where).toEqual({ id: 'd1', tenantId: 't1', verificationStatus: 'PENDING' });
-    expect(prisma.rentalOrder.updateMany).not.toHaveBeenCalled();
-    expect(audit.log).toHaveBeenCalledWith('REJECT_ID', 'CustomerIDDocument', 'd1');
-    prisma.customerIDDocument.updateMany.mockResolvedValueOnce({ count: 0 });
+    expect(calls.slice(0, 2)).toEqual(['lock:rental-id:t1:u1', 'doc-cas']);
+    expect(tx.customerIDDocument.updateMany.mock.calls[0][0].where).toEqual({ id: 'd1', tenantId: 't1', verificationStatus: 'PENDING' });
+    const upd = tx.rentalOrder.updateMany.mock.calls[0][0];
+    // status is NOT changed; only paused (or legacy) waiting bookings get the window
+    expect(upd.data).toEqual({ holdState: 'ID_REJECTED', holdExpiresAt: expect.any(Date) });
+    expect(upd.where).toMatchObject({ tenantId: 't1', userId: 'u1', status: 'PENDING_ID_VERIFICATION', holdExpiresAt: null });
+    expect(upd.where.OR).toEqual([{ holdState: 'ID_UNDER_REVIEW' }, { holdState: null }]);
+    expect(audit.log).toHaveBeenCalledWith('REJECT_ID', 'CustomerIDDocument', 'd1', {
+      bookingsGivenResubmissionWindow: 1, holdState: 'ID_REJECTED', holdExpiresAt: expect.any(Date),
+    });
+    tx.customerIDDocument.updateMany.mockResolvedValueOnce({ count: 0 });
+    tx.rentalOrder.updateMany.mockClear();
     await expect(svc.reject('d1', { reason: 'x' })).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.rentalOrder.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -357,6 +398,9 @@ describe('API-level access control', () => {
     const src = fs.readFileSync(path.join(__dirname, '../permissions/permissions.service.ts'), 'utf8');
     expect(src).toMatch(/\{ code: 'id-verification:review', name: 'Review National ID Documents'/);
     expect(MANAGER_DEFAULT_GRANTS).not.toContain('id-verification:review');
+    // fresh installs too: the MANAGER system role is seeded with everything
+    // except MANAGER_EXCLUDED (owner decision: SUPER_ADMIN only at first)
+    expect(MANAGER_EXCLUDED).toContain('id-verification:review');
   });
 
   it('no code path outside the rental workflow writes a rental status', () => {
@@ -384,37 +428,6 @@ describe('API-level access control', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-describe('48-hour unpaid hold — current behaviour (findings; change proposed, not made)', () => {
-  function make(stale: any[] = []) {
-    const prisma: any = {
-      rentalOrder: {
-        findMany: jest.fn().mockResolvedValue(stale),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      },
-    };
-    const config: any = { get: jest.fn().mockReturnValue(undefined) };
-    return { svc: new SchedulerService(prisma, {} as any, config, {} as any, {} as any), prisma };
-  }
-
-  it('counts from booking creation for BOTH waiting-for-ID and ID-verified bookings (no pause for staff review)', async () => {
-    const now = new Date('2026-11-12T12:00:00Z');
-    const { svc, prisma } = make();
-    await svc.handleExpiredRentalHolds(now);
-    const where = prisma.rentalOrder.findMany.mock.calls[0][0].where;
-    expect(where.status.in).toEqual(expect.arrayContaining(['PENDING_ID_VERIFICATION', 'ID_VERIFIED']));
-    expect(where.createdAt).toEqual({ lt: new Date('2026-11-10T12:00:00Z') });
-    // nothing about the ID document's state or its approval time
-    expect(JSON.stringify(where)).not.toMatch(/customerIDDocument|verifiedAt|idDocument/);
-  });
-
-  it('only COMPLETED payments protect a booking (a PENDING payment does not)', async () => {
-    const { svc, prisma } = make();
-    await svc.handleExpiredRentalHolds(new Date());
-    expect(prisma.rentalOrder.findMany.mock.calls[0][0].where.payments).toEqual({ none: { status: 'COMPLETED' } });
-  });
-
-  it('a confirmed booking (DOWN_PAYMENT_PAID) is never auto-cancelled', () => {
-    expect(UNPAID_HOLD_STATUSES).not.toContain('DOWN_PAYMENT_PAID');
-  });
-});
+// The 48-hour hold rules (revised 2026-11-12: pause during ID review, fresh
+// window after approval / rejection, no payment deadline at 0 %, pickup-date
+// expiry) are covered in rental-hold.spec.ts.

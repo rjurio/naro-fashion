@@ -34,6 +34,9 @@ interface Rental {
   status: string;
   idVerified: boolean;
   pickupTime?: string;
+  /** Unconfirmed-booking hold (API rentals/rental-hold.ts). */
+  holdState?: string | null;
+  holdExpiresAt?: string | null;
   weddingDate?: string;
   weddingLocation?: string;
   weddingRegion?: string;
@@ -65,6 +68,16 @@ interface Template {
 }
 
 type TabKey = 'active' | 'requests' | 'overdue' | 'cancelled';
+
+/** Unconfirmed statuses whose booking hold (deadline) applies. */
+const HOLD_STATUSES = ['PENDING_ID_VERIFICATION', 'ID_VERIFIED', 'PENDING_PAYMENT', 'PENDING'];
+const HOLD_LABELS: Record<string, string> = {
+  AWAITING_ID: 'Waiting for the customer to submit a National ID',
+  ID_UNDER_REVIEW: 'ID submitted, waiting for staff review (deadline paused)',
+  ID_REJECTED: 'ID not approved, waiting for a new one',
+  AWAITING_DOWN_PAYMENT: 'ID approved, waiting for the down payment',
+  NO_DOWN_PAYMENT: 'ID approved, no down payment due: confirm the booking',
+};
 
 const tabs: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: 'active', label: 'Active Rentals', icon: CalendarClock },
@@ -301,6 +314,14 @@ function RentalDetailsSection({ rental, onUpdate, online }: { rental: Rental; on
             Edit
           </button>
         </div>
+        {HOLD_STATUSES.includes(rental.status) && rental.holdState && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+            <span className="font-semibold">{HOLD_LABELS[rental.holdState] ?? rental.holdState}.</span>{' '}
+            {rental.holdExpiresAt
+              ? `Released automatically if not done by ${new Date(rental.holdExpiresAt).toLocaleString()}.`
+              : 'No deadline running; released automatically if not confirmed by the end of the pickup day.'}
+          </div>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div><p className={labelClass}>Pickup Time</p><p className={valueClass}>{rental.pickupTime || '—'}</p></div>
           <div><p className={labelClass}>Wedding Date</p><p className={valueClass}>{rental.weddingDate ? new Date(rental.weddingDate as string).toLocaleDateString() : '—'}</p></div>

@@ -1,0 +1,26 @@
+<h2 style="color: #1A1A1A; margin-top: 0;">Your booking was released</h2>
+
+<p>Dear {{customerName}},</p>
+
+<div class="info-box" style="border-left-color: #cc0000;">
+  <p><span class="label">Booking:</span> {{rentalNumber}}</p>
+  {{#if productName}}
+  <p><span class="label">Item:</span> {{productName}}</p>
+  {{/if}}
+  <p>{{message}}</p>
+</div>
+
+<p>The booking has been cancelled and the item is available to other customers again. No payment was received for this booking.</p>
+
+<p>If you still want to rent this item, you are welcome to send a new booking request.</p>
+
+<p style="text-align: center;">
+  <a href="{{storeUrl}}/account/rentals" class="btn-primary">My rentals</a>
+</p>
+
+<p>If you have any questions, please contact our support team.</p>
+
+<p>
+  Best regards,<br />
+  <strong style="color: #D4AF37;">{{businessName}} Team</strong>
+</p>

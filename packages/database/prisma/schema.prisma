@@ -871,6 +871,14 @@ model RentalOrder {
   notes            String?
   isReadyForPickup Boolean  @default(false)
 
+  // Unconfirmed-booking deadline (rentals/rental-hold.ts). holdState says why
+  // the booking is held; holdExpiresAt is the explicit deadline (null = the
+  // clock is paused for staff ID review, or no down payment is due). Only
+  // meaningful while the booking is unconfirmed (PENDING_ID_VERIFICATION /
+  // ID_VERIFIED); kept afterwards as a record.
+  holdState        String?
+  holdExpiresAt    DateTime?
+
   // Event & logistics details (admin-specified)
   pickupTime       String?            // e.g. "10:00 AM"
   weddingDate      DateTime?
@@ -899,6 +907,7 @@ model RentalOrder {
   @@index([pickupDate])
   @@index([returnDate])
   @@index([productId, startDate, returnDate])
+  @@index([status, holdExpiresAt])
 }
 
 model RentalPreparationReminder {

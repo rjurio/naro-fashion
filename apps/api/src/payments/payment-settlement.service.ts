@@ -327,6 +327,15 @@ export class PaymentSettlementService {
     const totalPaid = await this.sumCompleted({ rentalOrderId }, tenantId);
     const downPaymentDue = Number(rental.downPaymentAmount);
 
+    if (rental.status === 'CANCELLED' && totalPaid > 0) {
+      // e.g. a gateway payment that completed after the booking was released
+      // by the hold expiry job. Never re-opened automatically: refund review.
+      this.logger.warn(
+        `REVIEW: rental ${rental.rentalNumber} is CANCELLED but has ${totalPaid} TZS of COMPLETED payments — refund review.`,
+      );
+      return;
+    }
+
     if (totalPaid >= downPaymentDue && rental.status === 'ID_VERIFIED') {
       // Owner rule 2026-11-12: never confirm without an APPROVED National ID,
       // whatever the rental's status says (it may have been set by hand).
