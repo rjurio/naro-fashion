@@ -6,20 +6,18 @@
  * the page can never show a different percentage or amount from the one the
  * booking stores. The storefront does no financial arithmetic of its own.
  *
- * Down-payment percentage, in order:
- *   1. the product's own `rentalDownPaymentPct` (an explicit override);
- *   2. the shop's `RentalPolicy.defaultDownPaymentPct`;
- *   3. the platform default, 25 %.
+ * Down-payment percentage, by the product's `rentalDownPaymentMode`:
+ *   'CUSTOM'  -> the product's `rentalDownPaymentPct` (an explicit override);
+ *   'INHERIT' -> the shop's `RentalPolicy.defaultDownPaymentPct` (the product
+ *                pct is ignored);
+ *   NULL      -> not yet reviewed (rows from before the inheritance change):
+ *                the stored product pct if valid, exactly as before.
+ * Then the shop default, then the platform default, 25 %.
  * A level is used only if it is a finite number from 0 to 100 (0 % is valid:
  * no down payment). A missing value falls through silently; an INVALID one
- * (negative, over 100, not a number) falls through and is reported in
- * `invalidSettings` so the caller can log a warning. It never becomes an
- * obligation of its own.
- *
- * NOTE: `Product.rentalDownPaymentPct` has a database default of 25 and the
- * admin product form cannot change or clear it, so in practice every product
- * carries an explicit 25 and the shop default is only reached for products
- * whose column is NULL.
+ * (negative, over 100, not a number, or an unknown mode) falls through and is
+ * reported in `invalidSettings` so the caller can log a warning. It never
+ * becomes an obligation of its own.
  *
  * Release note: when this branch is rebased onto PR #12, `downPayment` must
  * call `computeDownPayment(rentalFee, pct)` from `./down-payment` (rounded up
@@ -29,7 +27,9 @@
 export const DEFAULT_DOWN_PAYMENT_PCT = 25;
 
 export type DownPaymentSource = 'product' | 'shop' | 'default';
-export type TermsSetting = 'product' | 'shop';
+export type TermsSetting = 'product' | 'shop' | 'mode';
+export const DOWN_PAYMENT_MODES = ['INHERIT', 'CUSTOM'] as const;
+export type DownPaymentMode = (typeof DOWN_PAYMENT_MODES)[number];
 
 type Numeric = number | string | { toString(): string } | null | undefined;
 
@@ -38,6 +38,7 @@ export interface RentalTermsProduct {
   basePrice?: Numeric;
   rentalDepositAmount?: Numeric;
   rentalDownPaymentPct?: Numeric;
+  rentalDownPaymentMode?: string | null;
 }
 
 export interface RentalTermsPolicy {
@@ -86,11 +87,17 @@ function validPct(v: Numeric): number | null {
 export function effectiveDownPaymentPct(
   productPct: Numeric,
   shopPct: Numeric,
+  mode?: string | null,
 ): { pct: number; source: DownPaymentSource; invalid: TermsSetting[] } {
   const invalid: TermsSetting[] = [];
-  const p = validPct(productPct);
-  if (p !== null) return { pct: p, source: 'product', invalid };
-  if (!isMissing(productPct)) invalid.push('product');
+  const knownMode = mode === null || mode === undefined || (DOWN_PAYMENT_MODES as readonly string[]).includes(mode);
+  if (!knownMode) invalid.push('mode');
+  if (mode !== 'INHERIT') {
+    // CUSTOM, not yet reviewed (NULL), or an unknown mode: the product's own %
+    const p = validPct(productPct);
+    if (p !== null) return { pct: p, source: 'product', invalid };
+    if (!isMissing(productPct) || mode === 'CUSTOM') invalid.push('product');
+  }
   const s = validPct(shopPct);
   if (s !== null) return { pct: s, source: 'shop', invalid };
   if (!isMissing(shopPct)) invalid.push('shop');
@@ -117,6 +124,7 @@ export function rentalTerms(
   const { pct, source, invalid } = effectiveDownPaymentPct(
     product.rentalDownPaymentPct,
     policy?.defaultDownPaymentPct,
+    product.rentalDownPaymentMode,
   );
   const downPayment = rentalFee * (pct / 100);
   const total = rentalFee + deposit;

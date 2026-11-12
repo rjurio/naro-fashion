@@ -156,7 +156,7 @@ describe('GET /rentals/quote/:productId', () => {
     expect(prisma.rentalPolicy.findFirst.mock.calls[0][0].where).toEqual({ tenantId: T });
     // reads only the price columns it needs
     expect(Object.keys(prisma.product.findFirst.mock.calls[0][0].select).sort()).toEqual(
-      ['basePrice', 'rentalDepositAmount', 'rentalDownPaymentPct', 'rentalPricePerDay'],
+      ['basePrice', 'rentalDepositAmount', 'rentalDownPaymentMode', 'rentalDownPaymentPct', 'rentalPricePerDay'],
     );
   });
 

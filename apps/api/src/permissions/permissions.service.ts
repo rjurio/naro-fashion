@@ -69,6 +69,9 @@ const PERMISSIONS = [
   { code: 'size-guides:view', name: 'View Size Guides', module: 'size-guides', action: 'view' },
   // rental-policies
   { code: 'rental-policies:view', name: 'View Rental Policies', module: 'rental-policies', action: 'view' },
+  // Per-product down payment (Inherit shop policy / Custom %). Not auto-granted
+  // to MANAGER or STAFF: SUPER_ADMIN has it by design; grant it explicitly.
+  { code: 'rental-policies:manage', name: 'Manage Rental Down-Payment Terms', module: 'rental-policies', action: 'manage' },
   // recycle-bin
   { code: 'recycle-bin:list', name: 'List Recycle Bin', module: 'recycle-bin', action: 'list' },
   // ai-agent — required for any /api/v1/ai/* call. Disabled by default for STAFF/MANAGER;
