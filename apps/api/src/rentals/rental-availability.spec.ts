@@ -88,8 +88,8 @@ function makeDb(opts: FakeOpts = {}) {
           .map((l) => ({ quantity: l.quantity, refundedQuantity: l.refundedQuantity ?? 0 }))),
     },
     layaway: { findMany: jest.fn(async ({ where }: any) => state.layaways.filter((l) => l.status === where.status)) },
-    // National ID (PR #16): the booking reads the customer's approved ID inside the transaction.
-    customerIDDocument: { findFirst: jest.fn(async () => null) },
+    // National ID (PR #16): the booking reads the customer's approved ID (and, without one, their documents for the hold) inside the transaction.
+    customerIDDocument: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
   };
 
   const held = new Map<string, Promise<void>>();
@@ -156,7 +156,7 @@ function makeDb(opts: FakeOpts = {}) {
       findFirst: jest.fn(async ({ where }: any) => (where.id === 'p1' ? state.product : where.id === 'p2' ? state.otherProduct : null)),
     },
     rentalPolicy: { findFirst: jest.fn(async () => null) },
-    customerIDDocument: { findFirst: jest.fn(async () => null) },
+    customerIDDocument: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
   };
   prisma.rentalOrder = { ...reads.rentalOrder, findFirst: jest.fn(async ({ where }: any) => state.rentals.find((r) => r.id === where.id) ?? null) };
 

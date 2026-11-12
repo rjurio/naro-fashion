@@ -103,8 +103,8 @@ function makeDb(opts: { mode?: string; stock?: number; rentals?: any[]; restockA
       },
       payment: { create: jest.fn().mockResolvedValue({}) },
       posSession: { update: jest.fn().mockResolvedValue({}) },
-      // National ID (PR #16): the booking reads the customer's approved ID inside the transaction.
-      customerIDDocument: { findFirst: jest.fn(async () => null) },
+      // National ID (PR #16): the booking reads the customer's approved ID (and, without one, their documents for the hold) inside the transaction.
+      customerIDDocument: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
     };
     return tx;
   };
@@ -126,7 +126,7 @@ function makeDb(opts: { mode?: string; stock?: number; rentals?: any[]; restockA
     },
     rentalPolicy: { findFirst: jest.fn(async () => null) },
     rentalOrder: { count: jest.fn(async () => 0) }, // pre-check outside the tx (fast-fail only)
-    customerIDDocument: { findFirst: jest.fn(async () => null) },
+    customerIDDocument: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
     posSession: { findFirst: jest.fn(async () => ({ id: 's1', adminUserId: 'cashier-1', status: 'OPEN', tenantId: T, openedAt: new Date(Date.now() - 3600_000), closedAt: null })) },
   };
   // Reads made OUTSIDE a transaction (availability endpoint, booking pre-check).
