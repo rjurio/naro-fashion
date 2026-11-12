@@ -449,6 +449,7 @@
     "noOnlinePaymentNote": "Hakuna malipo yanayofanywa mtandaoni. Baada ya kuhifadhi, duka litawasiliana nawe kupanga malipo ya awali ya {amount}. Uhifadhi usiolipwa huachiliwa baada ya muda mfupi.",
     "selectDatesToContinue": "Chagua tarehe za kuchukua na kurudisha ili kuendelea",
     "availabilityCheckFailed": "Hatukuweza kuangalia upatikanaji sasa hivi. Bado unaweza kuomba kuhifadhi — duka litathibitisha upatikanaji.",
+    "quoteUnavailable": "Hatukuweza kupata kiasi cha kianzio sasa hivi. Bado unaweza kuomba kuhifadhi — uhifadhi wako utaonyesha kiasi kamili.",
     "loadFailed": "Hatukuweza kupakia bidhaa za kukodisha",
     "loadFailedDesc": "Tafadhali angalia mtandao wako kisha ujaribu tena.",
     "loadMoreFailed": "Imeshindwa kupakia bidhaa zaidi. Tafadhali jaribu tena.",

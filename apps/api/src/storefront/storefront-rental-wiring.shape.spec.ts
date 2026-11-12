@@ -39,11 +39,25 @@ describe('storefront rental wiring', () => {
   it('booking page preselects a lone variant, uses the shared quote, and makes no payment promise', () => {
     const s = read('app/rentals/[slug]/page.tsx');
     expect(s).toMatch(/autoSelectRentalVariantId\(/);
-    expect(s).toMatch(/rentalQuote\(/);
+    // money terms come from the server quote (rental-terms.ts), not page maths
+    expect(s).toMatch(/rentalsApi\.quote\(/);
+    expect(s).toMatch(/parseRentalQuote\(/);
+    expect(s).toMatch(/rentals\.quoteUnavailable/);
     expect(s).not.toMatch(/bookNowWithPay/);
     expect(s).toMatch(/noOnlinePaymentNote/);
     // a failed availability check is shown, never silently treated as "not checked"
     expect(s).toMatch(/setAvailable\("error"\)/);
+  });
+
+  it('no storefront page computes a down payment or percentage itself', () => {
+    for (const f of ['app/rentals/[slug]/page.tsx', 'app/products/[slug]/page.tsx']) {
+      const src = read(f);
+      expect(src).not.toMatch(/rentalQuote\(/);
+      expect(src).not.toMatch(/downPaymentPct\s*\|\|\s*25|Pct\s*\/\s*100|\*\s*\(\s*\w*[Pp]ct/);
+    }
+    const pdp = read('app/products/[slug]/page.tsx');
+    expect(pdp).toMatch(/rentalsApi\.quote\(/);
+    expect(pdp).toMatch(/parseRentalQuote\(/);
   });
 
   it('order history distinguishes a failed request from "no orders"', () => {

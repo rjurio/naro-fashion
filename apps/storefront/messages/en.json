@@ -449,6 +449,7 @@
     "noOnlinePaymentNote": "No payment is taken online. After you book, the store will contact you to arrange the {amount} down payment. Unpaid bookings are released after a short hold period.",
     "selectDatesToContinue": "Choose your pickup and return dates to continue",
     "availabilityCheckFailed": "We couldn't check availability right now. You can still request the booking — the store confirms availability.",
+    "quoteUnavailable": "We couldn't load the down payment right now. You can still request the booking — your booking will show the exact amount.",
     "loadFailed": "We couldn't load the rental items",
     "loadFailedDesc": "Please check your connection and try again.",
     "loadMoreFailed": "Couldn't load more items. Please try again.",

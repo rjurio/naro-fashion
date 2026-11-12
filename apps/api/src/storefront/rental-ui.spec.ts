@@ -20,7 +20,8 @@ const {
   listTotal,
   normalizeAvailabilityMode,
   rentalHref,
-  rentalQuote,
+  parseRentalQuote,
+  displayRentalFee,
   toCardProduct,
 } = ui;
 
@@ -94,29 +95,48 @@ describe('autoSelectRentalVariantId', () => {
   });
 });
 
-describe('rentalQuote (mirrors RentalsService.create arithmetic)', () => {
-  it('prod example: flat 140,000 fee, 350,000 deposit, 25% of the FEE only', () => {
-    const q = rentalQuote({ rentalPricePerDay: '140000', rentalDepositAmount: '350000', rentalDownPaymentPct: 25, basePrice: '950000' });
-    expect(q).toEqual({
-      rentalFee: 140000,
-      deposit: 350000,
-      downPaymentPct: 25,
-      downPayment: 35000,
-      total: 490000,
-      remaining: 455000,
-    });
+describe('parseRentalQuote (the page shows the server quote, never its own arithmetic)', () => {
+  const ok = { rentalFee: 140000, deposit: 350000, downPaymentPct: 30, downPayment: 42000, total: 490000, remaining: 448000 };
+  it('accepts the server quote unchanged, including a non-25 % shop default', () => {
+    expect(parseRentalQuote(ok)).toEqual(ok);
+    expect(parseRentalQuote({ ...ok, rentalFee: '140000', downPayment: '42000' })).toEqual(ok);
   });
-  it('never uses the retail price as the rental fee when a rental price exists', () => {
-    expect(rentalQuote({ rentalPricePerDay: 120000, basePrice: 850000 }).rentalFee).toBe(120000);
+  it('a 0 % down payment is a valid server answer (no obligation), not an error', () => {
+    const z = { ...ok, downPaymentPct: 0, downPayment: 0, remaining: 490000 };
+    expect(parseRentalQuote(z)).toEqual(z);
   });
-  it('falls back to 10% of retail (same as the API) when no rental price is set', () => {
-    expect(rentalQuote({ basePrice: 900000 }).rentalFee).toBe(90000);
+  it.each([
+    ['nothing', null],
+    ['not an object', 'boom'],
+    ['a missing field', { ...ok, downPayment: undefined }],
+    ['a null field (e.g. NaN on the server)', { ...ok, rentalFee: null }],
+    ['a non-number', { ...ok, downPaymentPct: 'abc' }],
+    ['a negative amount', { ...ok, deposit: -1 }],
+    ['a percentage over 100', { ...ok, downPaymentPct: 150 }],
+    ['a zero rental fee', { ...ok, rentalFee: 0 }],
+    ['a down payment above the fee', { ...ok, downPayment: 150000 }],
+  ])('rejects %s → null (the page says it could not load, never guesses)', (_l, v) => {
+    expect(parseRentalQuote(v)).toBeNull();
   });
-  it('defaults the down payment to 25% and the deposit to 0', () => {
-    const q = rentalQuote({ rentalPricePerDay: 100000 });
-    expect(q.downPaymentPct).toBe(25);
-    expect(q.deposit).toBe(0);
-    expect(q.downPayment).toBe(25000);
+  it('never derives a percentage: there is no client-side default left in the helper', () => {
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../storefront/lib/rental-ui.ts'), 'utf8');
+    expect(src).not.toMatch(/export function rentalQuote/);
+    expect(src).not.toMatch(/\/ 100\)|\* 0\.1\b|: 25\b/);
+    expect(src).toMatch(/export function parseRentalQuote/);
+  });
+});
+
+describe('displayRentalFee (headline price before / without the quote)', () => {
+  it('uses the server fee when the quote is loaded', () => {
+    expect(displayRentalFee({ rentalPricePerDay: '1' }, { rentalFee: 400000 } as any)).toBe(400000);
+  });
+  it("else the product's own flat rental price", () => {
+    expect(displayRentalFee({ rentalPricePerDay: '140000' }, null)).toBe(140000);
+  });
+  it('else nothing: no 10 %-of-retail guess on the client', () => {
+    expect(displayRentalFee({ rentalPricePerDay: null }, null)).toBeNull();
+    expect(displayRentalFee(undefined, null)).toBeNull();
   });
 });
 

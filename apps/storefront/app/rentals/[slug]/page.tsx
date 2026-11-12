@@ -22,7 +22,7 @@ import { productsApi, rentalsApi, ApiError } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTranslation } from "@/lib/i18n";
-import { autoSelectRentalVariantId, rentalQuote } from "@/lib/rental-ui";
+import { autoSelectRentalVariantId, displayRentalFee, parseRentalQuote, type RentalQuote } from "@/lib/rental-ui";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -53,6 +53,11 @@ export default function RentalDetailPage() {
   // never shown as available). The API re-checks on booking regardless.
   const [available, setAvailable] = useState<boolean | null | "error">(null);
   const [booking, setBooking] = useState(false);
+  // Money terms come from the API (the same rule the booking stores). The
+  // page never computes a percentage or amount itself; if the quote can't be
+  // loaded it says so instead of showing a guessed amount.
+  const [quote, setQuote] = useState<RentalQuote | null>(null);
+  const [quoteState, setQuoteState] = useState<"loading" | "ok" | "error">("loading");
 
   useEffect(() => {
     setLoading(true);
@@ -66,6 +71,22 @@ export default function RentalDetailPage() {
       .catch(() => setProduct(null))
       .finally(() => setLoading(false));
   }, [slug]);
+
+  useEffect(() => {
+    if (!product?.id) return;
+    let cancelled = false;
+    setQuote(null);
+    setQuoteState("loading");
+    rentalsApi.quote(product.id)
+      .then((res) => {
+        if (cancelled) return;
+        const q = parseRentalQuote(res);
+        setQuote(q);
+        setQuoteState(q ? "ok" : "error");
+      })
+      .catch(() => { if (!cancelled) setQuoteState("error"); });
+    return () => { cancelled = true; };
+  }, [product?.id]);
 
   // Check availability when dates change
   useEffect(() => {
@@ -162,12 +183,9 @@ export default function RentalDetailPage() {
   const features: string[] = Array.isArray(product.specifications) ? product.specifications : [];
   // Despite the column name, rentalPricePerDay is a FLAT price for the whole
   // rental (up to maxRentalDays) — see schema.prisma + RentalsService.create.
-  // Same arithmetic as RentalsService.create (flat fee, % of the fee only,
-  // deposit separate and refundable) — see lib/rental-ui.ts.
-  const quote = rentalQuote(product);
-  const rentalPrice = quote.rentalFee;
-  const depositAmount = quote.deposit;
-  const downPaymentPercent = quote.downPaymentPct;
+  // Fee, deposit, down-payment % and amount all come from the server quote
+  // (rentals/rental-terms.ts); see lib/rental-ui.ts parseRentalQuote.
+  const rentalPrice = displayRentalFee(product, quote);
   const maxRentalDays = product.maxRentalDays || 7;
   const bufferDays = product.bufferDaysOverride || 7;
   const rating = product.avgRating || 0;
@@ -191,10 +209,6 @@ export default function RentalDetailPage() {
     return x.toISOString().split("T")[0];
   };
 
-  const rentalFee = quote.rentalFee;
-  const downPayment = quote.downPayment;
-  const totalCost = quote.total;
-  const remainingPayment = quote.remaining;
 
   return (
     <div className="bg-background min-h-screen">
@@ -288,7 +302,7 @@ export default function RentalDetailPage() {
             <div className="mt-6 p-4 rounded-xl bg-gold-500/10 border border-gold-500/30">
               <div className="flex items-baseline gap-2">
                 <span className="text-3xl font-bold text-foreground">
-                  {formatPrice(rentalPrice)}
+                  {rentalPrice != null ? formatPrice(rentalPrice) : "—"}
                 </span>
                 <span className="text-muted-foreground">{t('rentals.perRental').replace('{max}', String(maxRentalDays))}</span>
               </div>
@@ -415,8 +429,16 @@ export default function RentalDetailPage() {
             </div>
 
             {/* Price Breakdown */}
-            {rentalDays > 0 && (
-              <div className="mt-6 p-4 rounded-xl border border-border bg-card">
+            {rentalDays > 0 && quoteState === "error" && (
+              <p className="mt-6 text-xs text-amber-600 flex items-center gap-1" data-testid="rental-quote-error">
+                <AlertTriangle className="h-3 w-3" /> {t('rentals.quoteUnavailable')}
+              </p>
+            )}
+            {rentalDays > 0 && quoteState === "loading" && (
+              <div className="mt-6 h-32 rounded-xl border border-border bg-muted animate-pulse" data-testid="rental-quote-loading" />
+            )}
+            {rentalDays > 0 && quote && (
+              <div className="mt-6 p-4 rounded-xl border border-border bg-card" data-testid="rental-price-breakdown">
                 <h3 className="text-sm font-semibold text-foreground mb-4">
                   {t('rentals.priceBreakdown')}
                 </h3>
@@ -426,35 +448,35 @@ export default function RentalDetailPage() {
                       {t('rentals.rentalFeeFlat').replace('{max}', String(maxRentalDays))}
                     </span>
                     <span className="font-medium text-foreground">
-                      {formatPrice(rentalFee)}
+                      {formatPrice(quote.rentalFee)}
                     </span>
                   </div>
-                  {depositAmount > 0 && (
+                  {quote.deposit > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">
                         {t('rentals.securityDeposit')}
                       </span>
                       <span className="font-medium text-foreground">
-                        {formatPrice(depositAmount)}
+                        {formatPrice(quote.deposit)}
                       </span>
                     </div>
                   )}
                   <div className="border-t border-border pt-2 flex justify-between">
                     <span className="font-semibold text-foreground">{t('rentals.totalLabel')}</span>
                     <span className="font-bold text-foreground">
-                      {formatPrice(totalCost)}
+                      {formatPrice(quote.total)}
                     </span>
                   </div>
                   <div className="border-t border-border pt-2">
                     <div className="flex justify-between text-gold-600">
                       <span className="font-medium">
-                        {t('rentals.downPaymentLine').replace('{pct}', String(downPaymentPercent))}
+                        {t('rentals.downPaymentLine').replace('{pct}', String(quote.downPaymentPct))}
                       </span>
-                      <span className="font-bold">{formatPrice(downPayment)}</span>
+                      <span className="font-bold" data-testid="rental-down-payment">{formatPrice(quote.downPayment)}</span>
                     </div>
                     <div className="flex justify-between text-muted-foreground mt-1">
                       <span>{t('rentals.remainingBeforeDispatch')}</span>
-                      <span>{formatPrice(remainingPayment)}</span>
+                      <span>{formatPrice(quote.remaining)}</span>
                     </div>
                   </div>
                 </div>
@@ -493,11 +515,11 @@ export default function RentalDetailPage() {
                 <p className="text-xs text-muted-foreground text-center mt-2">
                   {selectedVariantId ? t('rentals.selectDatesToContinue') : t('rentals.selectSizeAndDates')}
                 </p>
-              ) : (
+              ) : quote ? (
                 <p className="text-xs text-muted-foreground text-center mt-2" data-testid="rental-payment-note">
-                  {t('rentals.noOnlinePaymentNote').replace('{amount}', formatPrice(downPayment))}
+                  {t('rentals.noOnlinePaymentNote').replace('{amount}', formatPrice(quote.downPayment))}
                 </p>
-              )}
+              ) : null}
             </div>
 
             {/* Features */}

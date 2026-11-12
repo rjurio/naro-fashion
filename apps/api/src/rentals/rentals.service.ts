@@ -12,6 +12,7 @@ import { CreateRentalDto } from './dto/create-rental.dto';
 import { UpdateRentalDto } from './dto/update-rental.dto';
 import { QueryRentalsDto } from './dto/query-rentals.dto';
 import { ownerScope } from '../auth/util/ownership';
+import { rentalTerms } from './rental-terms';
 import { Decimal } from '@prisma/client/runtime/library';
 import {
   NON_BLOCKING_RENTAL_STATUSES,
@@ -126,19 +127,12 @@ export class RentalsService {
     //   latePenaltyPercent% of flat price per day late.
     // The stored totalRentalPrice here is the flat price at booking time;
     //   any late fee is assessed on actual return in the rental controller.
-    const rentalPrice = product.rentalPricePerDay
-      ? Number(product.rentalPricePerDay)
-      : Number(product.basePrice) * 0.1;
-    const depositAmount = product.rentalDepositAmount
-      ? Number(product.rentalDepositAmount)
-      : 0;
-    const downPaymentPct =
-      product.rentalDownPaymentPct ??
-      policy?.defaultDownPaymentPct ??
-      25;
-
-    const totalRentalPrice = rentalPrice;
-    const downPaymentAmount = totalRentalPrice * (downPaymentPct / 100);
+    // One rule for the money terms (rental-terms.ts), shared with the public
+    // quote the storefront displays: product % → shop default % → 25 %.
+    const terms = rentalTerms(product, policy);
+    const depositAmount = terms.deposit;
+    const totalRentalPrice = terms.rentalFee;
+    const downPaymentAmount = terms.downPayment;
 
     // Check ID verification status
     const idDoc = await this.prisma.customerIDDocument.findFirst({
@@ -423,6 +417,49 @@ export class RentalsService {
 
     // Minimal by design — this answer is visible to anonymous callers.
     return { available };
+  }
+
+  /**
+   * PUBLIC: the money terms a booking of this product would store right now
+   * (rental-terms.ts, the same function create() uses). Same visibility as
+   * getAvailability: only active, rental-eligible products of THIS tenant,
+   * anything else is the same 404. Returns amounts only: no ids, no policy
+   * internals. Read fresh on every call, so a changed shop default shows at
+   * once. Display only: the booking re-computes and stores its own amount.
+   */
+  async getQuote(productId: string) {
+    const tenantId = this.tenantContext.requireId;
+    const product = await this.prisma.product.findFirst({
+      where: {
+        id: productId,
+        tenantId,
+        isActive: true,
+        deletedAt: null,
+        availabilityMode: { in: ['RENTAL_ONLY', 'BOTH'] },
+      },
+      select: {
+        rentalPricePerDay: true,
+        basePrice: true,
+        rentalDepositAmount: true,
+        rentalDownPaymentPct: true,
+      },
+    });
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+    const policy = await this.prisma.rentalPolicy.findFirst({
+      where: { tenantId },
+      select: { defaultDownPaymentPct: true },
+    });
+    const t = rentalTerms(product, policy);
+    return {
+      rentalFee: t.rentalFee,
+      deposit: t.deposit,
+      downPaymentPct: t.downPaymentPct,
+      downPayment: t.downPayment,
+      total: t.total,
+      remaining: t.remaining,
+    };
   }
 
   async getUpcomingPickups(days: number) {

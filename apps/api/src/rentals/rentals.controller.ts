@@ -95,6 +95,19 @@ export class RentalsController {
     return this.rentalsService.getAvailability(productId, start, end);
   }
 
+  /**
+   * PUBLIC: the down-payment terms a booking would store now (product
+   * override → shop default → 25 %), so the storefront shows the server's
+   * percentage and amount instead of computing its own. Amounts only, same
+   * product visibility as availability.
+   */
+  @Public()
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('quote/:productId')
+  getQuote(@Param('productId') productId: string) {
+    return this.rentalsService.getQuote(productId);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentUser() user: any) {
     return this.rentalsService.findOne(id, user);

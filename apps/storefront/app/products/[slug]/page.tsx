@@ -24,11 +24,11 @@ import {
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import ProductCard from "@/components/ui/ProductCard";
-import { canBuy, canRent, normalizeAvailabilityMode, rentalHref, rentalQuote, toCardProduct } from "@/lib/rental-ui";
+import { canBuy, canRent, displayRentalFee, normalizeAvailabilityMode, parseRentalQuote, rentalHref, toCardProduct, type RentalQuote } from "@/lib/rental-ui";
 import { formatPrice } from "@/lib/utils";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { useTranslation } from "@/lib/i18n";
-import { productsApi, reviewsApi, cartApi, wishlistApi, tokenStore } from "@/lib/api";
+import { productsApi, reviewsApi, cartApi, wishlistApi, rentalsApi, tokenStore } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { sanitizeHtml } from "@/lib/sanitize";
 import { isOptimizableImage } from "@/lib/image-hosts";
@@ -74,6 +74,10 @@ export default function ProductDetailPage() {
   const [addingToCart, setAddingToCart] = useState(false);
   // Buy vs Rent for BOTH products. RENTAL_ONLY is always "rent", PURCHASE_ONLY "buy".
   const [purchaseMode, setPurchaseMode] = useState<"buy" | "rent">("buy");
+  // Rental money terms from the API (same rule the booking stores); null =
+  // not loaded / couldn't load. The page never computes them itself.
+  const [rentQuote, setRentQuote] = useState<RentalQuote | null>(null);
+  const [rentQuoteFailed, setRentQuoteFailed] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   // Review form state
@@ -139,6 +143,23 @@ export default function ProductDetailPage() {
       .catch(() => setProduct(null))
       .finally(() => setLoading(false));
   }, [slug]);
+
+  // Rental terms for rentable products, from the server quote.
+  useEffect(() => {
+    setRentQuote(null);
+    setRentQuoteFailed(false);
+    if (!product?.id || !canRent(product.availabilityMode)) return;
+    let cancelled = false;
+    rentalsApi.quote(product.id)
+      .then((res) => {
+        if (cancelled) return;
+        const q = parseRentalQuote(res);
+        setRentQuote(q);
+        setRentQuoteFailed(!q);
+      })
+      .catch(() => { if (!cancelled) setRentQuoteFailed(true); });
+    return () => { cancelled = true; };
+  }, [product?.id, product?.availabilityMode]);
 
   // Dynamic page title
   useEffect(() => {
@@ -269,7 +290,7 @@ export default function ProductDetailPage() {
   const isBuyable = canBuy(product.availabilityMode);
   const offersBoth = isRentable && isBuyable;
   const mode: "buy" | "rent" = !isBuyable ? "rent" : !isRentable ? "buy" : purchaseMode;
-  const quote = rentalQuote(product);
+  const rentFee = displayRentalFee(product, rentQuote);
   const maxRentalDays = product.maxRentalDays || 7;
   const features: string[] = Array.isArray(product.specifications) ? product.specifications : [];
   // Size guide: product-level overrides category-level
@@ -517,7 +538,7 @@ export default function ProductDetailPage() {
                     <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
                       <Crown className="h-4 w-4 text-gold-600" /> {t("product.rent")}
                     </span>
-                    <span className="mt-1 block text-base font-bold text-foreground">{formatPrice(quote.rentalFee)}</span>
+                    <span className="mt-1 block text-base font-bold text-foreground">{rentFee != null ? formatPrice(rentFee) : "—"}</span>
                     <span className="block text-xs text-muted-foreground">
                       {t("product.rentHint").replace("{max}", String(maxRentalDays))}
                     </span>
@@ -532,19 +553,24 @@ export default function ProductDetailPage() {
                 <div className="flex items-center gap-2">
                   <Crown className="h-5 w-5 text-gold-600" />
                   <span className="text-sm font-medium text-gold-text">
-                    {t("product.rentalPrice")} {formatPrice(quote.rentalFee)}{t("product.perRental")}
+                    {t("product.rentalPrice")} {rentFee != null ? formatPrice(rentFee) : "—"}{t("product.perRental")}
                     {" "}{t("product.upToDays").replace("{max}", String(maxRentalDays))}
                   </span>
                 </div>
                 <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-                  {quote.deposit > 0 && (
-                    <li>{t("product.rentalDepositLine").replace("{amount}", formatPrice(quote.deposit))}</li>
+                  {rentQuote && rentQuote.deposit > 0 && (
+                    <li>{t("product.rentalDepositLine").replace("{amount}", formatPrice(rentQuote.deposit))}</li>
                   )}
-                  <li>
-                    {t("product.rentalDownPaymentLine")
-                      .replace("{pct}", String(quote.downPaymentPct))
-                      .replace("{amount}", formatPrice(quote.downPayment))}
-                  </li>
+                  {rentQuote && (
+                    <li data-testid="pdp-down-payment">
+                      {t("product.rentalDownPaymentLine")
+                        .replace("{pct}", String(rentQuote.downPaymentPct))
+                        .replace("{amount}", formatPrice(rentQuote.downPayment))}
+                    </li>
+                  )}
+                  {rentQuoteFailed && (
+                    <li className="text-amber-600" data-testid="pdp-quote-error">{t("rentals.quoteUnavailable")}</li>
+                  )}
                   <li>{t("product.rentalDatesLine")}</li>
                 </ul>
               </div>

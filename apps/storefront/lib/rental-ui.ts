@@ -88,29 +88,38 @@ export interface RentalQuote {
 }
 
 /**
- * Same arithmetic as RentalsService.create: the rental fee is FLAT for the
- * whole rental (up to maxRentalDays; `rentalPricePerDay` is a legacy column
- * name), the down payment is a percentage of the rental fee only, and the
- * deposit is refundable and separate. Falls back to 10% of the retail price
- * when no rental price is set, exactly like the API.
+ * The rental money terms come from the API (`GET /rentals/quote/:productId`,
+ * computed by the same function the booking uses: product % → shop default %
+ * → 25 %). The storefront does NO financial arithmetic: this only checks the
+ * response. Anything malformed (missing field, not a number, negative, a
+ * percentage over 100, a down payment above the fee) → null, and the page
+ * shows "couldn't load" instead of an amount it made up.
  */
-export function rentalQuote(p: {
-  rentalPricePerDay?: unknown;
-  basePrice?: unknown;
-  rentalDepositAmount?: unknown;
-  rentalDownPaymentPct?: unknown;
-}): RentalQuote {
-  const num = (v: unknown) => {
+export function parseRentalQuote(res: unknown): RentalQuote | null {
+  const r = res as Record<string, unknown> | null | undefined;
+  if (!r || typeof r !== 'object') return null;
+  const keys = ['rentalFee', 'deposit', 'downPaymentPct', 'downPayment', 'total', 'remaining'] as const;
+  const out = {} as Record<(typeof keys)[number], number>;
+  for (const k of keys) {
+    const v = r[k];
+    if (v === null || v === undefined || v === '') return null;
     const n = Number(v);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  };
-  const rentalFee = num(p.rentalPricePerDay) || num(p.basePrice) * 0.1;
-  const deposit = num(p.rentalDepositAmount);
-  const pctRaw = Number(p.rentalDownPaymentPct);
-  const downPaymentPct = Number.isFinite(pctRaw) && pctRaw > 0 && pctRaw <= 100 ? pctRaw : 25;
-  const downPayment = Math.round(rentalFee * (downPaymentPct / 100));
-  const total = rentalFee + deposit;
-  return { rentalFee, deposit, downPaymentPct, downPayment, total, remaining: total - downPayment };
+    if (!Number.isFinite(n) || n < 0) return null;
+    out[k] = n;
+  }
+  if (out.downPaymentPct > 100 || out.rentalFee <= 0 || out.downPayment > out.rentalFee) return null;
+  return out;
+}
+
+/**
+ * The headline rental price before the quote arrives: the server's fee when
+ * known, else the product's own flat rental price if it has one, else null
+ * (show nothing rather than guess).
+ */
+export function displayRentalFee(product: { rentalPricePerDay?: unknown } | null | undefined, quote: RentalQuote | null): number | null {
+  if (quote) return quote.rentalFee;
+  const n = Number(product?.rentalPricePerDay);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 export interface CardProduct {
