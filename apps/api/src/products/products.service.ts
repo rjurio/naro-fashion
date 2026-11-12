@@ -135,6 +135,9 @@ const publicProductDetailSelect = {
   },
 } as const;
 
+/** 409 code: the product form tried to change an existing variant's stock. */
+export const STOCK_EDIT_NOT_ALLOWED = 'STOCK_EDIT_NOT_ALLOWED';
+
 @Injectable()
 export class ProductsService {
   constructor(
@@ -561,7 +564,7 @@ export class ProductsService {
     };
   }
 
-  async update(id: string, dto: UpdateProductDto) {
+  async update(id: string, dto: UpdateProductDto, performedBy?: string) {
     const tenantId = this.tenantContext.requireId;
     const expectedUpdatedAt = parseExpectedUpdatedAt(dto.expectedUpdatedAt);
     const product = await this.prisma.product.findFirst({ where: { id, tenantId } });
@@ -618,7 +621,7 @@ export class ProductsService {
         // cascades (so it silently emptied every customer's cart and changed
         // the variant ids under them).
         if (dto.variants !== undefined) {
-          await this.syncVariants(tx, { id, slug: product.slug }, tenantId, dto.variants);
+          await this.syncVariants(tx, { id, slug: product.slug }, tenantId, dto.variants, performedBy);
         }
 
         // Handle images: delete all existing, re-create from dto (nothing
@@ -661,9 +664,21 @@ export class ProductsService {
    *  - payload row WITHOUT an id (or with an id that isn't this product's)
    *    → create, with tenantId.
    *  - existing variant absent from the payload → hard-delete only when no
-   *    OrderItem / RentalOrder references it; otherwise soft-disable
-   *    (`isActive: false`) so history stays intact. Cart lines pointing at
-   *    a removed/disabled variant are dropped either way.
+   *    OrderItem / RentalOrder references it AND it holds no stock;
+   *    otherwise soft-disable (`isActive: false`) so history and the stock
+   *    record stay intact. Cart lines pointing at a removed/disabled variant
+   *    are dropped either way.
+   *
+   * STOCK (Nov 2026 fix): the product form never changes the stock of an
+   * EXISTING variant. Stock moves only through the stock workflows (sales,
+   * refunds, rentals, POS) and Inventory → adjust, which write an
+   * InventoryTransaction with who and why. A payload that still carries a
+   * stock value for an existing variant must equal the current stock
+   * (re-reading it inside this transaction); any difference — a deliberate
+   * edit or a page loaded before a sale — is refused with 409
+   * STOCK_EDIT_NOT_ALLOWED before anything is written, so a stale form can
+   * never overwrite newer stock. A NEW variant may start with opening stock,
+   * recorded as an ADJUSTMENT transaction (never a RESTOCK).
    *
    * Exposed (not private) for the regression spec.
    */
@@ -672,12 +687,30 @@ export class ProductsService {
     product: { id: string; slug: string },
     tenantId: string,
     variants: UpdateVariantDto[],
+    performedBy?: string,
   ) {
     const existing = await tx.productVariant.findMany({
       where: { productId: product.id, tenantId },
-      select: { id: true, sku: true },
+      select: { id: true, sku: true, stock: true },
     });
     const existingById = new Map(existing.map((v) => [v.id, v]));
+
+    // Refuse any stock change on an existing variant BEFORE writing anything.
+    const stockConflicts = variants
+      .map((v) => ({ v, current: v.id ? existingById.get(v.id) : undefined }))
+      .filter(({ v, current }) => current && v.stock !== undefined && v.stock !== null && Number(v.stock) !== current.stock)
+      .map(({ v, current }) => ({ variantId: current!.id, submitted: Number(v.stock), current: current!.stock }));
+    if (stockConflicts.length > 0) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        code: STOCK_EDIT_NOT_ALLOWED,
+        message:
+          'Stock cannot be changed from the product form. Use Inventory to adjust stock (it records who changed it and why). ' +
+          'If you did not change it, the stock was updated since this page was opened — reload and try again.',
+        variants: stockConflicts,
+      });
+    }
     const keep = new Set<string>();
     const summary = { updated: 0, created: 0, deleted: 0, disabled: 0 };
     const stamp = Date.now().toString(36);
@@ -699,13 +732,14 @@ export class ProductsService {
             color: v.color,
             colorHex: v.colorHex,
             price: v.price,
-            ...(v.stock !== undefined ? { stock: v.stock } : {}),
+            // stock is deliberately never written here (see the note above)
             ...(v.isActive !== undefined ? { isActive: v.isActive } : {}),
           },
         });
         summary.updated++;
       } else {
-        await tx.productVariant.create({
+        const opening = Math.max(0, Math.trunc(Number(v.stock ?? 0)) || 0);
+        const created = await tx.productVariant.create({
           data: {
             tenantId,
             productId: product.id,
@@ -716,9 +750,25 @@ export class ProductsService {
             color: v.color,
             colorHex: v.colorHex,
             price: v.price,
-            stock: v.stock ?? 0,
+            stock: opening,
           },
         });
+        if (opening > 0) {
+          await tx.inventoryTransaction.create({
+            data: {
+              tenantId,
+              productId: product.id,
+              variantId: created.id,
+              type: 'ADJUSTMENT',
+              quantityBefore: 0,
+              quantityChange: opening,
+              quantityAfter: opening,
+              reference: 'product-form:new-variant',
+              note: 'Opening stock for a new variant added in the product form',
+              performedBy: performedBy ?? null,
+            },
+          });
+        }
         summary.created++;
       }
     }
@@ -733,8 +783,11 @@ export class ProductsService {
         ...orderRefs.map((r) => r.variantId),
         ...rentalRefs.map((r) => r.variantId),
       ]);
-      const toDisable = removed.filter((vid) => referenced.has(vid));
-      const toDelete = removed.filter((vid) => !referenced.has(vid));
+      // A variant that still holds stock is kept (disabled), so the stock
+      // never disappears without an inventory record.
+      const holdsStock = new Set(existing.filter((v) => (v.stock ?? 0) > 0).map((v) => v.id));
+      const toDisable = removed.filter((vid) => referenced.has(vid) || holdsStock.has(vid));
+      const toDelete = removed.filter((vid) => !referenced.has(vid) && !holdsStock.has(vid));
 
       await tx.cartItem.deleteMany({ where: { variantId: { in: removed } } });
       if (toDisable.length > 0) {

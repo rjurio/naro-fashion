@@ -44,7 +44,8 @@ export interface ProductFormData {
   sizeGuideId?: string;
   model3dUrl: string | null;
   model3dPosterUrl: string | null;
-  variants: VariantRow[];
+  /** Existing variants (with id) carry no stock: stock changes only through Inventory. */
+  variants: Array<Omit<VariantRow, 'stock'> & { stock?: number }>;
   published: boolean;
 }
 
@@ -211,10 +212,12 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
     // (otherwise they'd be recreated, orphaning stock/order history); new
     // rows are sent without one (and without isActive). Existing rows carry
     // their isActive so a re-enabled soft-disabled variant sends `true`.
+    // Existing rows NEVER send stock: stock changes go through Inventory
+    // (audited). Only a new variant may carry its opening stock.
     const validVariants = variants
       .filter((v) => v.name.trim())
-      .map(({ id, isActive, ...rest }) =>
-        id ? { id, ...rest, ...(isActive !== undefined ? { isActive } : {}) } : rest,
+      .map(({ id, isActive, stock, ...rest }) =>
+        id ? { id, ...rest, ...(isActive !== undefined ? { isActive } : {}) } : { ...rest, stock },
       );
 
     setSubmitting(true);
@@ -499,8 +502,18 @@ export default function ProductForm({ initialData, onSubmit, submitLabel }: Prop
                 </div>
               </div>
               <div>
-                <InfoLabel label="Stock" tooltip="Number of units available in inventory for this variant. Updated automatically when orders are placed." />
-                <input type="number" min={0} value={v.stock || ''} onChange={(e) => updateVariant(i, 'stock', Number(e.target.value))} className={inputCls} />
+                {v.id ? (
+                  <>
+                    <InfoLabel label="Stock" tooltip="Current stock. It changes automatically with sales, refunds and rentals. To correct it, use Inventory (it records who changed it and why)." />
+                    <div className={`${inputCls} bg-[hsl(var(--muted))] cursor-not-allowed`} data-testid="variant-stock-readonly">{v.stock ?? 0}</div>
+                    <a href="/dashboard/inventory" className="text-xs text-brand-gold hover:underline">Adjust in Inventory</a>
+                  </>
+                ) : (
+                  <>
+                    <InfoLabel label="Opening stock" tooltip="Units you have of this NEW variant. Recorded in the inventory history. Later changes are made in Inventory." />
+                    <input type="number" min={0} value={v.stock || ''} onChange={(e) => updateVariant(i, 'stock', Number(e.target.value))} className={inputCls} />
+                  </>
+                )}
               </div>
             </div>
           </div>
