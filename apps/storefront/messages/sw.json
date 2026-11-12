@@ -445,7 +445,7 @@
     "perDay": "/ siku",
     "perRental": "/ ukodishaji (hadi siku {max})",
     "rentalFeeFlat": "Ada ya kukodisha (hadi siku {max})",
-    "lateFeeWarning": "Ukikaa nalo zaidi ya siku {max}, ada ya kuchelewa itaongezwa kwa kila siku ya ziada.",
+    "lateFeeWarning": "Bidhaa hii inaweza kukodiwa kwa muda usiozidi siku {max}.",
     "requestBooking": "Omba kuhifadhi",
     "noOnlinePaymentNote": "Hakuna malipo yanayofanywa mtandaoni. Baada ya kuhifadhi, duka litawasiliana nawe kupanga malipo ya awali ya {amount}. Uhifadhi usiolipwa huachiliwa baada ya muda mfupi.",
     "selectDatesToContinue": "Chagua tarehe za kuchukua na kurudisha ili kuendelea",

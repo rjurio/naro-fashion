@@ -1,3 +1,4 @@
+import { lateFeeSentence, storedLateFeeTerms } from './late-fee';
 import {
   BadRequestException,
   ConflictException,
@@ -174,10 +175,8 @@ export class PosRentalsService {
       tenantId, product, startDate, returnDate, bufferDays, variantId: variant.id,
     });
     const terms: any = await this.rentals.getQuote(product.id);
-    const lateFeePerDay =
-      product.latePenaltyPercent != null
-        ? round2((Number(terms.rentalFee ?? product.rentalPricePerDay ?? 0) * Number(product.latePenaltyPercent)) / 100)
-        : Number(policy?.lateFeePerDay ?? 0);
+    // LF-2026-11: the same terms the booking will store (rentals.getQuote → late-fee.ts).
+    const lateFeePerDay = terms.lateFee ? Number(terms.lateFee.perDay) : 0;
     return {
       available: !availability.block,
       reason: availability.block,
@@ -429,7 +428,12 @@ export class PosRentalsService {
         rentalFee: Number(r.totalRentalPrice),
         downPayment: Number(r.downPaymentAmount),
         refundableDeposit: Number(r.damageDeposit),
-        lateFeePercentPerDay: r.product.latePenaltyPercent != null ? Number(r.product.latePenaltyPercent) : null,
+        lateFeePercentPerDay: storedLateFeeTerms((r as any).lateFeeTerms)?.pct ?? (r.product.latePenaltyPercent != null ? Number(r.product.latePenaltyPercent) : null),
+        // LF-2026-11: the late-fee terms agreed at booking + the sentence printed (EN / SW).
+        lateFee: storedLateFeeTerms((r as any).lateFeeTerms),
+        lateFeeText: storedLateFeeTerms((r as any).lateFeeTerms)
+          ? { en: lateFeeSentence(storedLateFeeTerms((r as any).lateFeeTerms)!, 'en'), sw: lateFeeSentence(storedLateFeeTerms((r as any).lateFeeTerms)!, 'sw') }
+          : null,
         paid: r.ledger.collected,
         outstanding: r.ledger.outstanding,
       },

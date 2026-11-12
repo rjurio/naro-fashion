@@ -37,6 +37,15 @@ export class PayRentalRefundDto {
   @IsOptional() @IsString() @MaxLength(40) sessionId?: string;
 }
 
+/** LF-2026-11: waiving part or all of a late fee (reason + a different approver). */
+export class RequestLateFeeWaiverDto {
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 }) @Min(1) @Max(1_000_000_000) amount!: number;
+  @IsString() @IsNotEmpty() @MaxLength(500) reason!: string;
+}
+export class DecideLateFeeWaiverDto {
+  @IsOptional() @IsString() @MaxLength(500) note?: string;
+}
+
 export class FailRentalRefundDto {
   @IsString() @IsNotEmpty() @MaxLength(500) reason!: string;
 }
@@ -321,5 +330,72 @@ export class RentalMoneyService {
       take: 200,
       include: { rentalOrder: { select: { rentalNumber: true, status: true, holdState: true } } },
     });
+  }
+
+  // ------------------------------------------------------------ late-fee waivers (LF-2026-11)
+  /** Late fee still waivable: charged − already waived − open waiver requests. */
+  private async waivable(db: any, rental: any) {
+    const open = await db.rentalLateFeeWaiver.aggregate({
+      where: { tenantId: this.tenantContext.requireId, rentalOrderId: rental.id, status: 'REQUESTED' },
+      _sum: { amount: true },
+    });
+    return round2(Number(rental.lateFee ?? 0) - Number(rental.lateFeeWaived ?? 0) - Number(open._sum.amount ?? 0));
+  }
+
+  async requestLateFeeWaiver(rentalOrderId: string, dto: RequestLateFeeWaiverDto, actor: { id: string }) {
+    const tenantId = this.tenantContext.requireId;
+    const w = await this.prisma.$transaction(async (tx) => {
+      await this.lock(tx, rentalOrderId);
+      const rental = await this.loadRental(tx, rentalOrderId);
+      const room = await this.waivable(tx, rental);
+      if (!(Number(rental.lateFee) > 0)) throw new BadRequestException('There is no late fee on this rental to waive.');
+      if (dto.amount > room + 0.001) throw new BadRequestException(`Only ${Math.max(0, room)} TZS of the late fee can still be waived.`);
+      return tx.rentalLateFeeWaiver.create({
+        data: { tenantId, rentalOrderId, amount: dto.amount, reason: dto.reason.trim(), status: 'REQUESTED', requestedById: actor.id },
+      });
+    });
+    await this.audit.log('LATE_FEE_WAIVER_REQUESTED', 'RentalLateFeeWaiver', w.id, { rentalOrderId, amount: dto.amount, reason: dto.reason.trim() });
+    return w;
+  }
+
+  private async loadWaiver(id: string) {
+    const w = await this.prisma.rentalLateFeeWaiver.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
+    if (!w) throw new NotFoundException('Waiver request not found');
+    return w;
+  }
+
+  /** Independent approval: never the requester. Reduces what is due (ledger), never moves money. */
+  async approveLateFeeWaiver(id: string, dto: DecideLateFeeWaiverDto, actor: { id: string }) {
+    const w = await this.loadWaiver(id);
+    if (w.requestedById === actor.id) {
+      await this.audit.log('LATE_FEE_WAIVER_DENIED', 'RentalLateFeeWaiver', id, { reason: 'SELF_APPROVAL' });
+      throw new ForbiddenException({ statusCode: 403, code: 'SELF_APPROVAL', message: 'A waiver must be approved by a different person than the one who requested it.' });
+    }
+    const tenantId = this.tenantContext.requireId;
+    await this.prisma.$transaction(async (tx) => {
+      await this.lock(tx, w.rentalOrderId);
+      const rental = await this.loadRental(tx, w.rentalOrderId);
+      const left = round2(Number(rental.lateFee ?? 0) - Number(rental.lateFeeWaived ?? 0));
+      if (Number(w.amount) > left + 0.001) throw new ConflictException(`Only ${left} TZS of the late fee is left to waive.`);
+      const claimed = await tx.rentalLateFeeWaiver.updateMany({
+        where: { id, tenantId, status: 'REQUESTED' },
+        data: { status: 'APPROVED', decidedById: actor.id, decidedAt: new Date(), decisionNote: dto.note },
+      });
+      if (claimed.count !== 1) throw new ConflictException('The waiver is no longer waiting for approval. Reload.');
+      await tx.rentalOrder.updateMany({ where: { id: w.rentalOrderId, tenantId }, data: { lateFeeWaived: { increment: Number(w.amount) } } });
+    });
+    await this.audit.log('LATE_FEE_WAIVER_APPROVED', 'RentalLateFeeWaiver', id, { rentalOrderId: w.rentalOrderId, amount: Number(w.amount), requestedBy: w.requestedById });
+    return this.loadWaiver(id);
+  }
+
+  async rejectLateFeeWaiver(id: string, dto: RejectRentalRefundDto, actor: { id: string }) {
+    const w = await this.loadWaiver(id);
+    const res = await this.prisma.rentalLateFeeWaiver.updateMany({
+      where: { id, tenantId: this.tenantContext.requireId, status: 'REQUESTED' },
+      data: { status: 'REJECTED', decidedById: actor.id, decidedAt: new Date(), decisionNote: dto.reason },
+    });
+    if (res.count !== 1) throw new ConflictException('The waiver is no longer waiting for approval. Reload.');
+    await this.audit.log('LATE_FEE_WAIVER_REJECTED', 'RentalLateFeeWaiver', id, { rentalOrderId: w.rentalOrderId, reason: dto.reason });
+    return this.loadWaiver(id);
   }
 }

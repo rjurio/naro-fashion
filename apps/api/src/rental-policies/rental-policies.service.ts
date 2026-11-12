@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
@@ -58,6 +59,13 @@ export class RentalPoliciesService {
       data.defaultDownPaymentPct = dto.defaultDownPaymentPct;
     if (dto.lateFeePerDay !== undefined)
       data.lateFeePerDay = dto.lateFeePerDay;
+    for (const k of ['defaultLateFeePct', 'lateFeeCapPct'] as const) {
+      if (dto[k] !== undefined) {
+        if (dto[k]! > 100) throw new BadRequestException(`${k} must be between 0 and 100.`);
+        data[k] = dto[k];
+      }
+    }
+    if (dto.freeRentalLateFeePerDay !== undefined) data.freeRentalLateFeePerDay = dto.freeRentalLateFeePerDay;
     if (dto.maxRentalDurationDays !== undefined)
       data.maxRentalDurationDays = dto.maxRentalDurationDays;
     if (dto.advancePreparationReminderDays !== undefined)
