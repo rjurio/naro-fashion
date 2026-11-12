@@ -449,7 +449,16 @@ model Product {
   rentalPricePerDay    Decimal? @db.Decimal(12, 2)
   latePenaltyPercent   Decimal? @db.Decimal(5, 2) @default(10)
   rentalDepositAmount  Decimal? @db.Decimal(12, 2)
-  rentalDownPaymentPct Int?     @default(25)
+  // Down payment (Nov 2026). rentalDownPaymentMode:
+  //   'INHERIT' -> the shop's RentalPolicy.defaultDownPaymentPct (pct NULL)
+  //   'CUSTOM'  -> rentalDownPaymentPct (0-100; 0 = no down payment)
+  //   NULL      -> not yet reviewed (rows from before Nov 2026): the stored
+  //                pct applies exactly as before, until an admin chooses.
+  // No DB default for the pct any more: a new product must not acquire a
+  // permanent 25 % override just by being created (ProductsService.create
+  // sets mode 'INHERIT'). Logic: apps/api/src/rentals/rental-terms.ts.
+  rentalDownPaymentPct  Int?
+  rentalDownPaymentMode String?
   minRentalDays        Int?
   maxRentalDays        Int?
   bufferDaysOverride   Int?

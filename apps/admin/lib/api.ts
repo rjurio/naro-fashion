@@ -893,6 +893,19 @@ class AdminApiClient {
   updateProduct(id: string, data: any) {
     return this.patch<any>(`/products/${id}`, data);
   }
+  /** Rental down payment (Inherit shop default / Custom %): saved on its own, never by updateProduct. */
+  getProductDownPayment(id: string) {
+    return this.get<import('@/components/products/RentalDownPaymentControl').DownPaymentState>(`/products/${id}/rental-down-payment`);
+  }
+  getProductDownPaymentDefaults() {
+    return this.get<import('@/components/products/RentalDownPaymentControl').DownPaymentState>('/products/rental-down-payment/defaults');
+  }
+  setProductDownPayment(
+    id: string,
+    body: { mode: 'INHERIT' | 'CUSTOM'; pct?: number; expectedMode: 'INHERIT' | 'CUSTOM' | 'NOT_REVIEWED'; expectedPct: number | null },
+  ) {
+    return this.patch<import('@/components/products/RentalDownPaymentControl').DownPaymentState>(`/products/${id}/rental-down-payment`, body);
+  }
   toggleProduct(id: string) {
     return this.patch<any>(`/products/${id}/toggle-active`, {});
   }
