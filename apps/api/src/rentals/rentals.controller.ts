@@ -12,16 +12,22 @@ import {
   UploadedFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import { RentalsService } from './rentals.service';
 import { CreateRentalDto } from './dto/create-rental.dto';
 import { UpdateRentalDto } from './dto/update-rental.dto';
 import { QueryRentalsDto } from './dto/query-rentals.dto';
 import { UpdateRentalStatusDto } from './dto/update-rental-status.dto';
+import {
+  RentalAvailabilityQueryDto,
+  parseAvailabilityWindow,
+} from './dto/rental-availability-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
+import { Public } from '../auth/decorators/public.decorator';
 import { extname } from 'path';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -70,17 +76,44 @@ export class RentalsController {
     return this.rentalsService.getOverdueRentals();
   }
 
+  /**
+   * PUBLIC (shoppers check dates before signing in — the User Guide promises
+   * "Available for selected dates"). Returns ONLY `{ available }`: no
+   * booking ids, dates, customers or counts. Tenant-scoped via X-Tenant-Id
+   * (TenantGuard rejects suspended tenants; ModuleGuard still requires the
+   * rentals module), limited to active rental-eligible products, a bounded
+   * date window, and 20 calls/min per client IP to slow calendar scraping.
+   */
+  @Public()
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Get('availability/:productId')
   getAvailability(
     @Param('productId') productId: string,
-    @Query('startDate') startDate: string,
-    @Query('endDate') endDate: string,
+    @Query() query: RentalAvailabilityQueryDto,
   ) {
-    return this.rentalsService.getAvailability(
-      productId,
-      new Date(startDate),
-      new Date(endDate),
-    );
+    const { start, end } = parseAvailabilityWindow(query);
+    return this.rentalsService.getAvailability(productId, start, end);
+  }
+
+  /**
+   * PUBLIC: the down-payment terms a booking would store now (product
+   * override → shop default → 25 %), so the storefront shows the server's
+   * percentage and amount instead of computing its own. Amounts only, same
+   * product visibility as availability.
+   */
+  /** PUBLIC: { downPaymentRequired } for the shop (catalogue copy only). */
+  @Public()
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('terms-summary')
+  getTermsSummary() {
+    return this.rentalsService.getTermsSummary();
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('quote/:productId')
+  getQuote(@Param('productId') productId: string) {
+    return this.rentalsService.getQuote(productId);
   }
 
   @Get(':id')

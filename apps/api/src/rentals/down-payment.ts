@@ -14,8 +14,8 @@
  * Integer-cent arithmetic, so binary floating point can't flip a result
  * (e.g. 70.35 x 25 % = 17.5875 -> 18).
  *
- * The storefront has a byte-identical copy in apps/storefront/lib/down-payment.ts
- * (it can't import API code); rentals/down-payment.spec.ts fails if they drift.
+ * This is the only copy: bookings and the public quote use it through
+ * rentals/rental-terms.ts, and the storefront displays the quote (no copy).
  */
 // --- shared:computeDownPayment:start
 export function computeDownPayment(rentalFee: number, pct: number): number {

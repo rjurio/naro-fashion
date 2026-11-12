@@ -18,11 +18,11 @@ import {
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { formatPrice } from "@/lib/utils";
-import { computeDownPayment } from "@/lib/down-payment";
 import { productsApi, rentalsApi, ApiError } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTranslation } from "@/lib/i18n";
+import { autoSelectRentalVariantId, changedTermsFromError, displayRentalFee, needsDownPayment, parseRentalQuote, type RentalQuote } from "@/lib/rental-ui";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -49,16 +49,47 @@ export default function RentalDetailPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [checking, setChecking] = useState(false);
-  const [available, setAvailable] = useState<boolean | null>(null);
+  // null = not checked; "error" = the check failed (told to the customer,
+  // never shown as available). The API re-checks on booking regardless.
+  const [available, setAvailable] = useState<boolean | null | "error">(null);
   const [booking, setBooking] = useState(false);
+  // Money terms come from the API (the same rule the booking stores). The
+  // page never computes a percentage or amount itself; if the quote can't be
+  // loaded it says so instead of showing a guessed amount.
+  const [quote, setQuote] = useState<RentalQuote | null>(null);
+  const [quoteState, setQuoteState] = useState<"loading" | "ok" | "error">("loading");
+  // Set when the API refused the booking because the terms changed since the
+  // page loaded: the page now shows the new terms and the customer re-submits.
+  const [termsChanged, setTermsChanged] = useState(false);
 
   useEffect(() => {
     setLoading(true);
     productsApi.getBySlug(slug)
-      .then((data) => setProduct(data))
+      .then((data) => {
+        setProduct(data);
+        // One active variant (e.g. "Standard") → preselect it so Book Now
+        // isn't blocked behind a choice with only one option.
+        setSelectedVariantId(autoSelectRentalVariantId(data?.variants));
+      })
       .catch(() => setProduct(null))
       .finally(() => setLoading(false));
   }, [slug]);
+
+  useEffect(() => {
+    if (!product?.id) return;
+    let cancelled = false;
+    setQuote(null);
+    setQuoteState("loading");
+    rentalsApi.quote(product.id)
+      .then((res) => {
+        if (cancelled) return;
+        const q = parseRentalQuote(res);
+        setQuote(q);
+        setQuoteState(q ? "ok" : "error");
+      })
+      .catch(() => { if (!cancelled) setQuoteState("error"); });
+    return () => { cancelled = true; };
+  }, [product?.id]);
 
   // Check availability when dates change
   useEffect(() => {
@@ -68,8 +99,8 @@ export default function RentalDetailPage() {
     }
     setChecking(true);
     rentalsApi.checkAvailability(product.id, startDate, endDate)
-      .then((res) => setAvailable(res.available))
-      .catch(() => setAvailable(null))
+      .then((res) => setAvailable(res.available === true ? true : res.available === false ? false : "error"))
+      .catch(() => setAvailable("error"))
       .finally(() => setChecking(false));
   }, [product?.id, startDate, endDate]);
 
@@ -90,10 +121,24 @@ export default function RentalDetailPage() {
         startDate,
         returnDate: endDate,
         pickupDate: startDate,
+        // The amounts shown on this page. The API recomputes and stores its
+        // own; if they differ it refuses (409 RENTAL_TERMS_CHANGED) instead of
+        // booking terms the customer hasn't seen.
+        ...(quote
+          ? { quotedRentalFee: quote.rentalFee, quotedDeposit: quote.deposit, quotedDownPayment: quote.downPayment }
+          : {}),
       });
       toast.success(t('rentals.rentalBookedSuccess'));
       router.push('/account/rentals');
     } catch (err) {
+      const current = err instanceof ApiError && err.status === 409 ? changedTermsFromError(err.data) : null;
+      if (current) {
+        setQuote(current);
+        setQuoteState("ok");
+        setTermsChanged(true);
+        toast.error(t('rentals.termsChanged').replace('{amount}', formatPrice(current.downPayment)));
+        return;
+      }
       // "Not available" refusals (dates taken, still out, sold) get the
       // translated, item-neutral message: the same page rents gowns,
       // bouquets and other items. Other API reasons (incomplete profile,
@@ -163,9 +208,9 @@ export default function RentalDetailPage() {
   const features: string[] = Array.isArray(product.specifications) ? product.specifications : [];
   // Despite the column name, rentalPricePerDay is a FLAT price for the whole
   // rental (up to maxRentalDays) — see schema.prisma + RentalsService.create.
-  const rentalPrice = Number(product.rentalPricePerDay) || 0;
-  const depositAmount = Number(product.rentalDepositAmount) || 0;
-  const downPaymentPercent = product.rentalDownPaymentPct || 25;
+  // Fee, deposit, down-payment % and amount all come from the server quote
+  // (rentals/rental-terms.ts); see lib/rental-ui.ts parseRentalQuote.
+  const rentalPrice = displayRentalFee(product, quote);
   const maxRentalDays = product.maxRentalDays || 7;
   const bufferDays = product.bufferDaysOverride || 7;
   const rating = product.avgRating || 0;
@@ -189,11 +234,6 @@ export default function RentalDetailPage() {
     return x.toISOString().split("T")[0];
   };
 
-  const rentalFee = rentalPrice;
-  // Same rule as the booking (rounded up to a whole shilling; lib/down-payment.ts).
-  const downPayment = computeDownPayment(rentalFee, downPaymentPercent);
-  const totalCost = rentalFee + depositAmount;
-  const remainingPayment = totalCost - downPayment;
 
   return (
     <div className="bg-background min-h-screen">
@@ -287,7 +327,7 @@ export default function RentalDetailPage() {
             <div className="mt-6 p-4 rounded-xl bg-gold-500/10 border border-gold-500/30">
               <div className="flex items-baseline gap-2">
                 <span className="text-3xl font-bold text-foreground">
-                  {formatPrice(rentalPrice)}
+                  {rentalPrice != null ? formatPrice(rentalPrice) : "—"}
                 </span>
                 <span className="text-muted-foreground">{t('rentals.perRental').replace('{max}', String(maxRentalDays))}</span>
               </div>
@@ -393,7 +433,7 @@ export default function RentalDetailPage() {
                 <p className="text-xs text-gold-500 mt-1">{t('rentals.checkingAvailability')}</p>
               )}
               {available === false && (
-                <p className="text-xs text-red-500 mt-1">{t('rentals.notAvailable')}</p>
+                <p className="text-xs text-red-500 mt-1" data-testid="rental-not-available">{t('rentals.notAvailable')}</p>
               )}
               {rentalDays > maxRentalDays && (
                 <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
@@ -402,15 +442,33 @@ export default function RentalDetailPage() {
                 </p>
               )}
               {available === true && (
-                <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                <p className="text-xs text-green-600 mt-1 flex items-center gap-1" data-testid="rental-available">
                   <Check className="h-3 w-3" /> {t('rentals.availableForDates')}
+                </p>
+              )}
+              {available === "error" && (
+                <p className="text-xs text-amber-600 mt-1 flex items-center gap-1" data-testid="rental-availability-error">
+                  <AlertTriangle className="h-3 w-3" /> {t('rentals.availabilityCheckFailed')}
                 </p>
               )}
             </div>
 
             {/* Price Breakdown */}
-            {rentalDays > 0 && (
-              <div className="mt-6 p-4 rounded-xl border border-border bg-card">
+            {rentalDays > 0 && quoteState === "error" && (
+              <p className="mt-6 text-xs text-amber-600 flex items-center gap-1" data-testid="rental-quote-error">
+                <AlertTriangle className="h-3 w-3" /> {t('rentals.quoteUnavailable')}
+              </p>
+            )}
+            {rentalDays > 0 && quoteState === "loading" && (
+              <div className="mt-6 h-32 rounded-xl border border-border bg-muted animate-pulse" data-testid="rental-quote-loading" />
+            )}
+            {termsChanged && (
+              <p className="mt-6 text-xs text-amber-600 flex items-center gap-1" data-testid="rental-terms-changed">
+                <AlertTriangle className="h-3 w-3" /> {quote ? t('rentals.termsChanged').replace('{amount}', formatPrice(quote.downPayment)) : null}
+              </p>
+            )}
+            {rentalDays > 0 && quote && (
+              <div className="mt-6 p-4 rounded-xl border border-border bg-card" data-testid="rental-price-breakdown">
                 <h3 className="text-sm font-semibold text-foreground mb-4">
                   {t('rentals.priceBreakdown')}
                 </h3>
@@ -420,35 +478,41 @@ export default function RentalDetailPage() {
                       {t('rentals.rentalFeeFlat').replace('{max}', String(maxRentalDays))}
                     </span>
                     <span className="font-medium text-foreground">
-                      {formatPrice(rentalFee)}
+                      {formatPrice(quote.rentalFee)}
                     </span>
                   </div>
-                  {depositAmount > 0 && (
+                  {quote.deposit > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">
                         {t('rentals.securityDeposit')}
                       </span>
                       <span className="font-medium text-foreground">
-                        {formatPrice(depositAmount)}
+                        {formatPrice(quote.deposit)}
                       </span>
                     </div>
                   )}
                   <div className="border-t border-border pt-2 flex justify-between">
                     <span className="font-semibold text-foreground">{t('rentals.totalLabel')}</span>
                     <span className="font-bold text-foreground">
-                      {formatPrice(totalCost)}
+                      {formatPrice(quote.total)}
                     </span>
                   </div>
                   <div className="border-t border-border pt-2">
-                    <div className="flex justify-between text-gold-600">
-                      <span className="font-medium">
-                        {t('rentals.downPaymentLine').replace('{pct}', String(downPaymentPercent))}
-                      </span>
-                      <span className="font-bold">{formatPrice(downPayment)}</span>
-                    </div>
+                    {needsDownPayment(quote) ? (
+                      <div className="flex justify-between text-gold-600">
+                        <span className="font-medium">
+                          {t('rentals.downPaymentLine').replace('{pct}', String(quote.downPaymentPct))}
+                        </span>
+                        <span className="font-bold" data-testid="rental-down-payment">{formatPrice(quote.downPayment)}</span>
+                      </div>
+                    ) : (
+                      <div className="flex justify-between text-gold-600" data-testid="rental-no-down-payment">
+                        <span className="font-medium">{t('rentals.noDownPaymentLine')}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between text-muted-foreground mt-1">
                       <span>{t('rentals.remainingBeforeDispatch')}</span>
-                      <span>{formatPrice(remainingPayment)}</span>
+                      <span>{formatPrice(quote.remaining)}</span>
                     </div>
                   </div>
                 </div>
@@ -477,18 +541,23 @@ export default function RentalDetailPage() {
                 size="lg"
                 className="w-full gap-2"
                 disabled={!selectedVariantId || !startDate || !endDate || available === false || booking}
+                data-testid="rental-book"
                 onClick={handleBookNow}
               >
                 <Crown className="h-5 w-5" />
-                {booking
-                  ? t('rentals.booking')
-                  : `${t('rentals.bookNowWithPay')}${rentalDays > 0 ? ` - ${t('rentals.payAmount').replace('{amount}', formatPrice(downPayment))}` : ""}`}
+                {booking ? t('rentals.booking') : t('rentals.requestBooking')}
               </Button>
-              {(!selectedVariantId || !startDate || !endDate) && (
+              {(!selectedVariantId || !startDate || !endDate) ? (
                 <p className="text-xs text-muted-foreground text-center mt-2">
-                  {t('rentals.selectSizeAndDates')}
+                  {selectedVariantId ? t('rentals.selectDatesToContinue') : t('rentals.selectSizeAndDates')}
                 </p>
-              )}
+              ) : quote ? (
+                <p className="text-xs text-muted-foreground text-center mt-2" data-testid="rental-payment-note">
+                  {needsDownPayment(quote)
+                    ? t('rentals.noOnlinePaymentNote').replace('{amount}', formatPrice(quote.downPayment))
+                    : t('rentals.noOnlinePaymentNoDownPayment')}
+                </p>
+              ) : null}
             </div>
 
             {/* Features */}

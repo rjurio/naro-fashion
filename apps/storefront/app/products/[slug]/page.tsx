@@ -24,10 +24,11 @@ import {
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import ProductCard from "@/components/ui/ProductCard";
+import { canBuy, canRent, displayRentalFee, needsDownPayment, normalizeAvailabilityMode, parseRentalQuote, rentalHref, toCardProduct, type RentalQuote } from "@/lib/rental-ui";
 import { formatPrice } from "@/lib/utils";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { useTranslation } from "@/lib/i18n";
-import { productsApi, reviewsApi, cartApi, wishlistApi, tokenStore } from "@/lib/api";
+import { productsApi, reviewsApi, cartApi, wishlistApi, rentalsApi, tokenStore } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { sanitizeHtml } from "@/lib/sanitize";
 import { isOptimizableImage } from "@/lib/image-hosts";
@@ -71,6 +72,12 @@ export default function ProductDetailPage() {
   const [isWishlisted, setIsWishlisted] = useState(false);
   const [activeTab, setActiveTab] = useState<"description" | "reviews" | "size-guide">("description");
   const [addingToCart, setAddingToCart] = useState(false);
+  // Buy vs Rent for BOTH products. RENTAL_ONLY is always "rent", PURCHASE_ONLY "buy".
+  const [purchaseMode, setPurchaseMode] = useState<"buy" | "rent">("buy");
+  // Rental money terms from the API (same rule the booking stores); null =
+  // not loaded / couldn't load. The page never computes them itself.
+  const [rentQuote, setRentQuote] = useState<RentalQuote | null>(null);
+  const [rentQuoteFailed, setRentQuoteFailed] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   // Review form state
@@ -92,6 +99,7 @@ export default function ProductDetailPage() {
     productsApi.getBySlug(slug)
       .then((data) => {
         setProduct(data);
+        setPurchaseMode(normalizeAvailabilityMode(data?.availabilityMode) === "RENTAL_ONLY" ? "rent" : "buy");
         // Auto-select first color from variants
         const firstVariantWithColor = (data.variants || []).find((v: any) => v.color && v.isActive !== false);
         if (firstVariantWithColor) setSelectedColor(firstVariantWithColor.color);
@@ -119,7 +127,9 @@ export default function ProductDetailPage() {
           productsApi.getAll(catQuery)
             .then((r) => {
               const items = Array.isArray(r?.data) ? r.data : Array.isArray(r) ? r : [];
-              setRelatedProducts(items.filter((p: any) => p.id !== data.id).slice(0, 4));
+              setRelatedProducts(
+                items.filter((p: any) => p.id !== data.id).slice(0, 4).map((p: any) => toCardProduct(p, API_ORIGIN)),
+              );
             })
             .catch(() => setRelatedProducts([]));
         }
@@ -133,6 +143,23 @@ export default function ProductDetailPage() {
       .catch(() => setProduct(null))
       .finally(() => setLoading(false));
   }, [slug]);
+
+  // Rental terms for rentable products, from the server quote.
+  useEffect(() => {
+    setRentQuote(null);
+    setRentQuoteFailed(false);
+    if (!product?.id || !canRent(product.availabilityMode)) return;
+    let cancelled = false;
+    rentalsApi.quote(product.id)
+      .then((res) => {
+        if (cancelled) return;
+        const q = parseRentalQuote(res);
+        setRentQuote(q);
+        setRentQuoteFailed(!q);
+      })
+      .catch(() => { if (!cancelled) setRentQuoteFailed(true); });
+    return () => { cancelled = true; };
+  }, [product?.id, product?.availabilityMode]);
 
   // Dynamic page title
   useEffect(() => {
@@ -259,8 +286,12 @@ export default function ProductDetailPage() {
     ? Math.round(((originalPrice - price) / originalPrice) * 100)
     : 0;
   const categoryName = product.category?.name || "";
-  const rentPrice = product.rentalPricePerDay ? Number(product.rentalPricePerDay) : undefined;
-  const isRentable = product.availabilityMode === 'RENTAL_ONLY' || product.availabilityMode === 'BOTH';
+  const isRentable = canRent(product.availabilityMode);
+  const isBuyable = canBuy(product.availabilityMode);
+  const offersBoth = isRentable && isBuyable;
+  const mode: "buy" | "rent" = !isBuyable ? "rent" : !isRentable ? "buy" : purchaseMode;
+  const rentFee = displayRentalFee(product, rentQuote);
+  const maxRentalDays = product.maxRentalDays || 7;
   const features: string[] = Array.isArray(product.specifications) ? product.specifications : [];
   // Size guide: product-level overrides category-level
   const sizeGuide = product.sizeGuideRef || product.category?.sizeGuideRef || null;
@@ -474,13 +505,76 @@ export default function ProductDetailPage() {
               )}
             </div>
 
-            {/* Rental Price */}
-            {isRentable && rentPrice && (
-              <div className="mt-3 flex items-center gap-2 p-3 rounded-lg bg-gold-500/10 border border-gold-500/30">
-                <Crown className="h-5 w-5 text-gold-600" />
-                <span className="text-sm font-medium text-gold-text">
-                  {t("product.rentalPrice")} {formatPrice(rentPrice)}{t("product.perRental")}
-                </span>
+            {/* Buy or Rent — the choice sits right under the price */}
+            {offersBoth && (
+              <div className="mt-4" role="radiogroup" aria-label={t("product.buyOrRent")} data-testid="pdp-buy-rent">
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={mode === "buy"}
+                    onClick={() => setPurchaseMode("buy")}
+                    data-testid="pdp-choose-buy"
+                    className={`text-left rounded-xl border-2 p-3 transition-all ${
+                      mode === "buy" ? "border-gold-500 bg-gold-500/10" : "border-border hover:border-gold-500/60"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                      <ShoppingCart className="h-4 w-4 text-gold-600" /> {t("product.buy")}
+                    </span>
+                    <span className="mt-1 block text-base font-bold text-foreground">{formatPrice(price)}</span>
+                    <span className="block text-xs text-muted-foreground">{t("product.buyHint")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={mode === "rent"}
+                    onClick={() => setPurchaseMode("rent")}
+                    data-testid="pdp-choose-rent"
+                    className={`text-left rounded-xl border-2 p-3 transition-all ${
+                      mode === "rent" ? "border-gold-500 bg-gold-500/10" : "border-border hover:border-gold-500/60"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                      <Crown className="h-4 w-4 text-gold-600" /> {t("product.rent")}
+                    </span>
+                    <span className="mt-1 block text-base font-bold text-foreground">{rentFee != null ? formatPrice(rentFee) : "—"}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {t("product.rentHint").replace("{max}", String(maxRentalDays))}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Rental terms (rent selected, or a rental-only gown) */}
+            {isRentable && mode === "rent" && (
+              <div className="mt-4 p-4 rounded-lg bg-gold-500/10 border border-gold-500/30" data-testid="pdp-rental-terms">
+                <div className="flex items-center gap-2">
+                  <Crown className="h-5 w-5 text-gold-600" />
+                  <span className="text-sm font-medium text-gold-text">
+                    {t("product.rentalPrice")} {rentFee != null ? formatPrice(rentFee) : "—"}{t("product.perRental")}
+                    {" "}{t("product.upToDays").replace("{max}", String(maxRentalDays))}
+                  </span>
+                </div>
+                <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                  {rentQuote && rentQuote.deposit > 0 && (
+                    <li>{t("product.rentalDepositLine").replace("{amount}", formatPrice(rentQuote.deposit))}</li>
+                  )}
+                  {rentQuote && (
+                    <li data-testid="pdp-down-payment">
+                      {needsDownPayment(rentQuote)
+                        ? t("product.rentalDownPaymentLine")
+                            .replace("{pct}", String(rentQuote.downPaymentPct))
+                            .replace("{amount}", formatPrice(rentQuote.downPayment))
+                        : t("product.noDownPaymentLine")}
+                    </li>
+                  )}
+                  {rentQuoteFailed && (
+                    <li className="text-amber-600" data-testid="pdp-quote-error">{t("rentals.quoteUnavailable")}</li>
+                  )}
+                  <li>{t("product.rentalDatesLine")}</li>
+                </ul>
               </div>
             )}
 
@@ -564,7 +658,8 @@ export default function ProductDetailPage() {
               </div>
             ) : null}
 
-            {/* Quantity */}
+            {/* Quantity (purchases only) */}
+            {mode === "buy" && (
             <div className="mt-6">
               <h3 className="text-sm font-semibold text-foreground mb-3">{t("product.quantity")}</h3>
               <div className="flex items-center gap-1">
@@ -590,20 +685,21 @@ export default function ProductDetailPage() {
                 )}
               </div>
             </div>
+            )}
 
             {/* Action Buttons */}
             <div className="mt-8 flex flex-col sm:flex-row gap-3">
-              {product.availabilityMode !== 'RENTAL_ONLY' && (
-                <Button size="lg" className="flex-1 gap-2" onClick={handleAddToCart} disabled={addingToCart || !selectedSize}>
+              {isBuyable && mode === "buy" && (
+                <Button size="lg" className="flex-1 gap-2" onClick={handleAddToCart} disabled={addingToCart || !selectedSize} data-testid="pdp-add-to-cart">
                   <ShoppingCart className="h-5 w-5" />
                   {addingToCart ? t("product.addingToCart") : !selectedSize ? t("product.selectAVariant") : t("product.addToCart")}
                 </Button>
               )}
-              {isRentable && (
-                <Link href={`/rentals/${product.slug || product.id}`} className="flex-1">
+              {isRentable && mode === "rent" && (
+                <Link href={rentalHref(product.slug || product.id)} className="flex-1" data-testid="pdp-rent">
                   <Button variant="secondary" size="lg" className="w-full gap-2">
                     <Crown className="h-5 w-5" />
-                    {t("product.rentNow")}
+                    {t("product.chooseRentalDates")}
                   </Button>
                 </Link>
               )}

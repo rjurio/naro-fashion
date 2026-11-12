@@ -264,7 +264,8 @@ describe('availability endpoint and booking give the same answer', () => {
     db.sell();
     const b = bookingFor(30);
     const r = await db.rentals.getAvailability('p1', new Date(b.startDate), new Date(b.returnDate));
-    expect(Object.keys(r).sort()).toEqual(['available', 'bufferDays', 'endDate', 'productId', 'startDate']);
+    // PR #3 made this endpoint public: the answer is ONLY { available }.
+    expect(Object.keys(r).sort()).toEqual(['available']);
   });
 
   it('rejects invalid or reversed dates with 400 instead of guessing', async () => {

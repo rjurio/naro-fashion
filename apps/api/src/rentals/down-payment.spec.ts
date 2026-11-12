@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { computeDownPayment } from './down-payment';
 import { PaymentSettlementService } from '../payments/payment-settlement.service';
@@ -65,29 +65,23 @@ describe('computeDownPayment: properties over a grid of fees', () => {
   });
 });
 
-describe('one rule everywhere', () => {
-  const block = (src: string) => src.slice(src.indexOf('// --- shared:computeDownPayment:start'), src.indexOf('// --- shared:computeDownPayment:end')).replace(/\r\n/g, '\n');
-  const api = readFileSync(join(__dirname, 'down-payment.ts'), 'utf8');
-  const sf = readFileSync(join(__dirname, '..', '..', '..', 'storefront', 'lib', 'down-payment.ts'), 'utf8');
-
-  it('the storefront preview copy is identical to the API rule', () => {
-    expect(block(sf).length).toBeGreaterThan(100);
-    expect(block(sf)).toBe(block(api));
+describe('one rule everywhere (after PR #3: the storefront displays the server quote)', () => {
+  const sfRoot = join(__dirname, '..', '..', '..', 'storefront');
+  it('there is no storefront copy of the rule any more', () => {
+    expect(existsSync(join(sfRoot, 'lib', 'down-payment.ts'))).toBe(false);
   });
 
-  it('booking stores computeDownPayment(); the booking page previews with the same function; no other rounding', () => {
+  it('booking and quote both use rentalTerms(), which calls computeDownPayment(); no other rounding', () => {
+    const terms = readFileSync(join(__dirname, 'rental-terms.ts'), 'utf8');
+    expect(terms).toMatch(/const downPayment = computeDownPayment\(rentalFee, pct\);/);
+    expect(terms).not.toMatch(/rentalFee \* \(pct \/ 100\)/);
     const svc = readFileSync(join(__dirname, 'rentals.service.ts'), 'utf8');
-    expect(svc).toMatch(/const downPaymentAmount = computeDownPayment\(totalRentalPrice, downPaymentPct\);/);
-    expect(svc).not.toMatch(/totalRentalPrice \* \(downPaymentPct \/ 100\)/);
-    const page = readFileSync(join(__dirname, '..', '..', '..', 'storefront', 'app', 'rentals', '[slug]', 'page.tsx'), 'utf8');
-    expect(page).toMatch(/const downPayment = computeDownPayment\(rentalFee, downPaymentPercent\);/);
-    expect(page).not.toMatch(/Math\.round\(rentalFee/);
-  });
-
-  it('settlement compares against the STORED amount and never recomputes or re-rounds it', () => {
-    const s = readFileSync(join(__dirname, '..', 'payments', 'payment-settlement.service.ts'), 'utf8');
-    expect(s).toMatch(/const downPaymentDue = Number\(rental\.downPaymentAmount\);/);
-    expect(s).not.toMatch(/computeDownPayment|Math\.(ceil|round|floor)\(.*downPayment/);
+    expect(svc).toMatch(/const downPaymentAmount = terms\.downPayment;/);
+    expect(svc).not.toMatch(/downPaymentPct \/ 100/);
+    for (const f of [['app', 'rentals', '[slug]', 'page.tsx'], ['app', 'products', '[slug]', 'page.tsx'], ['lib', 'rental-ui.ts']]) {
+      const src = readFileSync(join(sfRoot, ...f), 'utf8');
+      expect([f.join('/'), /Math\.(round|ceil)\([^)]*(fee|Fee|pct|Pct)/.test(src), /computeDownPayment/.test(src)]).toEqual([f.join('/'), false, false]);
+    }
   });
 });
 
@@ -145,9 +139,9 @@ describe('cancellations, refunds, deposits and the payment cap', () => {
   });
 
   it('the refundable deposit stays separate: the down payment is on the rental fee only', () => {
-    const svc = readFileSync(join(__dirname, 'rentals.service.ts'), 'utf8');
-    expect(svc).toMatch(/const totalRentalPrice = rentalPrice;/);
-    expect(svc).toMatch(/computeDownPayment\(totalRentalPrice, downPaymentPct\)/);
+    const terms = readFileSync(join(__dirname, 'rental-terms.ts'), 'utf8');
+    expect(terms).toMatch(/const downPayment = computeDownPayment\(rentalFee, pct\);/);
+    expect(terms).toMatch(/const total = rentalFee \+ deposit;/);
     expect(computeDownPayment(250, 25)).toBe(63); // a 50 deposit changes nothing
   });
 

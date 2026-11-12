@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Package, ChevronDown, ChevronUp, RefreshCw, ArrowLeft, Loader2 } from "lucide-react";
+import { Package, ChevronDown, ChevronUp, RefreshCw, ArrowLeft, Loader2, AlertTriangle } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { formatPrice } from "@/lib/utils";
 import { ordersApi } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { listData, listTotal } from "@/lib/rental-ui";
 
 const statusColors: Record<string, string> = {
   Pending: "bg-gray-100 text-gray-700",
@@ -26,21 +27,32 @@ export default function OrdersPage() {
   const { t } = useTranslation();
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // A failed request must not look like "No orders yet" (it did while the
+  // API rejected sort=newest with 400).
+  const [loadError, setLoadError] = useState(false);
+  const [totalOrders, setTotalOrders] = useState(0);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetchOrders() {
-      try {
-        const res = await ordersApi.getAll({ sort: "newest" });
-        const list = Array.isArray(res) ? res : (res?.data || []);
-        setOrders(list);
-      } catch {
-        setOrders([]);
-      } finally {
-        setLoading(false);
-      }
+  const fetchOrders = async () => {
+    setLoading(true);
+    setLoadError(false);
+    try {
+      const res = await ordersApi.getAll({ sort: "newest", limit: 50 });
+      const list = listData<any>(res);
+      setOrders(list);
+      setTotalOrders(listTotal(res, list.length));
+    } catch {
+      setOrders([]);
+      setTotalOrders(0);
+      setLoadError(true);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  useEffect(() => {
     fetchOrders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleOrder = (id: string) => {
@@ -73,7 +85,9 @@ export default function OrdersPage() {
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-2xl sm:text-3xl font-heading font-bold text-foreground">{t("account.myOrders")}</h1>
-            <p className="text-muted-foreground text-sm mt-1">{orders.length} {t("orders.ordersTotal")}</p>
+            {!loadError && (
+              <p className="text-muted-foreground text-sm mt-1">{totalOrders} {t("orders.ordersTotal")}</p>
+            )}
           </div>
           <Link href="/account">
             <Button variant="outline" size="sm">
@@ -82,8 +96,17 @@ export default function OrdersPage() {
           </Link>
         </div>
 
-        {orders.length === 0 ? (
-          <div className="text-center py-20">
+        {loadError ? (
+          <div className="text-center py-20" role="alert" data-testid="orders-load-error">
+            <AlertTriangle className="h-16 w-16 text-amber-500 mx-auto mb-4" />
+            <h2 className="text-xl font-bold text-foreground mb-2">{t("orders.loadFailed")}</h2>
+            <p className="text-muted-foreground mb-8">{t("orders.loadFailedDesc")}</p>
+            <Button size="lg" variant="outline" onClick={fetchOrders} className="gap-2">
+              <RefreshCw className="h-4 w-4" /> {t("orders.retry")}
+            </Button>
+          </div>
+        ) : orders.length === 0 ? (
+          <div className="text-center py-20" data-testid="orders-empty">
             <Package className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
             <h2 className="text-xl font-bold text-foreground mb-2">{t("orders.noOrders")}</h2>
             <p className="text-muted-foreground mb-8">{t("account.noOrdersYetMsg")}</p>
