@@ -5,6 +5,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
+import { INTERNAL_CALL_HEADER, internalCallToken, isLoopbackUrl } from '../common/internal-call';
 
 const SYSTEM_PROMPT = `You are an admin assistant for Naro Fashion, a fashion + bridal SaaS for the Tanzania market (TZS currency, EN+SW, multi-tenant).
 
@@ -603,6 +604,11 @@ export class AiAssistantService {
       Authorization: `Bearer ${bearerToken}`,
       'X-Tenant-Id': tenantId,
     };
+    // Authenticates this loopback call to AppThrottlerGuard (the only
+    // rate-limit exemption). Never sent off this machine.
+    if (isLoopbackUrl(resolved.toString())) {
+      headers[INTERNAL_CALL_HEADER] = internalCallToken();
+    }
     let body: string | undefined;
     if (method === 'POST') {
       headers['Content-Type'] = 'application/json';

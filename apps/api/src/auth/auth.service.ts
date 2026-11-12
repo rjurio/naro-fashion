@@ -33,6 +33,15 @@ import {
   isEncryptedTwoFaSecret,
   resolveTwoFaKey,
 } from './util/two-fa-crypto';
+import {
+  ADMIN_ACCOUNT_FAILURE_LIMIT,
+  ADMIN_LOCK_WINDOW_MS,
+  TWO_FA_ACCOUNT_LIMIT,
+  TWO_FA_PER_CHALLENGE_LIMIT,
+  WindowCounter,
+  adminLockClears,
+  isIpBlockedForAccount,
+} from './util/admin-lockout';
 
 // Setting keys used to override JWT lifetimes per-tenant via the CMS settings UI.
 export const ACCESS_EXPIRES_SETTING_KEY = 'auth_access_token_expires';
@@ -50,6 +59,19 @@ export const MIN_ACCESS_EXPIRES_MS = 30 * 1000; // 30s — anything shorter just
  * email belongs to an admin / platform admin.
  */
 export const GENERIC_LOGIN_ERROR = 'Invalid credentials or account temporarily locked';
+
+/**
+ * Timing: every failed sign-in must cost ONE bcrypt comparison, whether the
+ * email is unknown, the password is wrong or the account is locked.
+ * Otherwise "no account" answers ~100 ms faster than "wrong password", and
+ * the response time reveals which emails have accounts. The dummy hash uses
+ * the app's write cost (12) and a random secret nobody knows.
+ */
+let dummyPasswordHash: string | undefined;
+export async function equalizeLoginTiming(password: string): Promise<void> {
+  dummyPasswordHash ??= bcrypt.hashSync(crypto.randomBytes(18).toString('hex'), 12);
+  await bcrypt.compare(password, dummyPasswordHash);
+}
 export const SUSPENDED_ACCOUNT_ERROR = 'This account has been suspended. Please contact support.';
 /** Legacy `PATCH /auth/2fa` — enabling / disabling a real enrolment moved to dedicated endpoints. */
 export const TWO_FA_USE_NEW_ENDPOINTS_ERROR =
@@ -62,7 +84,8 @@ export const TWO_FA_CHALLENGE_INVALID_ERROR = 'Your sign-in attempt has expired.
 export const TWO_FA_CHALLENGE_TTL = '5m';
 const TWO_FA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
-export const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+/** Account-wide (distributed) tier; per-IP and 2FA tiers: auth/util/admin-lockout.ts. */
+export const MAX_FAILED_LOGIN_ATTEMPTS = ADMIN_ACCOUNT_FAILURE_LIMIT;
 export const LOCKOUT_DURATION_MS = 30 * 60 * 1000;
 
 const INACTIVE_TENANT_STATUSES = new Set(['SUSPENDED', 'DEACTIVATED']);
@@ -182,6 +205,10 @@ export class AuthService {
   private readonly lastTotpStep = new Map<string, number>();
   // Single-use 2FA challenge tokens (jti → expiry ms).
   private readonly usedChallenges = new Map<string, number>();
+  // Two-factor attempt limits, separate from the password counters
+  // (auth/util/admin-lockout.ts): per challenge and per account.
+  private readonly twoFaChallengeFailures = new WindowCounter(TWO_FA_CHALLENGE_TTL_MS);
+  private readonly twoFaAccountFailures = new WindowCounter(ADMIN_LOCK_WINDOW_MS);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -323,22 +350,32 @@ export class AuthService {
     if (!isCredentialShapeValid(email, password)) return null;
     const pwd = password as string;
 
+    let compared = false;
     if (tenantId) {
       const user = await this.prisma.user.findFirst({ where: { email, tenantId } });
-      if (user && user.passwordHash && (await bcrypt.compare(pwd, user.passwordHash))) {
-        if (!user.isActive) {
-          throw new UnauthorizedException(SUSPENDED_ACCOUNT_ERROR);
+      if (user && user.passwordHash) {
+        compared = true;
+        if (await bcrypt.compare(pwd, user.passwordHash)) {
+          if (!user.isActive) {
+            throw new UnauthorizedException(SUSPENDED_ACCOUNT_ERROR);
+          }
+          const { passwordHash: _, ...result } = user;
+          return result;
         }
-        const { passwordHash: _, ...result } = user;
-        return result;
       }
     }
 
-    if (opts?.customerOnly) return null;
+    if (opts?.customerOnly) {
+      if (!compared) await equalizeLoginTiming(pwd);
+      return null;
+    }
 
     // AdminUser — globally unique email, no tenant filter needed
     const admin = await this.prisma.adminUser.findUnique({ where: { email } });
-    if (!admin) return null;
+    if (!admin) {
+      if (!compared) await equalizeLoginTiming(pwd);
+      return null;
+    }
 
     // With TOTP enrolled, a correct password is only half a login: the
     // failed-attempt counter is NOT reset here (only after the code is
@@ -366,7 +403,10 @@ export class AuthService {
     if (!isCredentialShapeValid(email, password)) return null;
 
     const admin = await this.prisma.platformAdmin.findUnique({ where: { email } });
-    if (!admin) return null;
+    if (!admin) {
+      await equalizeLoginTiming(password as string);
+      return null;
+    }
 
     const ok = await this.verifyWithLockout('platform', admin, password as string, meta, {
       deferSuccess: adminRequiresTwoFactor(admin),
@@ -403,11 +443,18 @@ export class AuthService {
     const delegate: any = kind === 'admin' ? this.prisma.adminUser : this.prisma.platformAdmin;
     const tenantId = kind === 'admin' ? row.tenantId ?? null : null;
     const now = new Date();
-
-    if (row.lockedUntil && row.lockedUntil > now) {
+    const ip = meta?.ipAddress ?? null;
+    const refuse = async () => {
+      await equalizeLoginTiming(password);
       await this.logLoginAttempt(row.email, false, tenantId, meta);
-      throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
-    }
+      return new UnauthorizedException(GENERIC_LOGIN_ERROR);
+    };
+    // Tier 1 (per account + IP): one source can't lock the whole account.
+    if (await isIpBlockedForAccount(this.prisma as any, row.email, ip, now)) throw await refuse();
+
+    // Tier 2 (per account, distributed): while locked, refused from every
+    // network. No trusted-network exception (owner decision 2026-11-11).
+    if (row.lockedUntil && row.lockedUntil > now) throw await refuse();
 
     // A lock that has expired starts a fresh window. Conditional so a
     // concurrent request that just re-locked the account isn't undone.
@@ -429,8 +476,7 @@ export class AuthService {
         where: { id: row.id },
         data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
       });
-      await this.logLoginAttempt(row.email, false, tenantId, meta);
-      throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
+      throw await refuse();
     }
 
     const valid = await bcrypt.compare(password, row.passwordHash);
@@ -1216,40 +1262,30 @@ export class AuthService {
     }
     const tenantId = kind === 'admin' ? row.tenantId ?? null : null;
 
-    const now = new Date();
-    if (row.lockedUntil && row.lockedUntil > now) {
+    // Two-factor codes have their OWN limits (the challenge already proves
+    // the password passed the password tiers): 5 wrong codes burn this
+    // challenge; 10 per account in 30 min lock the code step everywhere.
+    const accountKey = `${kind}:${row.id}`;
+    if (this.twoFaAccountFailures.count(accountKey) >= TWO_FA_ACCOUNT_LIMIT) {
       await this.logLoginAttempt(row.email, false, tenantId, meta);
       throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
     }
 
-    // Decrypt BEFORE reserving an attempt: a server-side key problem must
-    // not burn the admin's lockout budget.
+    // Decrypt BEFORE counting an attempt: a server-side key problem must
+    // not burn the admin's budget.
     const secret = this.decryptOrFail(row.twoFASecret);
-
-    const reserved: { failedLoginAttempts: number } = await delegate.update({
-      where: { id: row.id },
-      data: { failedLoginAttempts: { increment: 1 } },
-      select: { failedLoginAttempts: true },
-    });
-    if (reserved.failedLoginAttempts > MAX_FAILED_LOGIN_ATTEMPTS) {
-      await delegate.update({
-        where: { id: row.id },
-        data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
-      });
-      await this.logLoginAttempt(row.email, false, tenantId, meta);
-      throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
-    }
 
     const used = await this.checkSecondFactor(kind, row, secret, code);
     if (!used) {
-      if (reserved.failedLoginAttempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
-        await delegate.update({
-          where: { id: row.id },
-          data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
-        });
-      }
+      const onChallenge = this.twoFaChallengeFailures.hit(payload.jti);
+      const onAccount = this.twoFaAccountFailures.hit(accountKey);
       await this.logLoginAttempt(row.email, false, tenantId, meta);
-      await this.auditTwoFactor(kind, row, '2FA_VERIFY_FAILED', meta, { attempts: reserved.failedLoginAttempts });
+      await this.auditTwoFactor(kind, row, '2FA_VERIFY_FAILED', meta, { onChallenge, onAccount });
+      if (onChallenge >= TWO_FA_PER_CHALLENGE_LIMIT) {
+        // burned: sign in with the password again
+        this.usedChallenges.set(payload.jti, Date.now() + TWO_FA_CHALLENGE_TTL_MS);
+        throw new UnauthorizedException(TWO_FA_CHALLENGE_INVALID_ERROR);
+      }
       throw new UnauthorizedException(TWO_FA_INVALID_CODE_ERROR);
     }
     if (used === 'recovery') {
@@ -1261,6 +1297,8 @@ export class AuthService {
     }
 
     this.usedChallenges.set(payload.jti, Date.now() + TWO_FA_CHALLENGE_TTL_MS);
+    this.twoFaChallengeFailures.clear(payload.jti);
+    this.twoFaAccountFailures.clear(accountKey);
     await delegate.update({
       where: { id: row.id },
       data: { failedLoginAttempts: 0, lockedUntil: null },
@@ -1393,6 +1431,10 @@ export class AuthService {
           tokenVersion: { increment: 1 },
         },
       });
+      // Recovery: a reset (proves the mailbox) also clears the code-step
+      // limit and every per-IP block for this account.
+      this.twoFaAccountFailures.clear(`admin:${admin.id}`);
+      adminLockClears.mark(admin.email);
       return { message: 'Password reset successfully' };
     }
 

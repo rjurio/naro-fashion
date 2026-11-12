@@ -25,6 +25,7 @@ function makePrisma() {
     findFirst: jest.fn(),
     findUnique: jest.fn(),
     findMany: jest.fn(),
+    count: jest.fn().mockResolvedValue(0),
     update: jest.fn(),
     updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     create: jest.fn(),
@@ -172,9 +173,9 @@ describe('AuthService (security regressions)', () => {
       expect(prisma.adminUser.update.mock.calls[0][0].data).toEqual({ failedLoginAttempts: { increment: 1 } });
     });
 
-    it('locks on the 5th failure', async () => {
+    it('locks the account on the 10th failure across all networks (distributed tier)', async () => {
       prisma.adminUser.findUnique.mockResolvedValue({ ...admin, passwordHash: hash });
-      prisma.adminUser.update.mockResolvedValueOnce({ failedLoginAttempts: 5 }).mockResolvedValue({});
+      prisma.adminUser.update.mockResolvedValueOnce({ failedLoginAttempts: 10 }).mockResolvedValue({});
       await service.validateUser('adm@x.tz', 'wrong', null);
       const lockCall = prisma.adminUser.update.mock.calls.find((c: any[]) => c[0].data.lockedUntil instanceof Date);
       expect(lockCall).toBeDefined();
@@ -184,7 +185,7 @@ describe('AuthService (security regressions)', () => {
       // The counter value returned by the atomic increment decides — a burst
       // of parallel requests can't all slip past a stale read.
       prisma.adminUser.findUnique.mockResolvedValue({ ...admin, passwordHash: hash });
-      prisma.adminUser.update.mockResolvedValueOnce({ failedLoginAttempts: 6 }).mockResolvedValue({});
+      prisma.adminUser.update.mockResolvedValueOnce({ failedLoginAttempts: 11 }).mockResolvedValue({});
       await expect(service.validateUser('adm@x.tz', 'Correct1pass', null)).rejects.toThrow(GENERIC_LOGIN_ERROR);
       // no success reset was written
       const resetCall = prisma.adminUser.update.mock.calls.find((c: any[]) => c[0].data.failedLoginAttempts === 0);
