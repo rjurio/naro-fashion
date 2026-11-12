@@ -555,14 +555,14 @@ async function main() {
     const p = await open(desktop, '/pages/faq');
     await p.getByText(/the down payment required, if any/).waitFor();
     const en = await p.locator('body').innerText();
-    const ans = en.slice(en.indexOf('Choose the item you want to rent'), en.indexOf('according to your booking terms.') + 32);
-    assert(ans.length > 50 && !/\d\s*%/.test(ans) && /No payment is taken online/.test(ans), `EN: ${ans}`);
+    const ans = en.slice(en.indexOf('Choose the item you want to rent'), en.indexOf('upload your ID from your account.') + 33);
+    assert(ans.length > 50 && !/\d\s*%/.test(ans) && /No payment is taken online/.test(ans) && /one-time National ID \(NIDA\)/.test(ans), `EN: ${ans}`);
     await p.close();
     const q = await open(sw, '/pages/faq');
     await q.getByText(/kiasi cha kianzio kinachohitajika, ikiwa kipo/).waitFor();
     const swTxt = await q.locator('body').innerText();
-    const swAns = swTxt.slice(swTxt.indexOf('Chagua bidhaa unayotaka kukodi'), swTxt.indexOf('kabla ya kuchukua bidhaa.') + 25);
-    assert(swAns.length > 50 && !/\d\s*%/.test(swAns) && /amana inayorejeshwa/.test(swAns), `SW: ${swAns}`);
+    const swAns = swTxt.slice(swTxt.indexOf('Chagua bidhaa unayotaka kukodi'), swTxt.indexOf('kupitia akaunti yako.') + 21);
+    assert(swAns.length > 50 && !/\d\s*%/.test(swAns) && /amana inayorejeshwa/.test(swAns) && /Kitambulisho cha Taifa \(NIDA\) mara moja/.test(swAns), `SW: ${swAns}`);
     await q.close();
   });
 

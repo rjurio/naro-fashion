@@ -744,7 +744,7 @@
     "faqPayment": "Payment Methods",
     "faqPaymentContent": "We accept Mobile Money (M-Pesa, Tigo Pesa, Airtel Money), Visa/Mastercard, bank transfers, and Cash on Delivery. All online payments are processed securely through our payment partners.",
     "faqRentals": "Gown Rentals",
-    "faqRentalsContent": "Choose the item you want to rent and your rental dates, then send your request. We will confirm the item's availability and the down payment required, if any. No payment is taken online when you send the request. The rest of the rental fee and the refundable deposit are paid before pickup, according to your booking terms.",
+    "faqRentalsContent": "Choose the item you want to rent and your rental dates, then send your request. We will confirm the item's availability and the down payment required, if any. No payment is taken online when you send the request. The rest of the rental fee and the refundable deposit are paid before pickup, according to your booking terms. Renting also needs a one-time National ID (NIDA) verification for your account. You can send your request first and upload your ID from your account.",
     "faqAccount": "Account & Security",
     "faqAccountContent": "You can create an account using your email or sign in with Google/Facebook. We use industry-standard encryption to protect your personal information. You can update your profile, manage addresses, and track orders from your account dashboard.",
     "termsTitle": "Terms of Service",

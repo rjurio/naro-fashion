@@ -163,8 +163,13 @@ describe('storefront rental wiring', () => {
     expect(at(sw, 'pages.faqRentalsContent')).toBe(
       'Chagua bidhaa unayotaka kukodi na tarehe za kukodi, kisha tuma ombi lako. Tutakuthibitishia upatikanaji wa bidhaa ' +
       'na kiasi cha kianzio kinachohitajika, ikiwa kipo. Hakuna malipo yanayofanyika mtandaoni wakati wa kutuma ombi. ' +
-      'Salio la ada ya kukodi na amana inayorejeshwa vitalipwa kulingana na masharti ya uhifadhi wako kabla ya kuchukua bidhaa.',
+      'Salio la ada ya kukodi na amana inayorejeshwa vitalipwa kulingana na masharti ya uhifadhi wako kabla ya kuchukua bidhaa.' +
+      // ID sentence (owner 2026-11-12): what the app enforces -- one approved
+      // NIDA per customer account, reused for later bookings; the request can
+      // be sent before it (the booking starts as PENDING_ID_VERIFICATION).
+      ' Pia unahitaji uthibitisho wa Kitambulisho cha Taifa (NIDA) mara moja kwa akaunti yako. Unaweza kutuma ombi kwanza, kisha kupakia kitambulisho chako kupitia akaunti yako.',
     );
+    expect(at(en, 'pages.faqRentalsContent')).toMatch(/one-time National ID \(NIDA\) verification for your account\. You can send your request first/);
     const home = read('app/page.tsx');
     expect(home).not.toMatch(/rental_section_features: '[^']*\d+% /);
     const adminCms = require('fs').readFileSync(
