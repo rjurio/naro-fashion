@@ -878,6 +878,8 @@ model RentalOrder {
   // ID_VERIFIED); kept afterwards as a record.
   holdState        String?
   holdExpiresAt    DateTime?
+  // The deadline a customer reminder was sent for (one reminder per deadline).
+  holdReminderFor  DateTime?
 
   // Event & logistics details (admin-specified)
   pickupTime       String?            // e.g. "10:00 AM"

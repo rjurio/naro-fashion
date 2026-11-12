@@ -16,6 +16,7 @@ import { ownerScope } from '../auth/util/ownership';
 import { Decimal } from '@prisma/client/runtime/library';
 import {
   NON_BLOCKING_RENTAL_STATUSES,
+  UNPAID_HOLD_STATUSES,
   assertRentalTransition,
   computeLateFee,
   resolveReturnedAt,
@@ -24,7 +25,8 @@ import {
   ID_NOT_APPROVED_MESSAGE,
 } from './rental-rules';
 import { customerIdState, hasApprovedId, lockCustomerIdState } from '../id-verification/id-approval';
-import { decideHold } from './rental-hold';
+import { decideHold, MAX_STAFF_EXTENSION_DAYS, pickupCutoff, pickupExpiryAt } from './rental-hold';
+import { ExtendRentalHoldDto, RecordRentalRefundDto } from './dto/rental-hold-actions.dto';
 
 @Injectable()
 export class RentalsService {
@@ -350,6 +352,16 @@ export class RentalsService {
         decideHold({ idState: 'APPROVED', downPaymentAmount: Number(rental.downPaymentAmount), at: new Date() }),
       );
     }
+    if (status === 'CANCELLED') {
+      // Money still held on a cancelled booking is flagged for refund
+      // (REFUND_DUE) — never forfeited silently. Finance staff record the
+      // payout (PATCH /rentals/:id/refund-recorded).
+      const held = await this.netPaid(rental.id);
+      if (held > 0) {
+        data.holdState = 'REFUND_DUE';
+        data.holdExpiresAt = null;
+      }
+    }
     if (status === 'RETURNED') {
       // Offline replays carry the real return time (validated, ≤30 days old).
       const resolved = resolveReturnedAt(returnedAtRaw, new Date());
@@ -402,6 +414,106 @@ export class RentalsService {
       ...(data.holdState !== undefined && { holdState: data.holdState, holdExpiresAt: data.holdExpiresAt }),
     });
     return updated;
+  }
+
+  /** COMPLETED minus REFUNDED payments on a rental (money still held). */
+  private async netPaid(rentalOrderId: string): Promise<number> {
+    const tenantId = this.tenantContext.requireId;
+    const [c, r] = await Promise.all([
+      this.prisma.payment.aggregate({ _sum: { amount: true }, where: { rentalOrderId, tenantId, status: 'COMPLETED' } }),
+      this.prisma.payment.aggregate({ _sum: { amount: true }, where: { rentalOrderId, tenantId, status: 'REFUNDED' } }),
+    ]);
+    return Math.max(0, Math.round((Number(c._sum.amount ?? 0) - Number(r._sum.amount ?? 0)) * 100) / 100);
+  }
+
+  /**
+   * Staff give an unconfirmed booking a new deadline (rentals/rental-hold.ts):
+   * e.g. a PAYMENT_REVIEW booking whose customer will pay the rest, or a
+   * customer who asked for more time. Bounded: in the future, at most
+   * MAX_STAFF_EXTENSION_DAYS (7) from now, and never past the end of the
+   * pickup day (reschedule first). PAYMENT_REVIEW returns to the waiting
+   * state for what is still missing. Under the per-customer lock, CAS on the
+   * observed hold, audited (HOLD_EXTENDED). A new deadline also re-arms the
+   * customer reminder.
+   */
+  async extendHold(id: string, dto: ExtendRentalHoldDto) {
+    const tenantId = this.tenantContext.requireId;
+    const until = new Date(dto.until);
+    const now = new Date();
+    if (isNaN(until.getTime()) || until.getTime() <= now.getTime() + 60_000) {
+      throw new BadRequestException('The new deadline must be in the future.');
+    }
+    if (until.getTime() > now.getTime() + MAX_STAFF_EXTENSION_DAYS * 86_400_000) {
+      throw new BadRequestException(`A deadline can be extended by at most ${MAX_STAFF_EXTENSION_DAYS} days at a time.`);
+    }
+    const rental = await this.prisma.rentalOrder.findFirst({ where: { id, tenantId } });
+    if (!rental) throw new NotFoundException('Rental order not found');
+    const extendable = ['PAYMENT_REVIEW', 'AWAITING_ID', 'ID_REJECTED', 'AWAITING_DOWN_PAYMENT'];
+    if (!UNPAID_HOLD_STATUSES.includes(rental.status) || !extendable.includes(rental.holdState ?? '')) {
+      throw new BadRequestException(
+        `Only an unconfirmed booking waiting for the customer or for payment review can be extended (status ${rental.status}, hold ${rental.holdState ?? 'none'}).`,
+      );
+    }
+    if (rental.pickupDate.getTime() < pickupCutoff(now).getTime()) {
+      throw new BadRequestException('The pickup day has passed: reschedule the pickup first.');
+    }
+    if (until.getTime() > pickupExpiryAt(rental.pickupDate).getTime()) {
+      throw new BadRequestException('The new deadline is after the end of the pickup day: reschedule the pickup first.');
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      await lockCustomerIdState(tx, tenantId, rental.userId);
+      let nextState = rental.holdState as string;
+      if (nextState === 'PAYMENT_REVIEW') {
+        nextState = (await hasApprovedId(tx, tenantId, rental.userId)) ? 'AWAITING_DOWN_PAYMENT' : 'AWAITING_ID';
+      }
+      const res = await tx.rentalOrder.updateMany({
+        where: { id, tenantId, status: rental.status, holdState: rental.holdState, holdExpiresAt: rental.holdExpiresAt },
+        data: { holdState: nextState, holdExpiresAt: until },
+      });
+      return res.count > 0 ? nextState : null;
+    });
+    if (!result) throw new ConflictException('The booking changed meanwhile. Reload and try again.');
+    await this.auditService.log('HOLD_EXTENDED', 'Rental', id, {
+      from: { holdState: rental.holdState, holdExpiresAt: rental.holdExpiresAt },
+      to: { holdState: result, holdExpiresAt: until },
+      note: dto.note,
+    });
+    return this.findOne(id, { isAdmin: true });
+  }
+
+  /**
+   * Finance staff record that the money held on a cancelled booking was paid
+   * back: REFUND_DUE → REFUND_RECORDED, audited with amount / method /
+   * reference / note. The amount can't exceed what is held. No Payment row is
+   * created (a rental refund ledger is proposed with P0c), so reports keep
+   * the collection until then.
+   */
+  async recordRefund(id: string, dto: RecordRentalRefundDto) {
+    const tenantId = this.tenantContext.requireId;
+    const rental = await this.prisma.rentalOrder.findFirst({ where: { id, tenantId } });
+    if (!rental) throw new NotFoundException('Rental order not found');
+    if (rental.status !== 'CANCELLED' || rental.holdState !== 'REFUND_DUE') {
+      throw new BadRequestException('Only a cancelled booking marked REFUND_DUE can have its refund recorded.');
+    }
+    const held = await this.netPaid(id);
+    const amount = Math.round(Number(dto.amount) * 100) / 100;
+    if (amount > held + 0.001) {
+      throw new BadRequestException(`The refund (${amount}) is more than the ${held} TZS held on ${rental.rentalNumber}.`);
+    }
+    const res = await this.prisma.rentalOrder.updateMany({
+      where: { id, tenantId, status: 'CANCELLED', holdState: 'REFUND_DUE' },
+      data: { holdState: 'REFUND_RECORDED' },
+    });
+    if (res.count === 0) throw new ConflictException('The refund was already recorded. Reload.');
+    await this.auditService.log('HOLD_REFUND_RECORDED', 'Rental', id, {
+      amount,
+      held,
+      method: dto.method,
+      reference: dto.reference?.trim() || null,
+      note: dto.note,
+    });
+    return this.findOne(id, { isAdmin: true });
   }
 
   async markReadyForPickup(id: string) {
@@ -521,6 +633,11 @@ export class RentalsService {
       product: { select: { id: true, name: true, slug: true } },
       variant: { select: { id: true, name: true } },
     };
+
+    // A booking flagged NO_SHOW_REVIEW that staff reschedule to a live pickup day is back to normal.
+    if (data.pickupDate && rental.holdState === 'NO_SHOW_REVIEW' && data.pickupDate.getTime() >= pickupCutoff(new Date()).getTime()) {
+      data.holdState = null;
+    }
 
     const datesChanged = data.returnDate !== undefined || data.pickupDate !== undefined;
     if (!datesChanged) {

@@ -357,6 +357,8 @@ export class NotificationsService {
     rentalNumber: string;
     productName?: string;
     message: string;
+    /** The booking held money that is now due for refund (released after staff review). */
+    moneyHeld?: boolean;
     tenantId: string | null;
   }) {
     this.logger.log(`[RENTAL HOLD] ${params.rentalNumber} released — customer notification queued`);
@@ -372,9 +374,52 @@ export class NotificationsService {
           rentalNumber: params.rentalNumber,
           productName: params.productName,
           message: params.message,
+          moneyHeld: !!params.moneyHeld,
         },
       })
       .catch((err) => this.logger.error(`[RENTAL HOLD] Email failed: ${err?.message}`));
+    return { sent: true, channel: 'email' };
+  }
+
+  /**
+   * Reminder ~24 h before an actionable booking deadline (scheduler,
+   * rentals/rental-hold.ts). Fixed texts only; no ID details. `deadline` is
+   * already formatted in EAT.
+   */
+  async sendRentalHoldReminder(params: {
+    customerEmail: string;
+    customerName?: string;
+    rentalNumber: string;
+    productName?: string;
+    action: 'UPLOAD_ID' | 'UPLOAD_NEW_ID' | 'PAY_DOWN_PAYMENT';
+    deadline: string;
+    amountDue?: number | null;
+    tenantId: string | null;
+  }) {
+    this.logger.log(`[RENTAL HOLD] ${params.rentalNumber} deadline reminder (${params.action}) — customer notification queued`);
+    const bizName = await this.getBusinessName(params.tenantId);
+    const texts = {
+      UPLOAD_ID: 'Please upload your National ID (NIDA) from your account. Once it is uploaded, your booking waits while we review it.',
+      UPLOAD_NEW_ID: 'Your previous ID was not approved. Please upload a new one from your account. Once it is uploaded, your booking waits while we review it.',
+      PAY_DOWN_PAYMENT: 'Your ID has been approved. Please pay the down payment to confirm your booking.',
+    } as const;
+    this.emailService
+      .send({
+        to: params.customerEmail,
+        subject: `Action needed by ${params.deadline}: booking ${params.rentalNumber} — ${bizName}`,
+        template: 'rental-hold-reminder',
+        tenantId: params.tenantId,
+        context: {
+          customerName: params.customerName || 'Valued Customer',
+          rentalNumber: params.rentalNumber,
+          productName: params.productName,
+          instruction: texts[params.action],
+          deadline: params.deadline,
+          amountDue: params.amountDue && params.amountDue > 0 ? Number(params.amountDue).toLocaleString('en-US') : undefined,
+          isId: params.action !== 'PAY_DOWN_PAYMENT',
+        },
+      })
+      .catch((err) => this.logger.error(`[RENTAL HOLD] Reminder email failed: ${err?.message}`));
     return { sent: true, channel: 'email' };
   }
 

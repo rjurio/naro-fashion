@@ -333,6 +333,16 @@ export class PaymentSettlementService {
       this.logger.warn(
         `REVIEW: rental ${rental.rentalNumber} is CANCELLED but has ${totalPaid} TZS of COMPLETED payments — refund review.`,
       );
+      // Flag it for finance (REFUND_DUE): money that arrived on a released booking.
+      await this.prisma.rentalOrder.updateMany({
+        where: {
+          id: rentalOrderId,
+          tenantId,
+          status: 'CANCELLED',
+          OR: [{ holdState: null }, { holdState: { not: 'REFUND_DUE' } }],
+        },
+        data: { holdState: 'REFUND_DUE', holdExpiresAt: null },
+      });
       return;
     }
 

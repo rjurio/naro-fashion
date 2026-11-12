@@ -75,6 +75,8 @@ function rentalsFixture(rental: any, opts: { approved: boolean; claim?: number }
     customerIDDocument: { findFirst: jest.fn(async () => (opts.approved ? { id: 'doc1' } : null)) },
     product: { findFirst: jest.fn(async () => ({ latePenaltyPercent: null })) },
     rentalPolicy: { findFirst: jest.fn(async () => null) },
+    // cancelling checks whether money is held (REFUND_DUE); none in these scenarios
+    payment: { aggregate: jest.fn(async () => ({ _sum: { amount: 0 } })) },
   };
   return { svc: new RentalsService(prisma, tenant, audit as any), prisma, audit };
 }

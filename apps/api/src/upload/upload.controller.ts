@@ -21,6 +21,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { PermissionGuard } from '../auth/guards/permission.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { ReviewerTwoFactorGuard } from '../id-verification/reviewer-two-factor.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
@@ -218,7 +219,7 @@ export class UploadController {
    * 2026-11-12: SUPER_ADMIN only until granted to a designated role).
    */
   @Get('id-document/:tenantScopedKey')
-  @UseGuards(AdminGuard, PermissionGuard)
+  @UseGuards(AdminGuard, PermissionGuard, ReviewerTwoFactorGuard)
   @RequiresPermission('id-verification:review')
   async streamIdDocument(
     @Param('tenantScopedKey') key: string,

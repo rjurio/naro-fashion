@@ -10,7 +10,11 @@
   <p>{{message}}</p>
 </div>
 
+{{#if moneyHeld}}
+<p>The booking has been cancelled and the item is available to other customers again. The amount you paid has <strong>not</strong> been forfeited: it is held for refund, and our team will contact you about it.</p>
+{{else}}
 <p>The booking has been cancelled and the item is available to other customers again. No payment was received for this booking.</p>
+{{/if}}
 
 <p>If you still want to rent this item, you are welcome to send a new booking request.</p>
 

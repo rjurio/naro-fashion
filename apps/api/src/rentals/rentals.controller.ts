@@ -17,6 +17,7 @@ import { CreateRentalDto } from './dto/create-rental.dto';
 import { UpdateRentalDto } from './dto/update-rental.dto';
 import { QueryRentalsDto } from './dto/query-rentals.dto';
 import { UpdateRentalStatusDto } from './dto/update-rental-status.dto';
+import { ExtendRentalHoldDto, RecordRentalRefundDto } from './dto/rental-hold-actions.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
@@ -116,6 +117,22 @@ export class RentalsController {
   @Patch(':id/ready')
   markReadyForPickup(@Param('id') id: string) {
     return this.rentalsService.markReadyForPickup(id);
+  }
+
+  /** Staff: give an unconfirmed booking (incl. PAYMENT_REVIEW) a new, bounded deadline. Audited. */
+  @UseGuards(AdminGuard, PermissionGuard)
+  @RequiresPermission('rentals:update-status')
+  @Patch(':id/hold/extend')
+  extendHold(@Param('id') id: string, @Body() dto: ExtendRentalHoldDto) {
+    return this.rentalsService.extendHold(id, dto);
+  }
+
+  /** Finance: record the payout of money held on a cancelled booking (REFUND_DUE → REFUND_RECORDED). Audited. */
+  @UseGuards(AdminGuard, PermissionGuard)
+  @RequiresPermission('payments:manage')
+  @Patch(':id/refund-recorded')
+  recordRefund(@Param('id') id: string, @Body() dto: RecordRentalRefundDto) {
+    return this.rentalsService.recordRefund(id, dto);
   }
 
   @UseGuards(AdminGuard)

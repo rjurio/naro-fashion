@@ -23,9 +23,23 @@ import { DEFAULT_RENTAL_HOLD_TTL_HOURS } from './rental-rules';
  * collected as booked, so it is released (no-show / expired). This is what
  * stops a paused or 0 % booking from staying open indefinitely.
  *
- * Never auto-cancelled: a booking with any COMPLETED payment (money received
- * -> staff decide, refunds are a manual review), and — for a grace period — a
- * booking with an in-flight PENDING / PROCESSING payment.
+ * Money received (round 2, owner-approved 2026-11-12) — never forfeited
+ * automatically, never held indefinitely:
+ *
+ *  | holdState        | when                                              | then                                   |
+ *  |------------------|---------------------------------------------------|----------------------------------------|
+ *  | PAYMENT_REVIEW   | an unconfirmed booking with COMPLETED payments    | staff have RENTAL_PAYMENT_REVIEW_HOURS |
+ *  |                  | reaches its deadline or pickup day                | (72) to extend, take the rest, or      |
+ *  |                  |                                                   | cancel; the dates stay held meanwhile  |
+ *  | REFUND_DUE       | a booking is cancelled (by staff or released when | finance staff pay it out and record it |
+ *  |                  | the review window ends) with money still held     | (REFUND_RECORDED, audited)             |
+ *  | REFUND_RECORDED  | staff recorded the refund payout                  | —                                      |
+ *  | NO_SHOW_REVIEW   | a CONFIRMED booking not collected by the end of   | staff decide (hand over, reschedule,   |
+ *  |                  | its pickup day                                    | cancel); never auto-cancelled          |
+ *
+ * In-flight payments: a PENDING / PROCESSING payment protects an expired
+ * booking only if it was started BEFORE the expiry, and only until the expiry
+ * + RENTAL_HOLD_PAYMENT_GRACE_MINUTES (120). New attempts can't postpone it.
  *
  * All instants are absolute (UTC in the DB); "pickup day" is the EAT
  * (Africa/Dar_es_Salaam, UTC+3, no DST) calendar day containing pickupDate.
@@ -37,6 +51,10 @@ export const HOLD_STATES = [
   'ID_REJECTED',
   'AWAITING_DOWN_PAYMENT',
   'NO_DOWN_PAYMENT',
+  'PAYMENT_REVIEW',
+  'REFUND_DUE',
+  'REFUND_RECORDED',
+  'NO_SHOW_REVIEW',
 ] as const;
 export type HoldState = (typeof HOLD_STATES)[number];
 
@@ -46,16 +64,41 @@ export const TIMED_HOLD_STATES: readonly HoldState[] = ['AWAITING_ID', 'ID_REJEC
 /** A customer's National ID situation, read from their documents. */
 export type CustomerIdState = 'APPROVED' | 'PENDING' | 'REJECTED' | 'NONE';
 
-/**
- * An in-flight (PENDING / PROCESSING) payment created this recently protects
- * an expired booking from auto-cancellation, so a Mobile Money payment
- * started before the deadline (PIN slow, webhook late) is not cancelled
- * under the customer. Once it resolves (or is older than this), the next run
- * decides.
- */
-export const INFLIGHT_PAYMENT_GRACE_HOURS = 24;
+/** States in which the customer can act before a deadline (reminders). */
+export const REMINDABLE_HOLD_STATES: readonly HoldState[] = ['AWAITING_ID', 'ID_REJECTED', 'AWAITING_DOWN_PAYMENT'];
+
+/** Confirmed (paid) statuses that can still miss their pickup day. */
+export const CONFIRMED_NOT_COLLECTED_STATUSES = ['DOWN_PAYMENT_PAID', 'FULLY_PAID', 'READY_FOR_PICKUP'];
 
 const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+
+function positive(raw: string | number | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * Bounded protection for a payment in progress: only one started BEFORE the
+ * expiry counts, and only until the expiry + this grace (default 120 min,
+ * well past the gateways' reconciliation cut-off of a few minutes).
+ */
+export function paymentGraceMs(raw: string | number | undefined = process.env.RENTAL_HOLD_PAYMENT_GRACE_MINUTES): number {
+  return positive(raw, 120) * MINUTE_MS;
+}
+
+/** How long staff have to resolve a PAYMENT_REVIEW booking (default 72 h). */
+export function paymentReviewHours(raw: string | number | undefined = process.env.RENTAL_PAYMENT_REVIEW_HOURS): number {
+  return positive(raw, 72);
+}
+
+/** Reminder lead time: sent when the deadline is within this window (default 24 h)… */
+export const REMINDER_LEAD_HOURS = 24;
+/** …but not when it is closer than this (it would arrive too late to act on). */
+export const REMINDER_MIN_LEAD_HOURS = 1;
+
+/** Longest a staff extension may reach from now (EXTEND action). */
+export const MAX_STAFF_EXTENSION_DAYS = 7;
 
 /** RENTAL_HOLD_TTL_HOURS (default 48). One value for every timed window. */
 export function rentalHoldTtlHours(raw: string | number | undefined = process.env.RENTAL_HOLD_TTL_HOURS): number {
@@ -131,6 +174,9 @@ export function holdExpiryReason(
 
 /** Customer-facing explanation of an auto-cancellation (email + notes). */
 export function holdExpiryMessage(reason: HoldExpiryReason, holdState: string | null): string {
+  if (holdState === 'PAYMENT_REVIEW') {
+    return 'The booking could not be completed in time. The amount you paid is held for refund and our team will contact you.';
+  }
   if (reason === 'PICKUP_DATE_PASSED') {
     return 'The pickup date passed before the booking was confirmed.';
   }
@@ -190,4 +236,40 @@ export function formatEatDeadline(at: Date): string {
   const hh = String(shifted.getUTCHours()).padStart(2, '0');
   const mm = String(shifted.getUTCMinutes()).padStart(2, '0');
   return `${shifted.getUTCDate()} ${MONTHS[shifted.getUTCMonth()]} ${shifted.getUTCFullYear()}, ${hh}:${mm} EAT`;
+}
+
+
+/** The instant a booking expired for `reason` (deadline, or end of its pickup day). */
+export function expiryInstant(
+  rental: { holdExpiresAt: Date | null; pickupDate: Date },
+  reason: HoldExpiryReason,
+): Date {
+  return reason === 'HOLD_DEADLINE' && rental.holdExpiresAt ? rental.holdExpiresAt : pickupExpiryAt(rental.pickupDate);
+}
+
+/**
+ * Does an in-flight payment still hold back an expired booking? Only when it
+ * was started before the expiry and the bounded grace has not run out.
+ */
+export function inflightPaymentProtects(paymentCreatedAt: Date, expiredAt: Date, now: Date, graceMs = paymentGraceMs()): boolean {
+  return paymentCreatedAt.getTime() < expiredAt.getTime() && now.getTime() < expiredAt.getTime() + graceMs;
+}
+
+/** Staff-review window for a booking that expired with money received. */
+export function paymentReviewHold(now: Date, hours = paymentReviewHours()): HoldDecision {
+  return { holdState: 'PAYMENT_REVIEW', holdExpiresAt: new Date(now.getTime() + hours * HOUR_MS) };
+}
+
+/** What a reminder asks the customer to do (null = not actionable by them). */
+export function reminderAction(holdState: string | null): 'UPLOAD_ID' | 'UPLOAD_NEW_ID' | 'PAY_DOWN_PAYMENT' | null {
+  switch (holdState) {
+    case 'AWAITING_ID':
+      return 'UPLOAD_ID';
+    case 'ID_REJECTED':
+      return 'UPLOAD_NEW_ID';
+    case 'AWAITING_DOWN_PAYMENT':
+      return 'PAY_DOWN_PAYMENT';
+    default:
+      return null; // ID under staff review, 0 %, staff review, refunds: nothing for the customer to do
+  }
 }

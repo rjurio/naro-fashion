@@ -8,20 +8,33 @@
  *    auto-confirmed either);
  *  - the pickup day is a separate expiry, so nothing stays open forever;
  *  - race-safe against approval, payment and rescheduling; idempotent.
+ * Round 2 (2026-11-12): money received is never forfeited nor held
+ * indefinitely (PAYMENT_REVIEW → REFUND_DUE → REFUND_RECORDED), in-flight
+ * payments protect only within a bounded grace, confirmed no-shows are
+ * flagged for staff, and customers get one reminder ~24 h before an
+ * actionable deadline; designated ID reviewers need 2FA.
  */
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import {
   adoptLegacyHold,
   decideHold,
+  expiryInstant,
   formatEatDeadline,
   holdExpiryMessage,
   holdExpiryReason,
-  INFLIGHT_PAYMENT_GRACE_HOURS,
+  inflightPaymentProtects,
+  paymentGraceMs,
+  paymentReviewHold,
   pickupCutoff,
   pickupExpiryAt,
   rejectedHold,
+  reminderAction,
   rentalHoldTtlHours,
 } from './rental-hold';
+import { RentalsService } from './rentals.service';
+import { RentalsController } from './rentals.controller';
+import { PERMISSIONS_KEY } from '../auth/decorators/requires-permission.decorator';
+import { ReviewerTwoFactorGuard } from '../id-verification/reviewer-two-factor.guard';
 import { UNPAID_HOLD_STATUSES } from './rental-rules';
 import { customerIdState } from '../id-verification/id-approval';
 import { SchedulerService } from '../scheduler/scheduler.service';
@@ -190,19 +203,27 @@ describe('SchedulerService.handleExpiredRentalHolds (expiry job)', () => {
   function make(opts: {
     candidates?: any[];
     current?: any;
-    inflight?: number;
+    inflight?: { createdAt: Date }[];
+    net?: number;
     cas?: number;
     legacy?: any[];
+    noShows?: any[];
+    reminders?: any[];
+    reminderCurrent?: any;
     ttl?: string;
   } = {}) {
     const calls: string[] = [];
+    const net = opts.net ?? 0;
     const tx: any = {
       $executeRaw: jest.fn(async (_q: TemplateStringsArray, ...v: unknown[]) => { calls.push(`lock:${String(v[0])}`); }),
       rentalOrder: {
-        findFirst: jest.fn(async () => { calls.push('re-read'); return opts.current; }),
+        findFirst: jest.fn(async () => { calls.push('re-read'); return opts.reminderCurrent !== undefined && calls.includes('reminder') ? opts.reminderCurrent : opts.current; }),
         updateMany: jest.fn(async () => { calls.push('cas'); return { count: opts.cas ?? 1 }; }),
       },
-      payment: { count: jest.fn(async () => opts.inflight ?? 0) },
+      payment: {
+        findMany: jest.fn(async () => opts.inflight ?? []),
+        aggregate: jest.fn(async ({ where }: any) => ({ _sum: { amount: where.status === 'COMPLETED' ? net : 0 } })),
+      },
       customerIDDocument: { findMany: jest.fn(async () => []) },
     };
     const prisma: any = {
@@ -210,11 +231,18 @@ describe('SchedulerService.handleExpiredRentalHolds (expiry job)', () => {
         findMany: jest
           .fn()
           .mockResolvedValueOnce(opts.legacy ?? [])
-          .mockResolvedValueOnce(opts.candidates ?? []),
+          .mockResolvedValueOnce(opts.candidates ?? [])
+          .mockResolvedValueOnce(opts.noShows ?? [])
+          .mockImplementationOnce(async () => { calls.push('reminder'); return opts.reminders ?? []; })
+          .mockResolvedValue([]),
+        updateMany: jest.fn(async () => ({ count: 1 })),
       },
       $transaction: jest.fn(async (cb: any) => cb(tx)),
     };
-    const notifications = { sendRentalHoldExpired: jest.fn(async () => ({ sent: true })) };
+    const notifications = {
+      sendRentalHoldExpired: jest.fn(async () => ({ sent: true })),
+      sendRentalHoldReminder: jest.fn(async () => ({ sent: true })),
+    };
     const config: any = { get: jest.fn().mockReturnValue(opts.ttl) };
     const svc = new SchedulerService(prisma, notifications as any, config, {} as any, {} as any);
     return { svc, prisma, tx, notifications, calls };
@@ -228,23 +256,20 @@ describe('SchedulerService.handleExpiredRentalHolds (expiry job)', () => {
     holdExpiresAt: new Date('2026-11-20T11:00:00Z'), pickupDate: new Date('2026-12-05T00:00:00Z'), notes: null,
   };
 
-  it('selects unconfirmed bookings with no COMPLETED payment whose deadline or pickup day has passed', async () => {
+  it('selects unconfirmed bookings whose deadline or pickup day has passed (money or not: decided per booking)', async () => {
     const { svc, prisma } = make();
     await svc.handleExpiredRentalHolds(now);
-    const legacyQ = prisma.rentalOrder.findMany.mock.calls[0][0].where;
-    expect(legacyQ).toEqual({ status: { in: UNPAID_HOLD_STATUSES }, holdState: null });
+    expect(prisma.rentalOrder.findMany.mock.calls[0][0].where).toEqual({ status: { in: UNPAID_HOLD_STATUSES }, holdState: null });
     const q = prisma.rentalOrder.findMany.mock.calls[1][0].where;
     expect(q.status).toEqual({ in: UNPAID_HOLD_STATUSES });
-    expect(q.payments).toEqual({ none: { status: 'COMPLETED' } });
     expect(q.OR).toEqual([{ holdExpiresAt: { lte: now } }, { pickupDate: { lt: new Date('2026-11-19T21:00:00Z') } }]);
-    // no creation-time rule any more: staff review time can't cancel a booking
     expect(q.createdAt).toBeUndefined();
   });
 
-  it('cancels under the product, customer and payment locks (same order as booking), with a CAS, and tells the customer', async () => {
+  it('no money: cancels under the product, customer and payment locks (same order as booking), with a CAS, and tells the customer', async () => {
     const { svc, tx, notifications, calls } = make({ candidates: [cand], current: expiredNoId });
     expect(await svc.handleExpiredRentalHolds(now)).toBe(1);
-    expect(calls).toEqual(['lock:p1', 'lock:rental-id:t1:u1', 'lock:payment:rental:r1', 're-read', 'cas']);
+    expect(calls.slice(0, 5)).toEqual(['lock:p1', 'lock:rental-id:t1:u1', 'lock:payment:rental:r1', 're-read', 'cas']);
     const u = tx.rentalOrder.updateMany.mock.calls[0][0];
     expect(u.where).toEqual({
       id: 'r1', tenantId: 't1', status: 'PENDING_ID_VERIFICATION', holdState: 'AWAITING_ID',
@@ -255,16 +280,16 @@ describe('SchedulerService.handleExpiredRentalHolds (expiry job)', () => {
     expect(u.data.notes).toMatch(/^\[Auto-cancelled 2026-11-20T12:00:00.000Z\] No National ID was submitted in time\. \(HOLD_DEADLINE, deadline 2026-11-20T11:00:00.000Z\)$/);
     expect(notifications.sendRentalHoldExpired).toHaveBeenCalledWith({
       customerEmail: 'c@x.tz', customerName: 'Asha', rentalNumber: 'RNT-1', productName: 'Gown',
-      message: 'No National ID was submitted in time.', tenantId: 't1',
+      message: 'No National ID was submitted in time.', moneyHeld: false, tenantId: 't1',
     });
   });
 
-  it('re-checks under the locks: an approval / reschedule / payment that landed first wins (nothing cancelled, no email)', async () => {
+  it('re-checks under the locks: an approval / ID upload / payment that landed first wins (nothing changed, no email)', async () => {
     for (const current of [
-      { ...expiredNoId, status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT', holdExpiresAt: new Date('2026-11-22T12:00:00Z') }, // approved
-      { ...expiredNoId, holdState: 'ID_UNDER_REVIEW', holdExpiresAt: null }, // ID submitted: paused
-      { ...expiredNoId, status: 'DOWN_PAYMENT_PAID' }, // paid & confirmed
-      null, // gone
+      { ...expiredNoId, status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT', holdExpiresAt: new Date('2026-11-22T12:00:00Z') },
+      { ...expiredNoId, holdState: 'ID_UNDER_REVIEW', holdExpiresAt: null },
+      { ...expiredNoId, status: 'DOWN_PAYMENT_PAID' },
+      null,
     ]) {
       const { svc, tx, notifications } = make({ candidates: [cand], current });
       expect(await svc.handleExpiredRentalHolds(now)).toBe(0);
@@ -273,19 +298,57 @@ describe('SchedulerService.handleExpiredRentalHolds (expiry job)', () => {
     }
   });
 
-  it('a payment in flight (PENDING / PROCESSING, < 24 h) keeps the booking until it resolves', async () => {
-    const { svc, tx, notifications } = make({ candidates: [cand], current: expiredNoId, inflight: 1 });
+  it('money received: NOT cancelled — moved to PAYMENT_REVIEW for 72 h (dates still held), no customer email', async () => {
+    const { svc, tx, notifications } = make({ candidates: [cand], current: { ...expiredNoId, holdState: 'AWAITING_DOWN_PAYMENT', status: 'ID_VERIFIED' }, net: 50 });
     expect(await svc.handleExpiredRentalHolds(now)).toBe(0);
-    const w = tx.payment.count.mock.calls[0][0].where;
-    expect(w).toEqual({
-      rentalOrderId: 'r1', tenantId: 't1', status: { in: ['PENDING', 'PROCESSING'] },
-      createdAt: { gt: new Date(now.getTime() - INFLIGHT_PAYMENT_GRACE_HOURS * H) },
-    });
-    expect(tx.rentalOrder.updateMany).not.toHaveBeenCalled();
+    const u = tx.rentalOrder.updateMany.mock.calls[0][0];
+    expect(u.data.status).toBeUndefined();
+    expect(u.data.holdState).toBe('PAYMENT_REVIEW');
+    expect(u.data.holdExpiresAt).toEqual(new Date(now.getTime() + 72 * H));
+    expect(u.data.notes).toMatch(/\[Payment review 2026-11-20T12:00:00.000Z\] Expired \(HOLD_DEADLINE\) with 50 TZS received; staff review until 2026-11-23T12:00:00.000Z\./);
+    expect(u.where).toMatchObject({ status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT' });
+    expect(u.where.payments).toBeUndefined();
     expect(notifications.sendRentalHoldExpired).not.toHaveBeenCalled();
   });
 
-  it('idempotent: a CAS that matches nothing (second run / concurrent change) cancels and emails nothing', async () => {
+  it('PAYMENT_REVIEW still inside its window: untouched (even past the pickup day)', async () => {
+    const current = { ...expiredNoId, holdState: 'PAYMENT_REVIEW', holdExpiresAt: new Date('2026-11-21T12:00:00Z'), pickupDate: new Date('2026-11-10T00:00:00Z') };
+    const { svc, tx } = make({ candidates: [cand], current, net: 50 });
+    expect(await svc.handleExpiredRentalHolds(now)).toBe(0);
+    expect(tx.rentalOrder.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('PAYMENT_REVIEW not resolved in time: released (dates freed) and the money flagged REFUND_DUE — never forfeited', async () => {
+    const current = { ...expiredNoId, holdState: 'PAYMENT_REVIEW', holdExpiresAt: new Date('2026-11-20T11:59:00Z') };
+    const { svc, tx, notifications } = make({ candidates: [cand], current, net: 50 });
+    expect(await svc.handleExpiredRentalHolds(now)).toBe(1);
+    const u = tx.rentalOrder.updateMany.mock.calls[0][0];
+    expect(u.where).toEqual({ id: 'r1', tenantId: 't1', status: 'PENDING_ID_VERIFICATION', holdState: 'PAYMENT_REVIEW', holdExpiresAt: current.holdExpiresAt });
+    expect(u.data.status).toBe('CANCELLED');
+    expect(u.data.holdState).toBe('REFUND_DUE');
+    expect(u.data.notes).toMatch(/50 TZS received is due for refund \(REFUND_DUE\)/);
+    const mail = (notifications.sendRentalHoldExpired.mock.calls as any[])[0][0];
+    expect(mail.moneyHeld).toBe(true);
+    expect(mail.message).toMatch(/held for refund/);
+  });
+
+  it('in-flight payment: protects only if started BEFORE the expiry, and only for the bounded grace (2 h)', async () => {
+    const started = (iso: string) => [{ createdAt: new Date(iso) }];
+    const deadline = expiredNoId.holdExpiresAt.toISOString(); // 11:00Z
+    // started before the deadline, now 12:00 (1 h after) → kept
+    let m = make({ candidates: [cand], current: expiredNoId, inflight: started('2026-11-20T10:59:00Z') });
+    expect(await m.svc.handleExpiredRentalHolds(now)).toBe(0);
+    expect(m.tx.rentalOrder.updateMany).not.toHaveBeenCalled();
+    // started AFTER the deadline (repeated attempts) → does not protect
+    m = make({ candidates: [cand], current: expiredNoId, inflight: started('2026-11-20T11:30:00Z') });
+    expect(await m.svc.handleExpiredRentalHolds(now)).toBe(1);
+    // started before, but the grace (deadline + 2 h = 13:00) has run out → no longer protects
+    m = make({ candidates: [cand], current: expiredNoId, inflight: started('2026-11-20T10:59:00Z') });
+    expect(await m.svc.handleExpiredRentalHolds(new Date('2026-11-20T13:00:00Z'))).toBe(1);
+    expect(deadline).toBe('2026-11-20T11:00:00.000Z');
+  });
+
+  it('idempotent: a CAS that matches nothing (second run / concurrent change) changes and emails nothing', async () => {
     const { svc, notifications } = make({ candidates: [cand], current: expiredNoId, cas: 0 });
     expect(await svc.handleExpiredRentalHolds(now)).toBe(0);
     expect(notifications.sendRentalHoldExpired).not.toHaveBeenCalled();
@@ -324,10 +387,246 @@ describe('SchedulerService.handleExpiredRentalHolds (expiry job)', () => {
     });
   });
 
+  it('no-show rule: a CONFIRMED booking not collected by its pickup day is flagged NO_SHOW_REVIEW (never cancelled)', async () => {
+    const noShows = [{ id: 'c1', tenantId: 't1', rentalNumber: 'RNT-C', status: 'DOWN_PAYMENT_PAID', pickupDate: new Date('2026-11-18T00:00:00Z'), holdState: 'AWAITING_DOWN_PAYMENT', notes: null }];
+    const { svc, prisma } = make({ noShows });
+    await svc.handleExpiredRentalHolds(now);
+    const q = prisma.rentalOrder.findMany.mock.calls[2][0].where;
+    expect(q.status).toEqual({ in: ['DOWN_PAYMENT_PAID', 'FULLY_PAID', 'READY_FOR_PICKUP'] });
+    expect(q.pickupDate).toEqual({ lt: new Date('2026-11-19T21:00:00Z') });
+    const u = prisma.rentalOrder.updateMany.mock.calls[0][0];
+    expect(u.where).toEqual({ id: 'c1', tenantId: 't1', status: 'DOWN_PAYMENT_PAID', pickupDate: noShows[0].pickupDate, holdState: 'AWAITING_DOWN_PAYMENT' });
+    expect(u.data).toMatchObject({ holdState: 'NO_SHOW_REVIEW', holdExpiresAt: null });
+    expect(u.data.status).toBeUndefined();
+  });
+
   it('errors are contained (the cron never throws)', async () => {
     const { svc, prisma } = make();
     prisma.rentalOrder.findMany = jest.fn().mockRejectedValue(new Error('db down'));
     await expect(svc.handleExpiredRentalHolds(now)).resolves.toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('deadline reminders (~24 h before an actionable deadline)', () => {
+  const now = new Date('2026-11-20T12:00:00Z');
+  const deadline = new Date('2026-11-21T10:00:00Z'); // 22 h ahead
+  function make(opts: { row?: any; current?: any; cas?: number; net?: number } = {}) {
+    const row = opts.row ?? {
+      id: 'r1', tenantId: 't1', userId: 'u1', productId: 'p1', rentalNumber: 'RNT-1', holdExpiresAt: deadline, holdReminderFor: null,
+      user: { email: 'c@x.tz', firstName: 'Asha' }, product: { name: 'Gown' },
+    };
+    const current = opts.current ?? {
+      status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT', holdExpiresAt: deadline, holdReminderFor: null,
+      pickupDate: new Date('2026-12-05T00:00:00Z'), downPaymentAmount: 250,
+    };
+    const tx: any = {
+      $executeRaw: jest.fn(),
+      rentalOrder: { findFirst: jest.fn(async () => current), updateMany: jest.fn(async () => ({ count: opts.cas ?? 1 })) },
+      payment: { aggregate: jest.fn(async ({ where }: any) => ({ _sum: { amount: where.status === 'COMPLETED' ? opts.net ?? 0 : 0 } })) },
+    };
+    const prisma: any = {
+      rentalOrder: {
+        findMany: jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([row]),
+        updateMany: jest.fn(),
+      },
+      $transaction: jest.fn(async (cb: any) => cb(tx)),
+    };
+    const notifications = { sendRentalHoldExpired: jest.fn(), sendRentalHoldReminder: jest.fn(async () => ({ sent: true })) };
+    const svc = new SchedulerService(prisma, notifications as any, { get: () => undefined } as any, {} as any, {} as any);
+    return { svc, prisma, tx, notifications };
+  }
+
+  it('selects only actionable holds (upload ID / new ID / pay) due in (now+1 h, now+24 h], pickup not passed', async () => {
+    const { svc, prisma } = make();
+    await svc.handleExpiredRentalHolds(now);
+    const q = prisma.rentalOrder.findMany.mock.calls[3][0].where;
+    expect(q.holdState).toEqual({ in: ['AWAITING_ID', 'ID_REJECTED', 'AWAITING_DOWN_PAYMENT'] });
+    expect(q.holdExpiresAt).toEqual({ gt: new Date('2026-11-20T13:00:00Z'), lte: new Date('2026-11-21T12:00:00Z') });
+    expect(q.status).toEqual({ in: UNPAID_HOLD_STATUSES });
+  });
+
+  it('claims by CAS under the locks, THEN emails once: deadline in EAT, amount still due, no ID details', async () => {
+    const { svc, tx, notifications } = make({ net: 50 });
+    await svc.handleExpiredRentalHolds(now);
+    const u = tx.rentalOrder.updateMany.mock.calls[0][0];
+    expect(u.data).toEqual({ holdReminderFor: deadline });
+    expect(u.where).toMatchObject({ status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT', holdExpiresAt: deadline });
+    expect(u.where.OR).toEqual([{ holdReminderFor: null }, { holdReminderFor: { not: deadline } }]);
+    expect(notifications.sendRentalHoldReminder).toHaveBeenCalledWith({
+      customerEmail: 'c@x.tz', customerName: 'Asha', rentalNumber: 'RNT-1', productName: 'Gown',
+      action: 'PAY_DOWN_PAYMENT', deadline: '21 Nov 2026, 13:00 EAT', amountDue: 200, tenantId: 't1',
+    });
+    expect(JSON.stringify((notifications.sendRentalHoldReminder.mock.calls as any[])[0][0])).not.toMatch(/idNumber|frontImage|private:/);
+  });
+
+  it('never twice for the same deadline; a NEW deadline (fresh window) re-arms it', async () => {
+    const already = make({ row: { id: 'r1', tenantId: 't1', userId: 'u1', productId: 'p1', rentalNumber: 'RNT-1', holdExpiresAt: deadline, holdReminderFor: deadline, user: { email: 'c@x.tz' }, product: {} } });
+    await already.svc.handleExpiredRentalHolds(now);
+    expect(already.notifications.sendRentalHoldReminder).not.toHaveBeenCalled();
+    const rearmed = make({ row: { id: 'r1', tenantId: 't1', userId: 'u1', productId: 'p1', rentalNumber: 'RNT-1', holdExpiresAt: deadline, holdReminderFor: new Date('2026-11-18T10:00:00Z'), user: { email: 'c@x.tz' }, product: {} } });
+    await rearmed.svc.handleExpiredRentalHolds(now);
+    expect(rearmed.notifications.sendRentalHoldReminder).toHaveBeenCalledTimes(1);
+  });
+
+  it('races: approval / rejection / payment / cancellation landing first (re-read or CAS) → no reminder', async () => {
+    for (const current of [
+      { status: 'PENDING_ID_VERIFICATION', holdState: 'ID_UNDER_REVIEW', holdExpiresAt: null, pickupDate: new Date('2026-12-05'), downPaymentAmount: 250 }, // ID uploaded → paused
+      { status: 'DOWN_PAYMENT_PAID', holdState: 'AWAITING_DOWN_PAYMENT', holdExpiresAt: deadline, pickupDate: new Date('2026-12-05'), downPaymentAmount: 250 }, // paid
+      { status: 'CANCELLED', holdState: 'AWAITING_DOWN_PAYMENT', holdExpiresAt: deadline, pickupDate: new Date('2026-12-05'), downPaymentAmount: 250 }, // cancelled
+      { status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT', holdExpiresAt: new Date('2026-11-22T12:00:00Z'), pickupDate: new Date('2026-12-05'), downPaymentAmount: 250 }, // fresh window (approval) → outside the 24 h window
+      { status: 'ID_VERIFIED', holdState: 'NO_DOWN_PAYMENT', holdExpiresAt: deadline, pickupDate: new Date('2026-12-05'), downPaymentAmount: 0 }, // nothing to pay
+    ]) {
+      const m = make({ current });
+      await m.svc.handleExpiredRentalHolds(now);
+      expect(m.notifications.sendRentalHoldReminder).not.toHaveBeenCalled();
+    }
+    const lost = make({ cas: 0 });
+    await lost.svc.handleExpiredRentalHolds(now);
+    expect(lost.notifications.sendRentalHoldReminder).not.toHaveBeenCalled();
+  });
+
+  it('down payment already covered (settlement about to confirm) → no payment reminder', async () => {
+    const { svc, notifications } = make({ net: 250 });
+    await svc.handleExpiredRentalHolds(now);
+    expect(notifications.sendRentalHoldReminder).not.toHaveBeenCalled();
+  });
+
+  it('upload-ID and upload-new-ID reminders link the customer to the ID page (no amount)', async () => {
+    for (const [holdState, action] of [['AWAITING_ID', 'UPLOAD_ID'], ['ID_REJECTED', 'UPLOAD_NEW_ID']] as const) {
+      const m = make({ current: { status: 'PENDING_ID_VERIFICATION', holdState, holdExpiresAt: deadline, holdReminderFor: null, pickupDate: new Date('2026-12-05'), downPaymentAmount: 250 } });
+      await m.svc.handleExpiredRentalHolds(now);
+      expect((m.notifications.sendRentalHoldReminder.mock.calls as any[])[0][0]).toMatchObject({ action, amountDue: null });
+    }
+  });
+
+  it('the deadline shown is the earlier of the hold deadline and the end of the pickup day', async () => {
+    const m = make({ current: { status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT', holdExpiresAt: deadline, holdReminderFor: null, pickupDate: new Date('2026-11-20T00:00:00Z'), downPaymentAmount: 250 } });
+    await m.svc.handleExpiredRentalHolds(now);
+    expect((m.notifications.sendRentalHoldReminder.mock.calls as any[])[0][0].deadline).toBe('21 Nov 2026, 00:00 EAT');
+  });
+});
+
+describe('reminderAction + bounded in-flight rule (pure)', () => {
+  it('only customer-actionable states', () => {
+    expect(reminderAction('AWAITING_ID')).toBe('UPLOAD_ID');
+    expect(reminderAction('ID_REJECTED')).toBe('UPLOAD_NEW_ID');
+    expect(reminderAction('AWAITING_DOWN_PAYMENT')).toBe('PAY_DOWN_PAYMENT');
+    for (const s of ['ID_UNDER_REVIEW', 'NO_DOWN_PAYMENT', 'PAYMENT_REVIEW', 'REFUND_DUE', 'REFUND_RECORDED', 'NO_SHOW_REVIEW', null]) {
+      expect(reminderAction(s)).toBeNull();
+    }
+  });
+  it('inflightPaymentProtects + expiryInstant + paymentReviewHold', () => {
+    const exp = new Date('2026-11-20T11:00:00Z');
+    expect(inflightPaymentProtects(new Date('2026-11-20T10:00:00Z'), exp, new Date('2026-11-20T12:59:59Z'))).toBe(true);
+    expect(inflightPaymentProtects(new Date('2026-11-20T10:00:00Z'), exp, new Date('2026-11-20T13:00:00Z'))).toBe(false);
+    expect(inflightPaymentProtects(new Date('2026-11-20T11:00:00Z'), exp, new Date('2026-11-20T11:01:00Z'))).toBe(false);
+    expect(paymentGraceMs(undefined)).toBe(120 * 60e3);
+    expect(paymentGraceMs('30')).toBe(30 * 60e3);
+    const r = { holdExpiresAt: null, pickupDate: new Date('2026-11-20T00:00:00Z') };
+    expect(expiryInstant(r, 'PICKUP_DATE_PASSED')).toEqual(new Date('2026-11-20T21:00:00Z'));
+    expect(expiryInstant({ ...r, holdExpiresAt: exp }, 'HOLD_DEADLINE')).toEqual(exp);
+    expect(paymentReviewHold(new Date('2026-11-20T00:00:00Z'), 72)).toEqual({ holdState: 'PAYMENT_REVIEW', holdExpiresAt: new Date('2026-11-23T00:00:00Z') });
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('ReviewerTwoFactorGuard (owner rule: designated ID reviewers need 2FA)', () => {
+  const ctx = (user: any) => ({ switchToHttp: () => ({ getRequest: () => ({ user }) }) }) as any;
+  const guard = (twoFA: boolean | null) =>
+    new ReviewerTwoFactorGuard({ adminUser: { findFirst: jest.fn(async () => (twoFA === null ? null : { is2FAEnabled: twoFA })) } } as any);
+  it('SUPER_ADMIN and platform admins pass (the owner must not be locked out)', async () => {
+    await expect(guard(false).canActivate(ctx({ id: 'a', role: 'SUPER_ADMIN', isAdmin: true }))).resolves.toBe(true);
+    await expect(guard(false).canActivate(ctx({ id: 'p', isPlatformAdmin: true }))).resolves.toBe(true);
+  });
+  it('a designated reviewer (MANAGER / STAFF role) without 2FA is refused 403 TWO_FA_REQUIRED; with 2FA passes', async () => {
+    await expect(guard(false).canActivate(ctx({ id: 'm', role: 'MANAGER', isAdmin: true }))).rejects.toMatchObject({
+      response: { statusCode: 403, code: 'TWO_FA_REQUIRED' },
+    });
+    await expect(guard(null).canActivate(ctx({ id: 'x', role: 'STAFF', isAdmin: true }))).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(guard(true).canActivate(ctx({ id: 'm', role: 'MANAGER', isAdmin: true }))).resolves.toBe(true);
+  });
+  it('is wired after PermissionGuard on the ID queue, approve, reject and the ID image route', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const idc = fs.readFileSync(path.join(__dirname, '../id-verification/id-verification.controller.ts'), 'utf8');
+    expect((idc.match(/@UseGuards\(AdminGuard, PermissionGuard, ReviewerTwoFactorGuard\)/g) ?? []).length).toBe(3);
+    const up = fs.readFileSync(path.join(__dirname, '../upload/upload.controller.ts'), 'utf8');
+    expect(up).toMatch(/@Get\('id-document\/:tenantScopedKey'\)\s*\n\s*@UseGuards\(AdminGuard, PermissionGuard, ReviewerTwoFactorGuard\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('staff actions: extend a hold, cancel with money held, record a refund', () => {
+  const tenant = { requireId: 't1' } as any;
+  const base = {
+    id: 'r1', tenantId: 't1', userId: 'u1', rentalNumber: 'RNT-1', status: 'ID_VERIFIED', holdState: 'PAYMENT_REVIEW',
+    holdExpiresAt: new Date(Date.now() + 3600e3), pickupDate: new Date(Date.now() + 10 * 86400e3), downPaymentAmount: 250,
+  };
+  function make(rental: any, opts: { net?: number; cas?: number; approved?: boolean } = {}) {
+    const audit = { log: jest.fn() };
+    const tx: any = {
+      $executeRaw: jest.fn(),
+      customerIDDocument: { findFirst: jest.fn(async () => (opts.approved === false ? null : { id: 'd1' })) },
+      rentalOrder: { updateMany: jest.fn(async () => ({ count: opts.cas ?? 1 })) },
+    };
+    const prisma: any = {
+      rentalOrder: { findFirst: jest.fn(async () => rental), updateMany: jest.fn(async () => ({ count: opts.cas ?? 1 })) },
+      payment: { aggregate: jest.fn(async ({ where }: any) => ({ _sum: { amount: where.status === 'COMPLETED' ? opts.net ?? 0 : 0 } })) },
+      $transaction: jest.fn(async (cb: any) => cb(tx)),
+    };
+    const svc = new RentalsService(prisma, tenant, audit as any);
+    jest.spyOn(svc, 'findOne').mockResolvedValue({ id: 'r1' } as any);
+    return { svc, prisma, tx, audit };
+  }
+  const inDays = (d: number) => new Date(Date.now() + d * 86400e3).toISOString();
+
+  it('EXTEND: PAYMENT_REVIEW → back to waiting for the down payment, new deadline, CAS under the customer lock, audited', async () => {
+    const { svc, tx, audit } = make(base);
+    await svc.extendHold('r1', { until: inDays(2), note: 'Customer will pay the rest on Friday' });
+    const u = tx.rentalOrder.updateMany.mock.calls[0][0];
+    expect(u.where).toEqual({ id: 'r1', tenantId: 't1', status: 'ID_VERIFIED', holdState: 'PAYMENT_REVIEW', holdExpiresAt: base.holdExpiresAt });
+    expect(u.data.holdState).toBe('AWAITING_DOWN_PAYMENT');
+    expect(audit.log).toHaveBeenCalledWith('HOLD_EXTENDED', 'Rental', 'r1', expect.objectContaining({ note: 'Customer will pay the rest on Friday' }));
+  });
+
+  it('EXTEND is bounded: future, ≤ 7 days, not past the pickup day, only waiting / review states', async () => {
+    await expect(make(base).svc.extendHold('r1', { until: new Date(Date.now() - 1000).toISOString(), note: 'x' })).rejects.toThrow(/future/);
+    await expect(make(base).svc.extendHold('r1', { until: inDays(8), note: 'x' })).rejects.toThrow(/at most 7 days/);
+    await expect(make({ ...base, pickupDate: new Date(Date.now() + 86400e3) }).svc.extendHold('r1', { until: inDays(3), note: 'x' })).rejects.toThrow(/reschedule the pickup first/);
+    for (const holdState of ['ID_UNDER_REVIEW', 'NO_DOWN_PAYMENT', 'REFUND_DUE', 'NO_SHOW_REVIEW']) {
+      await expect(make({ ...base, holdState }).svc.extendHold('r1', { until: inDays(1), note: 'x' })).rejects.toThrow(/Only an unconfirmed booking/);
+    }
+    await expect(make({ ...base, status: 'DOWN_PAYMENT_PAID' }).svc.extendHold('r1', { until: inDays(1), note: 'x' })).rejects.toThrow(/Only an unconfirmed booking/);
+    await expect(make(base, { cas: 0 }).svc.extendHold('r1', { until: inDays(1), note: 'x' })).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('cancelling a booking that holds money flags it REFUND_DUE (audited); without money it is a plain cancel', async () => {
+    const withMoney = make({ ...base, status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT' }, { net: 50 });
+    await withMoney.svc.updateStatus('r1', 'CANCELLED');
+    expect(withMoney.prisma.rentalOrder.updateMany.mock.calls[0][0].data).toMatchObject({ status: 'CANCELLED', holdState: 'REFUND_DUE', holdExpiresAt: null });
+    expect(withMoney.audit.log).toHaveBeenCalledWith('UPDATE_STATUS', 'Rental', 'r1', expect.objectContaining({ to: 'CANCELLED', holdState: 'REFUND_DUE' }));
+    const noMoney = make({ ...base, status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT' }, { net: 0 });
+    await noMoney.svc.updateStatus('r1', 'CANCELLED');
+    expect(noMoney.prisma.rentalOrder.updateMany.mock.calls[0][0].data).toEqual({ status: 'CANCELLED' });
+  });
+
+  it('REFUND_RECORDED: only from CANCELLED + REFUND_DUE, never more than is held, CAS, audited', async () => {
+    const ok = make({ ...base, status: 'CANCELLED', holdState: 'REFUND_DUE' }, { net: 50 });
+    await ok.svc.recordRefund('r1', { amount: 50, method: 'MOBILE_MONEY', reference: 'MP123', note: 'Full refund' });
+    expect(ok.prisma.rentalOrder.updateMany).toHaveBeenCalledWith({
+      where: { id: 'r1', tenantId: 't1', status: 'CANCELLED', holdState: 'REFUND_DUE' },
+      data: { holdState: 'REFUND_RECORDED' },
+    });
+    expect(ok.audit.log).toHaveBeenCalledWith('HOLD_REFUND_RECORDED', 'Rental', 'r1', { amount: 50, held: 50, method: 'MOBILE_MONEY', reference: 'MP123', note: 'Full refund' });
+    await expect(make({ ...base, status: 'CANCELLED', holdState: 'REFUND_DUE' }, { net: 50 }).svc.recordRefund('r1', { amount: 60, method: 'CASH', note: 'x' })).rejects.toThrow(/more than the 50 TZS held/);
+    await expect(make({ ...base, status: 'ID_VERIFIED', holdState: 'PAYMENT_REVIEW' }, { net: 50 }).svc.recordRefund('r1', { amount: 50, method: 'CASH', note: 'x' })).rejects.toThrow(/Only a cancelled booking marked REFUND_DUE/);
+    await expect(make({ ...base, status: 'CANCELLED', holdState: 'REFUND_DUE' }, { net: 50, cas: 0 }).svc.recordRefund('r1', { amount: 50, method: 'CASH', note: 'x' })).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('routes: extend needs rentals:update-status, refund-recorded needs payments:manage', () => {
+    expect(Reflect.getMetadata(PERMISSIONS_KEY, RentalsController.prototype.extendHold)).toEqual(['rentals:update-status']);
+    expect(Reflect.getMetadata(PERMISSIONS_KEY, RentalsController.prototype.recordRefund)).toEqual(['payments:manage']);
   });
 });
 
@@ -408,7 +707,7 @@ describe('IdVerificationService.approve leaves expired waiting bookings to the e
 });
 
 describe('a payment completing on a booking the expiry job already released', () => {
-  it('is never re-opened or confirmed: logged for refund review', async () => {
+  it('is never re-opened or confirmed: logged and flagged REFUND_DUE for finance', async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { PaymentSettlementService } = require('../payments/payment-settlement.service');
     const prisma: any = {
@@ -423,7 +722,10 @@ describe('a payment completing on a booking the expiry job already released', ()
     jest.spyOn(svc, 'sumCompleted').mockResolvedValue(250);
     const warn = jest.spyOn((svc as any).logger, 'warn').mockImplementation(() => undefined);
     await svc.updateRentalPaymentStatus('r1', 't1');
-    expect(prisma.rentalOrder.updateMany).not.toHaveBeenCalled();
+    expect(prisma.rentalOrder.updateMany).toHaveBeenCalledTimes(1);
+    const u = prisma.rentalOrder.updateMany.mock.calls[0][0];
+    expect(u.where).toMatchObject({ id: 'r1', tenantId: 't1', status: 'CANCELLED' });
+    expect(u.data).toEqual({ holdState: 'REFUND_DUE', holdExpiresAt: null }); // status stays CANCELLED
     expect(warn.mock.calls[0][0]).toMatch(/REVIEW: rental RNT-1 is CANCELLED .*refund review/);
   });
 });
