@@ -130,7 +130,12 @@ describe('cancellations, refunds, deposits and the payment cap', () => {
   it('a CANCELLED booking never advances, even if enough was paid; its stored amount is untouched', async () => {
     const prisma: any = makePrisma(63, 63, 'CANCELLED');
     await new PaymentSettlementService(prisma).updateRentalPaymentStatus('r1', 't1');
-    expect(prisma.rentalOrder.updateMany).not.toHaveBeenCalled();
+    // PR #16 may flag the held money (holdState REFUND_DUE); it never advances the
+    // booking or rewrites the stored down payment.
+    for (const [arg] of prisma.rentalOrder.updateMany.mock.calls as any[]) {
+      expect(arg.data.status).toBeUndefined();
+      expect(arg.data.downPaymentAmount).toBeUndefined();
+    }
     const svc = readFileSync(join(__dirname, 'rentals.service.ts'), 'utf8');
     // no cancellation / status / reschedule path rewrites the stored down payment
     // PR #16's booking hold READS the stored amount (`downPaymentAmount: Number(...downPaymentAmount)`
