@@ -1207,7 +1207,8 @@ class AdminApiClient {
     return this.patch<any>(`/cms/banners/${id}/restore`, {});
   }
   getPages() {
-    return this.get<any[]>('/cms/pages');
+    // Editor list incl. drafts (admin-only). The public /cms/pages is published-only.
+    return this.get<any[]>('/cms/pages/admin');
   }
   getPage(slug: string) {
     return this.get<any>(`/cms/pages/${slug}`);
