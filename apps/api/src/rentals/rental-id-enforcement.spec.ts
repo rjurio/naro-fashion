@@ -434,6 +434,9 @@ describe('API-level access control', () => {
       'rentals/refund-due.ts',
       // POS rental MVP M1: writes holdState REFUND_SETTLED / REFUND_DUE only, never a status.
       'rentals/rental-money.service.ts',
+      // R2: an APPROVED gown count allocates open bookings to gowns
+      // (rentalUnitId only, under the booking lock), never a status.
+      'rentals/rental-units.service.ts',
       'rentals/rentals.service.ts',
       'scheduler/scheduler.service.ts',
     ]);

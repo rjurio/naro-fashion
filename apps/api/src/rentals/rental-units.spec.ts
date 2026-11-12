@@ -9,14 +9,15 @@ import { findRentalAvailability } from './rental-availability';
 
 const DAY = 86400e3;
 const d = (n: number) => new Date(Date.UTC(2027, 0, 1) + n * DAY);
-type Unit = { id: string; code: string; status?: string; fits?: string[]; blocks?: Array<[number, number]> };
+type Unit = { id: string; code: string; status?: string; fits?: string[]; blocks?: Array<[number, number]>; verified?: boolean };
 type Booking = { id: string; unit?: string | null; start: number; end: number; status?: string; actual?: number };
 
 function db(units: Unit[], bookings: Booking[] = []) {
   return {
     rentalUnit: {
-      findMany: jest.fn(async () =>
-        units.map((u) => ({
+      // Honours the R2 filter: only gowns verified by an approved count.
+      findMany: jest.fn(async ({ where }: any = {}) =>
+        units.filter((u) => !where?.trackingVerifiedAt || u.verified !== false).map((u) => ({
           id: u.id, code: u.code, status: u.status ?? 'ACTIVE',
           fits: (u.fits ?? []).map((variantId) => ({ variantId })),
           blocks: (u.blocks ?? []).map(([a, b]) => ({ startsAt: d(a), endsAt: d(b) })),
@@ -37,7 +38,9 @@ function db(units: Unit[], bookings: Booking[] = []) {
 }
 const q = (over: any = {}) => ({
   tenantId: 't1',
-  product: { id: 'p1', availabilityMode: 'RENTAL_ONLY', isActive: true },
+  // R2: per-gown tracking switched on by an approved count (the cases below
+  // that test the switch itself override this).
+  product: { id: 'p1', availabilityMode: 'RENTAL_ONLY', isActive: true, rentalUnitTrackingActivatedAt: d(-1) },
   startDate: d(10), returnDate: d(12), bufferDays: 2, variantId: 'M', now: d(0), ...over,
 });
 
@@ -106,5 +109,35 @@ describe('findRentalAvailability — physical units', () => {
 
   it('inactive / non-rentable product refused before any unit logic', async () => {
     expect((await findRentalAvailability(db([{ id: 'u1', code: 'A' }]), q({ product: { id: 'p1', availabilityMode: 'PURCHASE_ONLY' } }))).block).toBe('NOT_RENTABLE_PRODUCT');
+  });
+});
+
+describe('R2: registering gowns never changes availability until an approved count activates the product', () => {
+  const notActivated = { id: 'p1', availabilityMode: 'RENTAL_ONLY', isActive: true, rentalUnitTrackingActivatedAt: null };
+  const twoGowns = [{ id: 'u1', code: 'G-01', fits: ['M'] }, { id: 'u2', code: 'G-02', fits: ['M'] }];
+
+  it('units registered but the product not activated: the conservative legacy rule (one booking at a time)', async () => {
+    const one = [{ id: 'b1', start: 10, end: 12 }];
+    expect(await findRentalAvailability(db(twoGowns, one), q({ product: notActivated }))).toEqual({ block: 'DATES_TAKEN', unitId: null, mode: 'LEGACY' });
+    expect(await findRentalAvailability(db(twoGowns), q({ product: notActivated }))).toEqual({ block: null, unitId: null, mode: 'LEGACY' });
+  });
+
+  it('activation flag unknown on the passed product: read from the database (not activated → legacy)', async () => {
+    const dbx: any = db(twoGowns, [{ id: 'b1', start: 10, end: 12 }]);
+    dbx.product = { findFirst: jest.fn(async () => ({ rentalUnitTrackingActivatedAt: null })) };
+    const r = await findRentalAvailability(dbx, q({ product: { id: 'p1', availabilityMode: 'RENTAL_ONLY', isActive: true } }));
+    expect(r.mode).toBe('LEGACY');
+    expect(dbx.product.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'p1', tenantId: 't1' } }));
+  });
+
+  it('activated: only VERIFIED gowns count; a newly registered (uncounted) gown adds no capacity', async () => {
+    const units = [{ id: 'u1', code: 'G-01', fits: ['M'] }, { id: 'u2', code: 'G-02', fits: ['M'], verified: false }];
+    const r = await findRentalAvailability(db(units, [{ id: 'b1', unit: 'u1', start: 10, end: 12 }]), q());
+    expect(r).toEqual({ block: 'DATES_TAKEN', unitId: null, mode: 'UNITS' });
+  });
+
+  it('activated but no verified gown at all: legacy rule (never "unlimited")', async () => {
+    const units = [{ id: 'u1', code: 'G-01', verified: false }];
+    expect((await findRentalAvailability(db(units, [{ id: 'b1', start: 10, end: 12 }]), q())).mode).toBe('LEGACY');
   });
 });

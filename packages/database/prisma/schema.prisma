@@ -518,6 +518,11 @@ model Product {
   // and tiny since the column is null on every row at rollout.
   @@index([archivedAt])
   rentalUnits RentalUnit[]
+  // Per-gown availability is used ONLY after an independently approved
+  // physical count (RentalUnitTrackingChange). Null = the conservative legacy
+  // rule (one booking at a time), whatever units are registered.
+  rentalUnitTrackingActivatedAt DateTime?
+  rentalUnitTrackingChanges     RentalUnitTrackingChange[]
 }
 
 model ProductVariant {
@@ -1005,6 +1010,10 @@ model RentalUnit {
   status         String    @default("ACTIVE") // ACTIVE | MAINTENANCE | RETIRED | SOLD | LOST
   conditionNotes String?
   acquiredAt     DateTime?
+  // Set when an approved count included this gown; null = not counted yet
+  // (never allocated). Cleared when its sizes change or it comes back into
+  // service, so it must be counted again.
+  trackingVerifiedAt DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -1983,4 +1992,33 @@ model IdempotencyKey {
   @@unique([principalId, key])
   @@index([tenantId])
   @@index([createdAt])
+}
+
+/// Request → independent approval to switch a product to per-gown
+/// availability (or re-count after adding gowns). The count must equal the
+/// registered serviceable gowns; the approval re-checks the gown set and
+/// re-plans every open booking under the product booking lock.
+model RentalUnitTrackingChange {
+  id              String    @id @default(cuid())
+  tenantId        String?
+  productId       String
+  action          String    // ACTIVATE | DEACTIVATE
+  status          String    @default("REQUESTED") // REQUESTED | APPLIED | REJECTED | CANCELLED | STALE
+  countedQuantity Int?      // ACTIVATE: the physical count
+  unitIds         String[]  // the gowns the count covers (ACTIVATE)
+  unitSetHash     String?
+  plan            Json?     // dry-run: open bookings → gown
+  note            String?
+  requestedById   String
+  requestedAt     DateTime  @default(now())
+  decidedById     String?
+  decidedAt       DateTime?
+  decisionNote    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@index([productId, status])
 }

@@ -35,6 +35,8 @@ const PERMISSIONS = [
   { code: 'rentals:refund-request', name: 'Request Rental Refunds', module: 'rentals', action: 'refund-request' },
   { code: 'refunds:approve', name: 'Approve Refunds (second person)', module: 'payments', action: 'approve-refund' },
   { code: 'rentals:manage-inventory', name: 'Manage Rental Units', module: 'rentals', action: 'manage-inventory' },
+  // R2: the independent reviewer who approves a physical count before a product switches to per-gown availability.
+  { code: 'rentals:approve-unit-tracking', name: 'Approve Gown Counts (second person)', module: 'rentals', action: 'approve-unit-tracking' },
   // customers
   { code: 'customers:view', name: 'View Customers', module: 'customers', action: 'view' },
   { code: 'customers:suspend', name: 'Suspend Customers', module: 'customers', action: 'suspend' },
