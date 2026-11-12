@@ -34,6 +34,29 @@ describe('assertHandoverSafeguard', () => {
     expect(e.getResponse().code).toBe('HANDOVER_SAFEGUARD_UNAVAILABLE');
   });
 
+  it('MISSING configuration after R3: no switch row, but the R3 table exists → still refused (fail closed)', async () => {
+    const d: any = { ...db(null), $queryRaw: jest.fn().mockResolvedValue([{ t: '"RentalChecklistSnapshot"' }]) };
+    const e: any = await assertHandoverSafeguard(d, 't1').catch((x) => x);
+    expect(e.getResponse().code).toBe('HANDOVER_REQUIRES_CHECKLIST_BUILD');
+  });
+
+  it('switch explicitly OFF but R3 deployed → still refused (no break-glass once enforcement exists)', async () => {
+    const d: any = { ...db({ checklistRequired: false }), $queryRaw: jest.fn().mockResolvedValue([{ t: '"RentalChecklistSnapshot"' }]) };
+    expect((await assertHandoverSafeguard(d, 't1').catch((x) => x)).getResponse().code).toBe('HANDOVER_REQUIRES_CHECKLIST_BUILD');
+  });
+
+  it('the R3 marker check failing → refused (unavailable), never allowed', async () => {
+    const d: any = { ...db(null), $queryRaw: jest.fn().mockRejectedValue(new Error('db down')) };
+    expect((await assertHandoverSafeguard(d, 't1').catch((x) => x)).getResponse().code).toBe('HANDOVER_SAFEGUARD_UNAVAILABLE');
+  });
+
+  it('pre-R3 database (no marker table, switch off) → normal gate; the R3 build itself is not blocked by its own table', async () => {
+    const pre: any = { ...db(null), $queryRaw: jest.fn().mockResolvedValue([{ t: null }]) };
+    await expect(assertHandoverSafeguard(pre, 't1')).resolves.toBeUndefined();
+    const r3: any = { ...db({ checklistRequired: true }), $queryRaw: jest.fn().mockResolvedValue([{ t: '"RentalChecklistSnapshot"' }]) };
+    await expect(assertHandoverSafeguard(r3, 't1', true)).resolves.toBeUndefined();
+  });
+
   it('reads the switch for the current shop only', async () => {
     const d = db(null);
     await assertHandoverSafeguard(d, 'shop-a');

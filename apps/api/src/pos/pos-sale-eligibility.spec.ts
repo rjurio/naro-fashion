@@ -43,7 +43,7 @@ function makeService(modes: Record<string, Mode>) {
       findFirst: jest.fn(async () => ({ stock: 9 })),
     },
     inventoryTransaction: { create: jest.fn().mockResolvedValue({}) },
-    posSession: { update: jest.fn().mockResolvedValue({}) },
+    posSession: { update: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     layaway: { create: jest.fn(async ({ data }: any) => ({ id: 'l1', ...data })) },
   };
   const prisma: any = {
