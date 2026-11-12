@@ -60,8 +60,8 @@ export class AdminUsersController {
 
   @Delete(':id')
   @RequiresPermission('admins:delete')
-  remove(@Param('id') id: string, @CurrentUser('id') performedById: string) {
-    return this.adminUsersService.remove(id, performedById);
+  remove(@Param('id') id: string, @CurrentUser('id') performedById: string, @CurrentUser() actor: AdminActor) {
+    return this.adminUsersService.remove(id, performedById, actor);
   }
 
   @Patch(':id/toggle')
@@ -76,8 +76,8 @@ export class AdminUsersController {
 
   @Patch(':id/unlock')
   @RequiresPermission('admins:unlock')
-  unlock(@Param('id') id: string) {
-    return this.adminUsersService.unlock(id);
+  unlock(@Param('id') id: string, @CurrentUser() actor: AdminActor) {
+    return this.adminUsersService.unlock(id, actor);
   }
 
   @Post(':id/roles')
@@ -97,8 +97,9 @@ export class AdminUsersController {
     @Param('id') id: string,
     @Param('roleId') roleId: string,
     @CurrentUser('id') performedById: string,
+    @CurrentUser() actor: AdminActor,
   ) {
-    return this.adminUsersService.removeRole(id, roleId, performedById);
+    return this.adminUsersService.removeRole(id, roleId, performedById, actor);
   }
 
   @Get(':id/activity')

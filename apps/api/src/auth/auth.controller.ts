@@ -390,7 +390,7 @@ export class AuthController {
     // Storefront sends X-Tenant-Id → tenant-scoped customer reset.
     // Admin app sends no tenant → admin reset.
     const tenantId = (req as any).tenantId ?? req.headers['x-tenant-id'];
-    return this.authService.forgotPassword(body.email, tenantId);
+    return this.authService.forgotPassword(body.email, tenantId, { ipAddress: req.ip });
   }
 
   @Public()
@@ -399,7 +399,7 @@ export class AuthController {
   @UseGuards(CredentialAttemptGuard)
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
-  resetPassword(@Body() body: ResetPasswordDto) {
-    return this.authService.resetPassword(body.token, body.newPassword);
+  resetPassword(@Body() body: ResetPasswordDto, @Req() req: Request) {
+    return this.authService.resetPassword(body.token, body.newPassword, { ipAddress: req.ip });
   }
 }

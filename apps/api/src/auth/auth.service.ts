@@ -42,6 +42,7 @@ import {
   adminLockClears,
   isIpBlockedForAccount,
 } from './util/admin-lockout';
+import { lockoutAlerts, recordSecurityEvent } from '../audit/security-audit';
 
 // Setting keys used to override JWT lifetimes per-tenant via the CMS settings UI.
 export const ACCESS_EXPIRES_SETTING_KEY = 'auth_access_token_expires';
@@ -476,18 +477,22 @@ export class AuthService {
         where: { id: row.id },
         data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
       });
-      throw await refuse();
+      const refusal = await refuse();
+      await this.onAccountLocked(kind, row, tenantId, meta, 'password');
+      throw refusal;
     }
 
     const valid = await bcrypt.compare(password, row.passwordHash);
     if (!valid) {
-      if (reserved.failedLoginAttempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
+      const lockedNow = reserved.failedLoginAttempts >= MAX_FAILED_LOGIN_ATTEMPTS;
+      if (lockedNow) {
         await delegate.update({
           where: { id: row.id },
           data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
         });
       }
       await this.logLoginAttempt(row.email, false, tenantId, meta);
+      if (lockedNow) await this.onAccountLocked(kind, row, tenantId, meta, 'password');
       return false;
     }
 
@@ -507,6 +512,49 @@ export class AuthService {
     });
     await this.logLoginAttempt(row.email, true, tenantId, meta);
     return true;
+  }
+
+  /**
+   * An admin / platform-admin account was just locked (password tier, or the
+   * two-factor code step). Audited (actor = system, never the email or any
+   * secret) plus a throttled operator warning that flags repeated lockouts.
+   * Never throws.
+   */
+  private async onAccountLocked(
+    kind: 'admin' | 'platform',
+    row: { id: string; email: string },
+    tenantId: string | null,
+    meta: LoginMeta | undefined,
+    step: 'password' | '2fa',
+  ): Promise<void> {
+    try {
+      let distinctIps: number | undefined;
+      try {
+        const ips = await (this.prisma as any).loginAttempt.findMany({
+          where: { email: row.email, isAdmin: true, success: false, attemptedAt: { gt: new Date(Date.now() - ADMIN_LOCK_WINDOW_MS) } },
+          select: { ipAddress: true },
+          distinct: ['ipAddress'],
+          take: 500,
+        });
+        distinctIps = Array.isArray(ips) ? ips.length : undefined;
+      } catch {
+        distinctIps = undefined;
+      }
+      lockoutAlerts.onLock(kind, row.id, { distinctIps, tenantId, step });
+      await recordSecurityEvent(this.prisma as any, {
+        action: step === '2fa' ? 'ADMIN_2FA_LOCKED' : 'ADMIN_ACCOUNT_LOCKED',
+        result: 'BLOCKED',
+        tenantId,
+        actor: { type: 'system' },
+        targetAdminId: kind === 'admin' ? row.id : null,
+        targetType: kind === 'platform' ? 'PlatformAdmin' : undefined,
+        targetId: row.id,
+        ipAddress: meta?.ipAddress ?? null,
+        details: { lockMinutes: Math.round(LOCKOUT_DURATION_MS / 60000), distinctIps, step },
+      });
+    } catch (err: any) {
+      this.logger.warn(`Failed to record account lock: ${err?.message}`);
+    }
   }
 
   private async logLoginAttempt(email: string, success: boolean, tenantId: string | null | undefined, meta?: LoginMeta) {
@@ -1281,6 +1329,7 @@ export class AuthService {
       const onAccount = this.twoFaAccountFailures.hit(accountKey);
       await this.logLoginAttempt(row.email, false, tenantId, meta);
       await this.auditTwoFactor(kind, row, '2FA_VERIFY_FAILED', meta, { onChallenge, onAccount });
+      if (onAccount === TWO_FA_ACCOUNT_LIMIT) await this.onAccountLocked(kind, row, tenantId, meta, '2fa');
       if (onChallenge >= TWO_FA_PER_CHALLENGE_LIMIT) {
         // burned: sign in with the password again
         this.usedChallenges.set(payload.jti, Date.now() + TWO_FA_CHALLENGE_TTL_MS);
@@ -1344,7 +1393,7 @@ export class AuthService {
    *   `{ email, tenantId }`, link built from the tenant's own domain.
    * - Without a tenant (admin app) → AdminUser reset, link to ADMIN_URL.
    */
-  async forgotPassword(email: unknown, rawTenantId?: unknown) {
+  async forgotPassword(email: unknown, rawTenantId?: unknown, meta?: LoginMeta) {
     const generic = { message: 'If this email exists, a password reset link has been sent.' };
     if (typeof email !== 'string' || !email || email.length > 254) return generic;
 
@@ -1372,6 +1421,16 @@ export class AuthService {
             this.logger.error(`Failed to send password reset email: ${err?.message}`),
           );
         this.logger.log(`[PASSWORD RESET] Reset link generated for an admin account`);
+        // Audited without the token or the link; the response stays generic.
+        await recordSecurityEvent(this.prisma as any, {
+          action: 'PASSWORD_RESET_REQUESTED',
+          result: 'SUCCESS',
+          tenantId: admin.tenantId ?? null,
+          actor: { type: 'anonymous' },
+          targetAdminId: admin.id,
+          ipAddress: meta?.ipAddress ?? null,
+          details: { linkValidMinutes: 30 },
+        });
       }
       return generic;
     }
@@ -1405,7 +1464,7 @@ export class AuthService {
     return generic;
   }
 
-  async resetPassword(token: unknown, newPassword: string) {
+  async resetPassword(token: unknown, newPassword: string, meta?: LoginMeta) {
     if (typeof token !== 'string' || !token) {
       throw new UnauthorizedException('Invalid or expired reset token');
     }
@@ -1435,6 +1494,15 @@ export class AuthService {
       // limit and every per-IP block for this account.
       this.twoFaAccountFailures.clear(`admin:${admin.id}`);
       adminLockClears.mark(admin.email);
+      await recordSecurityEvent(this.prisma as any, {
+        action: 'PASSWORD_RESET_COMPLETED',
+        result: 'SUCCESS',
+        tenantId: admin.tenantId ?? null,
+        actor: { type: 'anonymous' },
+        targetAdminId: admin.id,
+        ipAddress: meta?.ipAddress ?? null,
+        details: { sessionsRevoked: true, lockCleared: true, twoFactorStillRequired: !!admin.is2FAEnabled },
+      });
       return { message: 'Password reset successfully' };
     }
 
