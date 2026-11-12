@@ -22,6 +22,8 @@ const {
   rentalHref,
   parseRentalQuote,
   displayRentalFee,
+  needsDownPayment,
+  changedTermsFromError,
   toCardProduct,
 } = ui;
 
@@ -124,6 +126,22 @@ describe('parseRentalQuote (the page shows the server quote, never its own arith
     expect(src).not.toMatch(/export function rentalQuote/);
     expect(src).not.toMatch(/\/ 100\)|\* 0\.1\b|: 25\b/);
     expect(src).toMatch(/export function parseRentalQuote/);
+  });
+});
+
+describe('needsDownPayment / changedTermsFromError', () => {
+  const q = { rentalFee: 140000, deposit: 350000, downPaymentPct: 30, downPayment: 42000, total: 490000, remaining: 448000 };
+  it('a 0 % quote needs no down payment; any positive amount does', () => {
+    expect(needsDownPayment({ ...q, downPaymentPct: 0, downPayment: 0 })).toBe(false);
+    expect(needsDownPayment(q)).toBe(true);
+  });
+  it('reads the new terms from a 409 RENTAL_TERMS_CHANGED body', () => {
+    expect(changedTermsFromError({ code: 'RENTAL_TERMS_CHANGED', current: q })).toEqual(q);
+  });
+  it('ignores other 409s and malformed "current" terms', () => {
+    expect(changedTermsFromError({ code: 'NOT_AVAILABLE', current: q })).toBeNull();
+    expect(changedTermsFromError({ code: 'RENTAL_TERMS_CHANGED', current: { ...q, downPaymentPct: 150 } })).toBeNull();
+    expect(changedTermsFromError(null)).toBeNull();
   });
 });
 

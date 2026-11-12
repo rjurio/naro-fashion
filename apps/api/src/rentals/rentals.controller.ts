@@ -101,6 +101,14 @@ export class RentalsController {
    * percentage and amount instead of computing its own. Amounts only, same
    * product visibility as availability.
    */
+  /** PUBLIC: { downPaymentRequired } for the shop (catalogue copy only). */
+  @Public()
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('terms-summary')
+  getTermsSummary() {
+    return this.rentalsService.getTermsSummary();
+  }
+
   @Public()
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @Get('quote/:productId')

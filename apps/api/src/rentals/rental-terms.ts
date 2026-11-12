@@ -10,9 +10,16 @@
  *   1. the product's own `rentalDownPaymentPct` (an explicit override);
  *   2. the shop's `RentalPolicy.defaultDownPaymentPct`;
  *   3. the platform default, 25 %.
- * A level is used only if it is a finite number from 0 to 100. A missing or
- * invalid value (null, negative, over 100, not a number) falls through to the
- * next level; it never becomes an obligation of its own.
+ * A level is used only if it is a finite number from 0 to 100 (0 % is valid:
+ * no down payment). A missing value falls through silently; an INVALID one
+ * (negative, over 100, not a number) falls through and is reported in
+ * `invalidSettings` so the caller can log a warning. It never becomes an
+ * obligation of its own.
+ *
+ * NOTE: `Product.rentalDownPaymentPct` has a database default of 25 and the
+ * admin product form cannot change or clear it, so in practice every product
+ * carries an explicit 25 and the shop default is only reached for products
+ * whose column is NULL.
  *
  * Release note: when this branch is rebased onto PR #12, `downPayment` must
  * call `computeDownPayment(rentalFee, pct)` from `./down-payment` (rounded up
@@ -22,6 +29,7 @@
 export const DEFAULT_DOWN_PAYMENT_PCT = 25;
 
 export type DownPaymentSource = 'product' | 'shop' | 'default';
+export type TermsSetting = 'product' | 'shop';
 
 type Numeric = number | string | { toString(): string } | null | undefined;
 
@@ -49,10 +57,28 @@ export interface RentalTerms {
   total: number;
   /** Total minus the down payment (due before dispatch). */
   remaining: number;
+  /** Settings that were present but invalid and therefore ignored. */
+  invalidSettings: TermsSetting[];
+  /** false when the amounts can't be used (no usable rental fee, bad deposit). */
+  usable: boolean;
+}
+
+/** The public subset: what the storefront needs and nothing else. */
+export interface PublicRentalQuote {
+  rentalFee: number;
+  deposit: number;
+  downPaymentPct: number;
+  downPayment: number;
+  total: number;
+  remaining: number;
+}
+
+function isMissing(v: Numeric): boolean {
+  return v === null || v === undefined || v === '';
 }
 
 function validPct(v: Numeric): number | null {
-  if (v === null || v === undefined || v === '') return null;
+  if (isMissing(v)) return null;
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
 }
@@ -60,12 +86,20 @@ function validPct(v: Numeric): number | null {
 export function effectiveDownPaymentPct(
   productPct: Numeric,
   shopPct: Numeric,
-): { pct: number; source: DownPaymentSource } {
+): { pct: number; source: DownPaymentSource; invalid: TermsSetting[] } {
+  const invalid: TermsSetting[] = [];
   const p = validPct(productPct);
-  if (p !== null) return { pct: p, source: 'product' };
+  if (p !== null) return { pct: p, source: 'product', invalid };
+  if (!isMissing(productPct)) invalid.push('product');
   const s = validPct(shopPct);
-  if (s !== null) return { pct: s, source: 'shop' };
-  return { pct: DEFAULT_DOWN_PAYMENT_PCT, source: 'default' };
+  if (s !== null) return { pct: s, source: 'shop', invalid };
+  if (!isMissing(shopPct)) invalid.push('shop');
+  return { pct: DEFAULT_DOWN_PAYMENT_PCT, source: 'default', invalid };
+}
+
+/** Effective SHOP-level percentage (no product): for catalogue copy. */
+export function shopDownPaymentPct(shopPct: Numeric): number {
+  return validPct(shopPct) ?? DEFAULT_DOWN_PAYMENT_PCT;
 }
 
 export function rentalTerms(
@@ -80,12 +114,16 @@ export function rentalTerms(
   const deposit = product.rentalDepositAmount
     ? Number(product.rentalDepositAmount)
     : 0;
-  const { pct, source } = effectiveDownPaymentPct(
+  const { pct, source, invalid } = effectiveDownPaymentPct(
     product.rentalDownPaymentPct,
     policy?.defaultDownPaymentPct,
   );
   const downPayment = rentalFee * (pct / 100);
   const total = rentalFee + deposit;
+  const usable =
+    Number.isFinite(rentalFee) && rentalFee > 0 &&
+    Number.isFinite(deposit) && deposit >= 0 &&
+    Number.isFinite(downPayment) && downPayment >= 0 && downPayment <= rentalFee;
   return {
     rentalFee,
     deposit,
@@ -94,5 +132,38 @@ export function rentalTerms(
     downPayment,
     total,
     remaining: total - downPayment,
+    invalidSettings: invalid,
+    usable,
   };
+}
+
+export function publicQuote(t: RentalTerms): PublicRentalQuote {
+  return {
+    rentalFee: t.rentalFee,
+    deposit: t.deposit,
+    downPaymentPct: t.downPaymentPct,
+    downPayment: t.downPayment,
+    total: t.total,
+    remaining: t.remaining,
+  };
+}
+
+const cents = (n: number) => Math.round(n * 100);
+
+/**
+ * The amounts the customer saw (sent back with the booking) vs the amounts
+ * the booking would store now. Any difference of a cent or more is a change
+ * of terms the customer has not seen. Fields the client didn't send are not
+ * compared (old clients, or the quote couldn't be loaded).
+ */
+export function quotedTermsDiffer(
+  quoted: { quotedRentalFee?: number; quotedDeposit?: number; quotedDownPayment?: number },
+  t: RentalTerms,
+): boolean {
+  const pairs: Array<[number | undefined, number]> = [
+    [quoted.quotedRentalFee, t.rentalFee],
+    [quoted.quotedDeposit, t.deposit],
+    [quoted.quotedDownPayment, t.downPayment],
+  ];
+  return pairs.some(([q, now]) => q !== undefined && q !== null && cents(Number(q)) !== cents(now));
 }

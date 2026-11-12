@@ -95,7 +95,10 @@ describe('storefront rental wiring', () => {
     'product.rentalDownPaymentLine': 'Malipo ya awali (kianzio): {pct}% ya ada ya kukodi ({amount})',
     'product.chooseRentalDates': 'Kodi — chagua tarehe',
     'rentals.downPayment': 'Lipa kianzio cha 25%',
-    'rentals.payDeposit': 'Lipa kianzio cha 25%',
+    // Owner wording 2026-11-12: no fixed percentage in "How it works".
+    'rentals.payDeposit': 'Lipa kianzio',
+    'rentals.payDepositDesc':
+      'Lipa kianzio kinachohitajika ili kuthibitisha nafasi yako ya kukodi. Kiasi halisi kitaonyeshwa kabla ya kuthibitisha.',
     'rentals.downPaymentLine': 'Kianzio ({pct}% ya ada ya kukodi) — kinahitajika kuthibitisha nafasi',
     'rentals.remainingBeforeDispatch': 'Lipa salio na amana inayorejeshwa kabla ya kuchukua bidhaa',
   };
@@ -128,8 +131,36 @@ describe('storefront rental wiring', () => {
     }
     expect(at(sw, 'product.rentalDepositLine')).toMatch(/amana/i);
     expect(at(sw, 'rentals.remainingBeforeDispatch')).toMatch(/amana inayorejeshwa/);
-    // the step's own description confirms it is the down payment that secures the dates
-    expect(at(JSON.parse(read('messages/en.json')), 'rentals.payDepositDesc')).toMatch(/^Secures your dates/);
+    // the step's own description confirms it is the down payment that confirms the booking
+    expect(at(JSON.parse(read('messages/en.json')), 'rentals.payDepositDesc')).toBe(
+      'Pay the required down payment to confirm your rental booking. The exact amount will be shown before confirmation.',
+    );
+  });
+
+  it('"How it works" names no fixed percentage, and adapts when the shop needs no down payment', () => {
+    const en = JSON.parse(read('messages/en.json'));
+    const sw = JSON.parse(read('messages/sw.json'));
+    for (const k of ['rentals.payDeposit', 'rentals.payDepositDesc', 'rentals.noDownPaymentStep', 'rentals.noDownPaymentStepDesc']) {
+      expect([k, /\d\s*%/.test(at(en, k)), /\d\s*%/.test(at(sw, k))]).toEqual([k, false, false]);
+    }
+    // no wording that implies money is taken online
+    expect(at(en, 'rentals.payDepositDesc')).not.toMatch(/online|card|checkout/i);
+    expect(at(sw, 'rentals.noDownPaymentStepDesc')).toMatch(/Hakuna kianzio/);
+    const page = read('app/rentals/page.tsx');
+    expect(page).toMatch(/rentalsApi\.termsSummary\(/);
+    expect(page).toMatch(/downPaymentRequired \? t\('rentals\.payDeposit'\) : t\('rentals\.noDownPaymentStep'\)/);
+    // unknown (loading / failed) defaults to the general wording
+    expect(page).toMatch(/useState\(true\)/);
+  });
+
+  it('booking page sends the amounts it showed and handles a terms change without booking', () => {
+    const s = read('app/rentals/[slug]/page.tsx');
+    expect(s).toMatch(/quotedRentalFee: quote\.rentalFee, quotedDeposit: quote\.deposit, quotedDownPayment: quote\.downPayment/);
+    expect(s).toMatch(/changedTermsFromError\(err\.data\)/);
+    expect(s).toMatch(/data-testid="rental-terms-changed"/);
+    // the terms-changed branch returns before the success navigation
+    const i = s.indexOf('changedTermsFromError(err.data)');
+    expect(s.slice(i, i + 400)).toMatch(/return;/);
   });
 
   // Owner rule 2026-11-11: the CUSTOMER renting -> kodi / kukodi; NARO letting

@@ -49,6 +49,25 @@ const ORDER = {
 
 // ---------------------------------------------------------------- mock API
 const mode = { products: 'ok', availability: 'ok', orders: 'ok', quote: 'product' };
+// Down-payment scenarios: product row % and shop default % (null = not set).
+const SCENARIOS = {
+  product: { product: 25, shop: 30 },   // explicit product 25 % wins -> 25 %
+  shop: { product: null, shop: 30 },    // no product % -> shop 30 %
+  zero: { product: 0, shop: 30 },       // explicit 0 % is valid -> 0 %
+  invalid: { product: 150, shop: 30 },  // invalid product % ignored -> shop 30 %
+  none: { product: null, shop: null },  // neither -> 25 % fallback
+  shopZero: { product: null, shop: 0 }, // shop needs no down payment
+};
+const validPct = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) || v < 0 || v > 100 ? null : Number(v));
+function mockQuote() {
+  const sc = SCENARIOS[mode.quote] || SCENARIOS.product;
+  const pct = validPct(sc.product) ?? validPct(sc.shop) ?? 25;
+  const rentalFee = 140000, deposit = 350000, downPayment = rentalFee * pct / 100;
+  return { rentalFee, deposit, downPaymentPct: pct, downPayment, total: rentalFee + deposit, remaining: rentalFee + deposit - downPayment };
+}
+const withScenario = (p) => (p && p.availabilityMode !== 'PURCHASE_ONLY'
+  ? { ...p, rentalDownPaymentPct: (SCENARIOS[mode.quote] || SCENARIOS.product).product }
+  : p);
 let pendingBody = null;
 let lastRentalPost = null;
 const seen = [];
@@ -76,26 +95,41 @@ function route(method, path, q) {
   const prod = path.match(/^\/products\/([^/]+)$/);
   if (prod) {
     const p = ALL_PRODUCTS.find((x) => x.slug === prod[1] || x.id === prod[1]);
-    return p ? [200, p] : [404, { message: 'Product not found' }];
+    return p ? [200, withScenario(p)] : [404, { message: 'Product not found' }];
   }
   if (path.startsWith('/rentals/availability/')) {
     if (mode.availability === 'error') return [401, { message: 'Unauthorized', statusCode: 401 }];
     return [200, { available: mode.availability !== 'taken' }];
   }
-  // Server-computed rental terms (rentals/rental-terms.ts). The page must show
-  // THESE numbers: in 'shop' mode the fixture still says 25 % on the product,
-  // so a page that read the product field (or hardcoded 25 %) would fail.
+  // Server-computed rental terms. The mock mirrors rentals/rental-terms.ts
+  // precedence (product % -> shop default -> 25 %) from COHERENT fixtures:
+  // the product row the page loads carries the same product % the quote uses.
+  // (Before 2026-11-12 the 'shop' scenario returned 30 % while the product row
+  // still said 25 % -- a state the real API can't produce, since an explicit
+  // product 25 % wins.) The real-API check lives in rental-quote.it.mjs.
   if (path.startsWith('/rentals/quote/')) {
     if (mode.quote === 'error') return [500, { message: 'boom' }];
     if (mode.quote === 'bad') return [200, { rentalFee: 140000, deposit: 350000, downPaymentPct: 150, downPayment: 210000, total: 490000, remaining: 280000 }];
-    if (mode.quote === 'shop') return [200, { rentalFee: 140000, deposit: 350000, downPaymentPct: 30, downPayment: 42000, total: 490000, remaining: 448000 }];
-    return [200, { rentalFee: 140000, deposit: 350000, downPaymentPct: 25, downPayment: 35000, total: 490000, remaining: 455000 }];
+    return [200, mockQuote()];
+  }
+  if (path === '/rentals/terms-summary') {
+    const sc = SCENARIOS[mode.quote] || SCENARIOS.product;
+    const shop = validPct(sc.shop) ?? 25;
+    return [200, { downPaymentRequired: shop > 0 }];
   }
   if (path === '/orders' && method === 'GET') {
     if (mode.orders === 'error') return [400, { message: ['property sort should not exist'], statusCode: 400 }];
     return [200, { data: [ORDER], meta: { total: 1, page: 1, limit: 50, totalPages: 1 } }];
   }
-  if (path === '/rentals' && method === 'POST') { lastRentalPost = pendingBody; return [201, { id: 'r-1', rentalNumber: 'RNT-E2E-1' }]; }
+  if (path === '/rentals' && method === 'POST') {
+    lastRentalPost = pendingBody;
+    const now = mockQuote();
+    const b = pendingBody || {};
+    const differs = [['quotedRentalFee', 'rentalFee'], ['quotedDeposit', 'deposit'], ['quotedDownPayment', 'downPayment']]
+      .some(([k, f]) => b[k] !== undefined && Math.round(b[k] * 100) !== Math.round(now[f] * 100));
+    if (differs) return [409, { statusCode: 409, code: 'RENTAL_TERMS_CHANGED', message: 'The rental terms changed', current: now }];
+    return [201, { id: 'r-1', rentalNumber: 'RNT-E2E-1' }];
+  }
   if (path === '/rentals') return [200, []];
   if (path === '/cart') return [200, { items: [] }];
   if (path === '/wishlist') return [200, []];
@@ -278,6 +312,7 @@ async function main() {
     await pickDates(p);
     const box = await p.getByTestId('rental-price-breakdown').innerText();
     assert(/30%/.test(box) && !/25%/.test(box), `percentage: ${box}`);
+    assert(seen.some((x) => x.startsWith('GET /rentals/quote/p-01')), 'page must ask the server for the quote');
     assert(/42,000/.test(await p.getByTestId('rental-down-payment').innerText()), 'down payment not 42,000');
     assert(/448,000/.test(box) && /350,000/.test(box) && /490,000/.test(box), `remaining/deposit/total: ${box}`);
     assert(/42,000/.test(await p.getByTestId('rental-payment-note').innerText()), 'payment note amount');
@@ -311,6 +346,61 @@ async function main() {
     await pickDates(p);
     await p.getByTestId('rental-quote-error').waitFor();
     assert((await p.getByTestId('rental-down-payment').count()) === 0, 'malformed amount shown');
+    await p.close();
+  });
+  for (const [sc, pct, amount] of [['product', 25, '35,000'], ['shop', 30, '42,000'], ['invalid', 30, '42,000'], ['none', 25, '35,000']]) {
+    await check(`precedence "${sc}" (product ${SCENARIOS[sc].product} / shop ${SCENARIOS[sc].shop}) → ${pct} % = TSh ${amount}`, async () => {
+      setMode({ quote: sc });
+      const p = await open(desktop, '/rentals/rental-gown-01');
+      await pickDates(p);
+      const box = await p.getByTestId('rental-price-breakdown').innerText();
+      assert(new RegExp(`\\(${pct}%`).test(box), `pct: ${box}`);
+      assert(new RegExp(amount).test(await p.getByTestId('rental-down-payment').innerText()), `amount: ${box}`);
+      await p.close();
+    });
+  }
+  await check('explicit 0 % (shop 30 %): "No down payment required", no TSh 0 line, honest note', async () => {
+    setMode({ quote: 'zero' });
+    const p = await open(desktop, '/rentals/rental-gown-01');
+    await pickDates(p);
+    await p.getByTestId('rental-no-down-payment').waitFor();
+    assert((await p.getByTestId('rental-down-payment').count()) === 0, 'a down-payment amount was shown for 0 %');
+    const note = await p.getByTestId('rental-payment-note').innerText();
+    assert(/no down payment is needed/i.test(note) && !/TSh\s*0\b/.test(note), `note: ${note}`);
+    await p.close();
+  });
+  await check('policy changed after the page loaded: booking refused, new terms shown, re-submit books', async () => {
+    setMode({ quote: 'none' }); // page shows 25 % = 35,000
+    lastRentalPost = null;
+    const signed = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    await signed.addInitScript(() => { localStorage.setItem('token', 'e2e-token'); });
+    const p = await open(signed, '/rentals/rental-gown-02');
+    await pickDates(p);
+    assert(/35,000/.test(await p.getByTestId('rental-down-payment').innerText()), 'first quote');
+    setMode({ quote: 'shop' }); // the shop default becomes 30 % before submit
+    await p.getByTestId('rental-book').click();
+    await p.getByTestId('rental-terms-changed').waitFor();
+    assert(lastRentalPost && lastRentalPost.quotedDownPayment === 35000, `sent ${JSON.stringify(lastRentalPost)}`);
+    assert(/\/rentals\/rental-gown-02/.test(p.url()), 'must stay on the booking page');
+    assert(/42,000/.test(await p.getByTestId('rental-down-payment').innerText()), 'new amount not shown');
+    assert(/42,000/.test(await p.getByTestId('rental-terms-changed').innerText()), 'message lacks the new amount');
+    await p.getByTestId('rental-book').click();
+    await p.waitForURL(/\/account\/rentals/);
+    assert(lastRentalPost.quotedDownPayment === 42000, `re-submit sent ${lastRentalPost.quotedDownPayment}`);
+    await p.close();
+  });
+  await check('"How it works": no fixed %; adapts to a 0 % shop policy', async () => {
+    setMode({ quote: 'shop' });
+    let p = await open(desktop, '/rentals');
+    let txt = await p.getByText(/How Renting Works/i).locator('xpath=..').innerText();
+    assert(/Pay the required down payment to confirm your rental booking\. The exact amount will be shown before confirmation\./.test(txt), `step: ${txt}`);
+    assert(!/\d\s*%/.test(txt), `a fixed percentage is still shown: ${txt}`);
+    await p.close();
+    setMode({ quote: 'shopZero' });
+    p = await open(desktop, '/rentals');
+    await p.getByText(/No down payment needed/).waitFor();
+    txt = await p.getByText(/How Renting Works/i).locator('xpath=..').innerText();
+    assert(/No down payment is required to confirm your rental booking/.test(txt), `0 % step: ${txt}`);
     await p.close();
   });
   await check('gown page: rental terms use the server quote (30 %), and say so when it fails', async () => {
@@ -391,8 +481,9 @@ async function main() {
     await p.getByTestId('rental-book').click();
     await p.waitForURL(/\/account\/rentals/);
     const b = lastRentalPost || {};
-    assert(JSON.stringify(Object.keys(b).sort()) === JSON.stringify(['pickupDate', 'productId', 'returnDate', 'startDate', 'variantId']),
+    assert(JSON.stringify(Object.keys(b).sort()) === JSON.stringify(['pickupDate', 'productId', 'quotedDeposit', 'quotedDownPayment', 'quotedRentalFee', 'returnDate', 'startDate', 'variantId']),
       `payload keys ${JSON.stringify(Object.keys(b))}`);
+    assert(b.quotedRentalFee === 140000 && b.quotedDeposit === 350000 && b.quotedDownPayment === 35000, `quoted ${JSON.stringify(b)}`);
     assert(b.productId === 'p-03' && b.variantId === 'v-03', `ids ${b.productId}/${b.variantId}`);
     assert(b.startDate === isoIn(40) && b.returnDate === isoIn(42) && b.pickupDate === isoIn(40), `dates ${JSON.stringify(b)}`);
     await p.close();
@@ -437,6 +528,18 @@ async function main() {
     await dates.nth(1).fill(isoIn(32));
     await p.getByTestId('rental-quote-error').waitFor();
     assert(/Hatukuweza kupata kiasi cha kianzio/.test(await p.getByTestId('rental-quote-error').innerText()), 'sw quote error');
+    setMode({ quote: 'zero' });
+    await p.goto(SF + '/rentals/rental-gown-01', { waitUntil: 'networkidle' });
+    await dates.nth(0).fill(isoIn(30));
+    await dates.nth(1).fill(isoIn(32));
+    await p.getByTestId('rental-no-down-payment').waitFor();
+    assert(/Hakuna kianzio kinachohitajika/.test(await p.getByTestId('rental-no-down-payment').innerText()), 'sw 0 % line');
+    setMode({ quote: 'shop' });
+    await p.goto(SF + '/rentals', { waitUntil: 'networkidle' });
+    await p.getByText(/Lipa kianzio kinachohitajika ili kuthibitisha nafasi yako ya kukodi\. Kiasi halisi kitaonyeshwa kabla ya kuthibitisha\./).waitFor();
+    setMode({ quote: 'shopZero' });
+    await p.reload({ waitUntil: 'networkidle' });
+    await p.getByText(/Hakuna kianzio kinachohitajika ili kuthibitisha nafasi yako ya kukodi/).waitFor();
     setMode({ products: 'error' });
     await p.goto(SF + '/rentals', { waitUntil: 'networkidle' });
     await p.getByTestId('rentals-load-error').waitFor();

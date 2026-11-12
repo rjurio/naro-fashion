@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import ProductCard from "@/components/ui/ProductCard";
 import Button from "@/components/ui/Button";
-import { productsApi } from "@/lib/api";
+import { productsApi, rentalsApi } from "@/lib/api";
 import { listData, listTotal, rentalHref } from "@/lib/rental-ui";
 import { useTranslation } from "@/lib/i18n";
 
@@ -63,6 +63,9 @@ export default function RentalsPage() {
   const [loading, setLoading] = useState(true);
   // A failed request is NOT "no rental products" — say so and offer a retry.
   const [loadError, setLoadError] = useState(false);
+  // "How it works": only says "no down payment" when the shop's policy is
+  // 0 %. Unknown (loading / failed) → the general wording, which is true either way.
+  const [downPaymentRequired, setDownPaymentRequired] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -108,6 +111,14 @@ export default function RentalsPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    rentalsApi.termsSummary()
+      .then((r) => { if (!cancelled && r?.downPaymentRequired === false) setDownPaymentRequired(false); })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -202,8 +213,8 @@ export default function RentalsPage() {
               },
               {
                 icon: CreditCard,
-                title: t('rentals.payDeposit'),
-                desc: t('rentals.payDepositDesc'),
+                title: downPaymentRequired ? t('rentals.payDeposit') : t('rentals.noDownPaymentStep'),
+                desc: downPaymentRequired ? t('rentals.payDepositDesc') : t('rentals.noDownPaymentStepDesc'),
               },
               {
                 icon: Shield,

@@ -265,7 +265,8 @@
     "rentalDepositLine": "Amana ya usalama inayorejeshwa: {amount}",
     "rentalDownPaymentLine": "Malipo ya awali (kianzio): {pct}% ya ada ya kukodi ({amount})",
     "rentalDatesLine": "Chagua tarehe za kuchukua na kurudisha katika hatua inayofuata — upatikanaji unaangaliwa papo hapo.",
-    "chooseRentalDates": "Kodi — chagua tarehe"
+    "chooseRentalDates": "Kodi — chagua tarehe",
+    "noDownPaymentLine": "Hakuna kianzio kinachohitajika kuthibitisha"
   },
   "cart": {
     "yourCart": "Kikapu cha Ununuzi",
@@ -385,8 +386,8 @@
     "browseAndSelectDesc": "Chagua kutoka mkusanyiko wetu uliochaguliwa wa vipande vya wabunifu",
     "pickYourDates": "Chagua Tarehe Zako",
     "pickYourDatesDesc": "Chagua kipindi chako cha kukodi kwa kichaguzi cha tarehe",
-    "payDeposit": "Lipa kianzio cha 25%",
-    "payDepositDesc": "Inahifadhi tarehe zako; salio na amana inayorejeshwa hulipwa kabla ya kuchukua",
+    "payDeposit": "Lipa kianzio",
+    "payDepositDesc": "Lipa kianzio kinachohitajika ili kuthibitisha nafasi yako ya kukodi. Kiasi halisi kitaonyeshwa kabla ya kuthibitisha.",
     "idVerification": "Uthibitisho wa Kitambulisho",
     "idVerificationDesc": "Uthibitisho wa haraka wa kitambulisho cha taifa kwa usalama",
     "allGowns": "Gauni Zote",
@@ -453,7 +454,12 @@
     "loadFailed": "Hatukuweza kupakia bidhaa za kukodisha",
     "loadFailedDesc": "Tafadhali angalia mtandao wako kisha ujaribu tena.",
     "loadMoreFailed": "Imeshindwa kupakia bidhaa zaidi. Tafadhali jaribu tena.",
-    "retry": "Jaribu tena"
+    "retry": "Jaribu tena",
+    "noDownPaymentStep": "Hakuna kianzio",
+    "noDownPaymentStepDesc": "Hakuna kianzio kinachohitajika ili kuthibitisha nafasi yako ya kukodi. Ikiwa bidhaa inahitaji kianzio, kiasi halisi kitaonyeshwa kabla ya kuthibitisha.",
+    "noDownPaymentLine": "Hakuna kianzio kinachohitajika",
+    "noOnlinePaymentNoDownPayment": "Hakuna malipo yanayofanywa mtandaoni, na hakuna kianzio kinachohitajika kwa uhifadhi huu. Duka litawasiliana nawe kuuthibitisha.",
+    "termsChanged": "Masharti ya kukodi yamebadilika baada ya ukurasa huu kufunguliwa. Kianzio sasa ni {amount}. Tafadhali kagua viwango vipya kisha uombe kuhifadhi tena."
   },
   "flashSales": {
     "title": "Mauzo ya Haraka",

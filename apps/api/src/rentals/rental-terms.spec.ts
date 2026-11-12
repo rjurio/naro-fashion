@@ -1,19 +1,31 @@
-import { NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Logger,
+  NotFoundException,
+  UnprocessableEntityException,
+  ValidationPipe,
+} from '@nestjs/common';
 import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { REQUIRES_MODULE_KEY } from '../auth/decorators/requires-module.decorator';
+import { CreateRentalDto } from './dto/create-rental.dto';
 import { RentalsController } from './rentals.controller';
-import { RentalsService } from './rentals.service';
+import { RentalsService, RENTAL_TERMS_CHANGED, RENTAL_TERMS_UNAVAILABLE } from './rentals.service';
 import {
   DEFAULT_DOWN_PAYMENT_PCT,
   effectiveDownPaymentPct,
+  quotedTermsDiffer,
   rentalTerms,
+  shopDownPaymentPct,
 } from './rental-terms';
 
 /**
  * The storefront showed 25 % whenever a product had no down-payment % of its
  * own, while the booking stored the shop's default. Now ONE function
  * (rental-terms.ts) decides the terms, used by both create() and the public
- * quote the storefront displays.
+ * quote the storefront displays. The quote is advisory: the booking computes
+ * and stores its own amounts, and refuses (409) if they differ from the ones
+ * the customer was shown.
  */
 
 const T = 'tenant-a';
@@ -24,54 +36,59 @@ const GOWN = {
   rentalDownPaymentPct: null as number | null,
 };
 
-describe('effectiveDownPaymentPct: product override → shop default → 25 %', () => {
-  it('an explicit product % wins over the shop default', () => {
-    expect(effectiveDownPaymentPct(40, 30)).toEqual({ pct: 40, source: 'product' });
+// ---------------------------------------------------------------- owner's five cases
+describe('precedence (owner, 2026-11-12): product % → shop default → 25 %', () => {
+  const CASES: Array<[string, unknown, unknown, number, string]> = [
+    ['product override 25 %, shop 30 %', 25, 30, 25, 'product'],
+    ['no product override, shop 30 %', null, 30, 30, 'shop'],
+    ['product override 0 %, shop 30 %', 0, 30, 0, 'product'],
+    ['invalid product setting (150), valid shop 30 %', 150, 30, 30, 'shop'],
+    ['both absent', null, undefined, 25, 'default'],
+  ];
+  it.each(CASES)('%s → %d %%', (_l, productPct, shopPct, pct, source) => {
+    expect(effectiveDownPaymentPct(productPct as any, shopPct as any)).toMatchObject({ pct, source });
+    const t = rentalTerms({ ...GOWN, rentalDownPaymentPct: productPct as any }, shopPct === undefined ? null : { defaultDownPaymentPct: shopPct as any });
+    expect([t.downPaymentPct, t.downPayment]).toEqual([pct, 140000 * pct / 100]);
   });
+  it.each(CASES)('the public quote gives the same answer: %s', async (_l, productPct, shopPct, pct) => {
+    const { svc } = makeService({ ...GOWN, rentalDownPaymentPct: productPct }, shopPct === undefined ? null : { defaultDownPaymentPct: shopPct });
+    const q = await svc.getQuote(`p-case-${String(productPct)}-${String(shopPct)}`);
+    expect(q.downPaymentPct).toBe(pct);
+    expect(q.downPayment).toBe(140000 * pct / 100);
+    expect(q.remaining).toBe(490000 - q.downPayment);
+  });
+  it('the fallback is the documented 25 %', () => expect(DEFAULT_DOWN_PAYMENT_PCT).toBe(25));
+});
+
+describe('effectiveDownPaymentPct details', () => {
   it('a product % equal to 25 is still an override (not "missing")', () => {
-    expect(effectiveDownPaymentPct(25, 30)).toEqual({ pct: 25, source: 'product' });
+    expect(effectiveDownPaymentPct(25, 30)).toMatchObject({ pct: 25, source: 'product' });
   });
-  it('no product % → the shop default', () => {
-    expect(effectiveDownPaymentPct(null, 30)).toEqual({ pct: 30, source: 'shop' });
-    expect(effectiveDownPaymentPct(undefined, 50)).toEqual({ pct: 50, source: 'shop' });
-  });
-  it('missing configuration (no product %, no shop policy) → the platform 25 %', () => {
-    expect(effectiveDownPaymentPct(null, undefined)).toEqual({ pct: DEFAULT_DOWN_PAYMENT_PCT, source: 'default' });
-    expect(DEFAULT_DOWN_PAYMENT_PCT).toBe(25);
-  });
-  it('0 % is a valid setting (no down payment), never replaced by a default', () => {
-    expect(effectiveDownPaymentPct(0, 30)).toEqual({ pct: 0, source: 'product' });
-    expect(effectiveDownPaymentPct(null, 0)).toEqual({ pct: 0, source: 'shop' });
+  it('0 % at shop level is valid too', () => {
+    expect(effectiveDownPaymentPct(null, 0)).toMatchObject({ pct: 0, source: 'shop' });
   });
   it.each([
     ['over 100', 150],
     ['negative', -5],
     ['not a number', 'abc'],
-    ['empty string', ''],
     ['NaN', Number.NaN],
-  ])('an invalid product value (%s) is ignored, not turned into an obligation', (_l, v) => {
-    expect(effectiveDownPaymentPct(v as any, 30)).toEqual({ pct: 30, source: 'shop' });
+  ])('an invalid product value (%s) is ignored AND reported', (_l, v) => {
+    expect(effectiveDownPaymentPct(v as any, 30)).toEqual({ pct: 30, source: 'shop', invalid: ['product'] });
   });
-  it('an invalid shop value falls through to 25 %', () => {
-    expect(effectiveDownPaymentPct(null, 400)).toEqual({ pct: 25, source: 'default' });
+  it('a missing value is not reported as invalid', () => {
+    expect(effectiveDownPaymentPct(null, undefined).invalid).toEqual([]);
+    expect(effectiveDownPaymentPct('', null).invalid).toEqual([]);
+  });
+  it('an invalid shop value falls through to 25 % and is reported', () => {
+    expect(effectiveDownPaymentPct(null, 400)).toEqual({ pct: 25, source: 'default', invalid: ['shop'] });
+  });
+  it('shop-level % for catalogue copy', () => {
+    expect([shopDownPaymentPct(0), shopDownPaymentPct(30), shopDownPaymentPct(null), shopDownPaymentPct(-1)]).toEqual([0, 30, 25, 25]);
   });
 });
 
 describe('rentalTerms (what create() stores and the quote shows)', () => {
-  it('product override: fee 140,000, 40 % → 56,000; deposit separate', () => {
-    const t = rentalTerms({ ...GOWN, rentalDownPaymentPct: 40 }, { defaultDownPaymentPct: 30 });
-    expect(t).toEqual({
-      rentalFee: 140000, deposit: 350000, downPaymentPct: 40, downPaymentSource: 'product',
-      downPayment: 56000, total: 490000, remaining: 434000,
-    });
-  });
-  it('shop default 30 % when the product has none → 42,000 (the old page showed 25 % / 35,000)', () => {
-    const t = rentalTerms(GOWN, { defaultDownPaymentPct: 30 });
-    expect(t.downPaymentPct).toBe(30);
-    expect(t.downPayment).toBe(42000);
-    expect(t.remaining).toBe(490000 - 42000);
-  });
-  it('the deposit is never part of the down payment', () => {
+  it('deposit is separate: never part of the down payment', () => {
     const a = rentalTerms({ ...GOWN, rentalDepositAmount: '0' }, { defaultDownPaymentPct: 30 });
     const b = rentalTerms({ ...GOWN, rentalDepositAmount: '999999' }, { defaultDownPaymentPct: 30 });
     expect(a.downPayment).toBe(b.downPayment);
@@ -83,14 +100,17 @@ describe('rentalTerms (what create() stores and the quote shows)', () => {
     );
     expect([t.downPayment, t.remaining, t.total]).toEqual([100000, 500000, 600000]);
   });
-  it('fee and deposit rules are unchanged from create(): no rental price → 10 % of retail; no deposit → 0', () => {
+  it('fee and deposit rules are unchanged: no rental price → 10 % of retail; no deposit → 0', () => {
     const t = rentalTerms({ basePrice: '900000' }, null);
-    expect(t.rentalFee).toBe(90000);
-    expect(t.deposit).toBe(0);
-    expect(t.downPayment).toBe(22500);
+    expect([t.rentalFee, t.deposit, t.downPayment, t.usable]).toEqual([90000, 0, 22500, true]);
+  });
+  it('no usable fee (no rental price, no retail price) → usable=false (never NaN amounts)', () => {
+    expect(rentalTerms({ basePrice: null }, null).usable).toBe(false);
+    expect(rentalTerms({ rentalPricePerDay: '-5' }, null).usable).toBe(false);
   });
 });
 
+// ---------------------------------------------------------------- service
 function makeService(product: any, policy: any) {
   const prisma: any = {
     product: { findFirst: jest.fn().mockResolvedValue(product) },
@@ -103,9 +123,10 @@ function makeService(product: any, policy: any) {
 describe('GET /rentals/quote/:productId', () => {
   const handler = RentalsController.prototype.getQuote;
 
-  it('is @Public, throttled, and still behind the rentals module', () => {
+  it('is @Public, throttled at 60/min, and still behind the rentals module', () => {
     expect(Reflect.getMetadata(IS_PUBLIC_KEY, handler)).toBe(true);
     expect(Reflect.getMetadata('THROTTLER:LIMITdefault', handler)).toBe(60);
+    expect(Reflect.getMetadata('THROTTLER:TTLdefault', handler)).toBe(60_000);
     expect(Reflect.getMetadata(REQUIRES_MODULE_KEY, RentalsController)).toBe('rentals');
     expect(Reflect.getMetadata(REQUIRES_MODULE_KEY, handler)).toBeUndefined();
   });
@@ -118,6 +139,10 @@ describe('GET /rentals/quote/:productId', () => {
       availabilityMode: { in: ['RENTAL_ONLY', 'BOTH'] },
     });
     expect(prisma.rentalPolicy.findFirst.mock.calls[0][0].where).toEqual({ tenantId: T });
+    // reads only the price columns it needs
+    expect(Object.keys(prisma.product.findFirst.mock.calls[0][0].select).sort()).toEqual(
+      ['basePrice', 'rentalDepositAmount', 'rentalDownPaymentPct', 'rentalPricePerDay'],
+    );
   });
 
   it('unknown / hidden / purchase-only product → 404', async () => {
@@ -125,16 +150,19 @@ describe('GET /rentals/quote/:productId', () => {
     await expect(svc.getQuote('nope')).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('returns amounts only: no ids, no policy internals, no source', async () => {
+  it('returns six finite, non-negative amounts only: no ids, no policy internals, no source', async () => {
     const { svc } = makeService(GOWN, { defaultDownPaymentPct: 30 });
-    const q = await svc.getQuote('p1');
+    const q: any = await svc.getQuote('p1');
     expect(Object.keys(q).sort()).toEqual(['deposit', 'downPayment', 'downPaymentPct', 'remaining', 'rentalFee', 'total']);
+    for (const v of Object.values(q)) expect(Number.isFinite(v) && (v as number) >= 0).toBe(true);
     expect(q).toEqual({ rentalFee: 140000, deposit: 350000, downPaymentPct: 30, downPayment: 42000, total: 490000, remaining: 448000 });
   });
 
-  it('missing configuration (no policy row, no product %) → 25 %', async () => {
-    const { svc } = makeService(GOWN, null);
-    expect((await svc.getQuote('p1')).downPaymentPct).toBe(25);
+  it('unusable amounts → 422 RENTAL_TERMS_UNAVAILABLE, never a NaN quote', async () => {
+    const { svc } = makeService({ ...GOWN, rentalPricePerDay: null, basePrice: null }, null);
+    const err: any = await svc.getQuote('p-nofee').catch((e) => e);
+    expect(err).toBeInstanceOf(UnprocessableEntityException);
+    expect(err.getResponse().code).toBe(RENTAL_TERMS_UNAVAILABLE);
   });
 
   it('changed configuration shows at once (read fresh per call, nothing cached)', async () => {
@@ -147,46 +175,187 @@ describe('GET /rentals/quote/:productId', () => {
   });
 });
 
-describe('create() stores exactly what the quote showed', () => {
-  function bookingService(product: any, policy: any) {
-    const created: any[] = [];
-    const tx: any = {
-      $executeRaw: jest.fn(),
-      rentalOrder: {
-        count: jest.fn().mockResolvedValue(0),
-        create: jest.fn().mockImplementation(({ data }) => { created.push(data); return data; }),
-      },
-    };
-    const prisma: any = {
-      user: { findFirst: jest.fn().mockResolvedValue({ id: 'u1', firstName: 'A', lastName: 'B', phone: '0712', email: 'a@b.c', addresses: [{ id: 'a1' }] }), findUnique: jest.fn().mockResolvedValue({ id: 'u1', firstName: 'A', lastName: 'B', phone: '0712', email: 'a@b.c', addresses: [{ id: 'a1' }] }) },
-      address: { count: jest.fn().mockResolvedValue(1), findFirst: jest.fn().mockResolvedValue({ id: 'a1' }) },
-      product: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'p1', tenantId: T, availabilityMode: 'BOTH', isActive: true, deletedAt: null, bufferDaysOverride: null, ...product }),
-        findFirst: jest.fn().mockResolvedValue({ id: 'p1', ...product }),
-      },
-      productVariant: { findUnique: jest.fn().mockResolvedValue({ id: 'v1', productId: 'p1', tenantId: T, isActive: true }) },
-      rentalPolicy: { findFirst: jest.fn().mockResolvedValue(policy) },
-      rentalOrder: { count: jest.fn().mockResolvedValue(0) },
-      customerIDDocument: { findFirst: jest.fn().mockResolvedValue(null) },
-      $transaction: jest.fn().mockImplementation((fn: any) => fn(tx)),
-    };
-    const svc = new RentalsService(prisma, { requireId: T } as any, { log: jest.fn() } as any);
-    return { svc, created };
-  }
+describe('invalid financial configuration is logged (ids and value only), once', () => {
+  let warn: jest.SpyInstance;
+  beforeEach(() => { warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined); });
+  afterEach(() => warn.mockRestore());
 
+  it('an invalid product % → one warning naming tenant + product, then the shop default is used', async () => {
+    const { svc } = makeService({ ...GOWN, rentalDownPaymentPct: 150 }, { defaultDownPaymentPct: 30 });
+    const q = await svc.getQuote('p-warn-1');
+    await svc.getQuote('p-warn-1');
+    expect(q.downPaymentPct).toBe(30);
+    const msgs = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('[RENTAL_TERMS]'));
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toMatch(/invalid product down-payment % ignored tenant=tenant-a product=p-warn-1 value="150" → using the shop default \(30%\)/);
+    expect(msgs[0]).not.toMatch(/@|password|token|phone/i);
+  });
+
+  it('an invalid shop default → a shop-level warning (no product id) and the 25 % fallback', async () => {
+    const { svc } = makeService(GOWN, { defaultDownPaymentPct: 400 });
+    expect((await svc.getQuote('p-warn-2')).downPaymentPct).toBe(25);
+    const msgs = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('[RENTAL_TERMS]'));
+    expect(msgs.some((m) => /invalid shop down-payment % ignored tenant=tenant-a value="400" → using the 25% fallback/.test(m))).toBe(true);
+    expect(msgs.some((m) => m.includes('product=p-warn-2'))).toBe(false);
+  });
+
+  it('valid configuration logs nothing', async () => {
+    const { svc } = makeService({ ...GOWN, rentalDownPaymentPct: 0 }, { defaultDownPaymentPct: 30 });
+    await svc.getQuote('p-warn-3');
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('[RENTAL_TERMS]'))).toHaveLength(0);
+  });
+});
+
+describe('GET /rentals/terms-summary (the "How it works" step)', () => {
+  it('is @Public, throttled, behind the rentals module, and returns only downPaymentRequired', async () => {
+    const handler = RentalsController.prototype.getTermsSummary;
+    expect(Reflect.getMetadata(IS_PUBLIC_KEY, handler)).toBe(true);
+    expect(Reflect.getMetadata('THROTTLER:LIMITdefault', handler)).toBe(60);
+    const { svc, prisma } = makeService(null, { defaultDownPaymentPct: 30 });
+    expect(await svc.getTermsSummary()).toEqual({ downPaymentRequired: true });
+    expect(prisma.rentalPolicy.findFirst.mock.calls[0][0]).toEqual({ where: { tenantId: T }, select: { defaultDownPaymentPct: true } });
+  });
+  it.each([
+    [0, false],
+    [30, true],
+    [null, true],
+    [400, true],
+  ])('shop default %p → downPaymentRequired %p', async (pct, req) => {
+    const { svc } = makeService(null, pct === null ? null : { defaultDownPaymentPct: pct });
+    expect(await svc.getTermsSummary()).toEqual({ downPaymentRequired: req });
+  });
+});
+
+// ---------------------------------------------------------------- booking
+function bookingService(product: any, policy: any) {
+  const created: any[] = [];
+  const tx: any = {
+    $executeRaw: jest.fn(),
+    rentalOrder: {
+      count: jest.fn().mockResolvedValue(0),
+      create: jest.fn().mockImplementation(({ data }) => { created.push(data); return data; }),
+    },
+  };
+  const user = { id: 'u1', firstName: 'A', lastName: 'B', phone: '0712', email: 'a@b.c', addresses: [{ id: 'a1' }] };
+  const prisma: any = {
+    user: { findUnique: jest.fn().mockResolvedValue(user) },
+    product: {
+      findUnique: jest.fn().mockResolvedValue({ id: 'p1', tenantId: T, availabilityMode: 'BOTH', isActive: true, deletedAt: null, bufferDaysOverride: null, ...product }),
+      findFirst: jest.fn().mockResolvedValue({ id: 'p1', ...product }),
+    },
+    productVariant: { findUnique: jest.fn().mockResolvedValue({ id: 'v1', productId: 'p1', tenantId: T, isActive: true }) },
+    rentalPolicy: { findFirst: jest.fn().mockResolvedValue(policy) },
+    rentalOrder: { count: jest.fn().mockResolvedValue(0) },
+    customerIDDocument: { findFirst: jest.fn().mockResolvedValue(null) },
+    $transaction: jest.fn().mockImplementation((fn: any) => fn(tx)),
+  };
+  const svc = new RentalsService(prisma, { requireId: T } as any, { log: jest.fn() } as any);
+  return { svc, created, prisma };
+}
+const day = (n: number) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+const booking = (extra: Record<string, unknown> = {}) =>
+  ({ productId: 'p1', variantId: 'v1', startDate: day(20), returnDate: day(22), pickupDate: day(20), ...extra }) as any;
+
+describe('create() computes and stores its own amounts = the quote', () => {
   it.each([
     ['product override', { ...GOWN, rentalDownPaymentPct: 40 }, { defaultDownPaymentPct: 30 }],
     ['shop default', GOWN, { defaultDownPaymentPct: 30 }],
+    ['product 0 %', { ...GOWN, rentalDownPaymentPct: 0 }, { defaultDownPaymentPct: 30 }],
     ['missing configuration', GOWN, null],
   ])('%s: stored downPaymentAmount / fee / deposit = the quote', async (_l, product, policy) => {
     const quote = await makeService(product, policy).svc.getQuote('p1');
     const { svc, created } = bookingService(product, policy);
-    const start = new Date(Date.now() + 20 * 86400000).toISOString().slice(0, 10);
-    const end = new Date(Date.now() + 22 * 86400000).toISOString().slice(0, 10);
-    await svc.create('u1', { productId: 'p1', variantId: 'v1', startDate: start, returnDate: end, pickupDate: start } as any);
+    await svc.create('u1', booking({ quotedRentalFee: quote.rentalFee, quotedDeposit: quote.deposit, quotedDownPayment: quote.downPayment }));
     expect(created).toHaveLength(1);
     expect(Number(created[0].downPaymentAmount)).toBe(quote.downPayment);
     expect(Number(created[0].totalRentalPrice)).toBe(quote.rentalFee);
     expect(Number(created[0].damageDeposit)).toBe(quote.deposit);
+  });
+
+  it('the stored amount is the SERVER value, never the client-sent one', async () => {
+    const { svc, created } = bookingService(GOWN, { defaultDownPaymentPct: 30 });
+    await svc.create('u1', booking());
+    expect(Number(created[0].downPaymentAmount)).toBe(42000);
+  });
+});
+
+describe('a policy or price change between quote and submission', () => {
+  it('shop default 25 → 30 % after the page loaded: 409 RENTAL_TERMS_CHANGED with the new quote, nothing stored', async () => {
+    const shown = await makeService(GOWN, { defaultDownPaymentPct: 25 }).svc.getQuote('p1');
+    const { svc, created } = bookingService(GOWN, { defaultDownPaymentPct: 30 });
+    const err: any = await svc
+      .create('u1', booking({ quotedRentalFee: shown.rentalFee, quotedDeposit: shown.deposit, quotedDownPayment: shown.downPayment }))
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect(err.getResponse()).toMatchObject({
+      code: RENTAL_TERMS_CHANGED,
+      current: { downPaymentPct: 30, downPayment: 42000, rentalFee: 140000, deposit: 350000, total: 490000, remaining: 448000 },
+    });
+    expect(created).toHaveLength(0);
+  });
+
+  it.each([
+    ['rental fee', { quotedRentalFee: 130000 }],
+    ['deposit', { quotedDeposit: 300000 }],
+    ['down payment', { quotedDownPayment: 35000 }],
+  ])('a changed %s alone is enough to refuse', async (_l, q) => {
+    const { svc, created } = bookingService(GOWN, { defaultDownPaymentPct: 30 });
+    await expect(svc.create('u1', booking(q))).rejects.toBeInstanceOf(ConflictException);
+    expect(created).toHaveLength(0);
+  });
+
+  it('re-submitting with the new amounts books', async () => {
+    const { svc, created } = bookingService(GOWN, { defaultDownPaymentPct: 30 });
+    await svc.create('u1', booking({ quotedRentalFee: 140000, quotedDeposit: 350000, quotedDownPayment: 42000 }));
+    expect(created).toHaveLength(1);
+  });
+
+  it('no quoted amounts (old client, or the quote could not be loaded) → books on the server terms', async () => {
+    const { svc, created } = bookingService(GOWN, { defaultDownPaymentPct: 30 });
+    await svc.create('u1', booking());
+    expect(created).toHaveLength(1);
+  });
+
+  it('unusable amounts → 422 before anything is stored', async () => {
+    const { svc, created } = bookingService({ ...GOWN, rentalPricePerDay: null, basePrice: null }, null);
+    await expect(svc.create('u1', booking())).rejects.toBeInstanceOf(UnprocessableEntityException);
+    expect(created).toHaveLength(0);
+  });
+
+  it('quotedTermsDiffer compares to the cent', () => {
+    const t = rentalTerms(GOWN, { defaultDownPaymentPct: 25 });
+    expect(quotedTermsDiffer({ quotedDownPayment: 35000.004 }, t)).toBe(false);
+    expect(quotedTermsDiffer({ quotedDownPayment: 35000.01 }, t)).toBe(true);
+    expect(quotedTermsDiffer({}, t)).toBe(false);
+  });
+});
+
+describe('CreateRentalDto: quoted amounts are validated', () => {
+  // Same options as the global pipe in main.ts (incl. implicit conversion).
+  const pipe = new ValidationPipe({
+    whitelist: true, forbidNonWhitelisted: true, transform: true,
+    transformOptions: { enableImplicitConversion: true },
+  });
+  const meta = { type: 'body' as const, metatype: CreateRentalDto };
+  const base = { productId: 'p1', variantId: 'v1', startDate: '2026-12-10', returnDate: '2026-12-12', pickupDate: '2026-12-10' };
+  it('a numeric string is converted to its number (global implicit conversion), then validated like one', async () => {
+    const dto: any = await pipe.transform({ ...base, quotedDownPayment: '35000' }, meta);
+    expect(dto.quotedDownPayment).toBe(35000);
+    await expect(pipe.transform({ ...base, quotedDownPayment: '-5' }, meta)).rejects.toBeInstanceOf(BadRequestException);
+  });
+  it('accepts valid amounts (and their absence)', async () => {
+    await expect(pipe.transform(base, meta)).resolves.toBeTruthy();
+    await expect(pipe.transform({ ...base, quotedRentalFee: 140000, quotedDeposit: 0, quotedDownPayment: 35000.5 }, meta)).resolves.toBeTruthy();
+  });
+  it.each([
+    ['negative', { quotedDownPayment: -1 }],
+    ['a non-numeric string', { quotedDownPayment: 'abc' }],
+    ['NaN', { quotedDownPayment: Number.NaN }],
+    ['Infinity', { quotedRentalFee: Number.POSITIVE_INFINITY }],
+    ['3 decimals', { quotedDeposit: 1.001 }],
+    ['absurdly large', { quotedRentalFee: 1e15 }],
+    ['an unknown field', { quotedDownPaymentPct: 25 }],
+  ])('rejects %s', async (_l, extra) => {
+    await expect(pipe.transform({ ...base, ...extra }, meta)).rejects.toBeInstanceOf(BadRequestException);
   });
 });

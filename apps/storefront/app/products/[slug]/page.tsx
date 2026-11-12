@@ -24,7 +24,7 @@ import {
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import ProductCard from "@/components/ui/ProductCard";
-import { canBuy, canRent, displayRentalFee, normalizeAvailabilityMode, parseRentalQuote, rentalHref, toCardProduct, type RentalQuote } from "@/lib/rental-ui";
+import { canBuy, canRent, displayRentalFee, needsDownPayment, normalizeAvailabilityMode, parseRentalQuote, rentalHref, toCardProduct, type RentalQuote } from "@/lib/rental-ui";
 import { formatPrice } from "@/lib/utils";
 import { useSiteSettings } from "@/contexts/SiteSettingsContext";
 import { useTranslation } from "@/lib/i18n";
@@ -563,9 +563,11 @@ export default function ProductDetailPage() {
                   )}
                   {rentQuote && (
                     <li data-testid="pdp-down-payment">
-                      {t("product.rentalDownPaymentLine")
-                        .replace("{pct}", String(rentQuote.downPaymentPct))
-                        .replace("{amount}", formatPrice(rentQuote.downPayment))}
+                      {needsDownPayment(rentQuote)
+                        ? t("product.rentalDownPaymentLine")
+                            .replace("{pct}", String(rentQuote.downPaymentPct))
+                            .replace("{amount}", formatPrice(rentQuote.downPayment))
+                        : t("product.noDownPaymentLine")}
                     </li>
                   )}
                   {rentQuoteFailed && (

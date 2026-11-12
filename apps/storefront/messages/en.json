@@ -265,7 +265,8 @@
     "rentalDepositLine": "Refundable security deposit: {amount}",
     "rentalDownPaymentLine": "Down payment to confirm: {pct}% of the rental fee ({amount})",
     "rentalDatesLine": "Choose your pickup and return dates on the next step — availability is checked straight away.",
-    "chooseRentalDates": "Rent — choose dates"
+    "chooseRentalDates": "Rent — choose dates",
+    "noDownPaymentLine": "No down payment needed to confirm"
   },
   "cart": {
     "yourCart": "Shopping Cart",
@@ -385,8 +386,8 @@
     "browseAndSelectDesc": "Choose from our curated collection of designer pieces",
     "pickYourDates": "Pick Your Dates",
     "pickYourDatesDesc": "Select your rental period with our date picker",
-    "payDeposit": "Pay 25% Down Payment",
-    "payDepositDesc": "Secures your dates; the balance and the refundable deposit are paid before pickup",
+    "payDeposit": "Pay the down payment",
+    "payDepositDesc": "Pay the required down payment to confirm your rental booking. The exact amount will be shown before confirmation.",
     "idVerification": "ID Verification",
     "idVerificationDesc": "Quick national ID verification for security",
     "allGowns": "All Gowns",
@@ -453,7 +454,12 @@
     "loadFailed": "We couldn't load the rental items",
     "loadFailedDesc": "Please check your connection and try again.",
     "loadMoreFailed": "Couldn't load more items. Please try again.",
-    "retry": "Try again"
+    "retry": "Try again",
+    "noDownPaymentStep": "No down payment needed",
+    "noDownPaymentStepDesc": "No down payment is required to confirm your rental booking. If an item needs one, the exact amount will be shown before confirmation.",
+    "noDownPaymentLine": "No down payment required",
+    "noOnlinePaymentNoDownPayment": "No payment is taken online, and no down payment is needed for this booking. The store will contact you to confirm it.",
+    "termsChanged": "The rental terms changed after this page was loaded. The down payment is now {amount}. Please check the new amounts and request the booking again."
   },
   "flashSales": {
     "title": "Flash Sale",

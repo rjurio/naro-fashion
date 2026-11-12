@@ -111,6 +111,17 @@ export function parseRentalQuote(res: unknown): RentalQuote | null {
   return out;
 }
 
+/** A 0 % policy: the quote is valid but asks for no down payment. */
+export function needsDownPayment(q: RentalQuote): boolean {
+  return q.downPayment > 0;
+}
+
+/** API 409 RENTAL_TERMS_CHANGED → the server's current quote, or null. */
+export function changedTermsFromError(data: unknown): RentalQuote | null {
+  const d = data as { code?: unknown; current?: unknown } | null | undefined;
+  return d && d.code === 'RENTAL_TERMS_CHANGED' ? parseRentalQuote(d.current) : null;
+}
+
 /**
  * The headline rental price before the quote arrives: the server's fee when
  * known, else the product's own flat rental price if it has one, else null

@@ -22,7 +22,7 @@ import { productsApi, rentalsApi, ApiError } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTranslation } from "@/lib/i18n";
-import { autoSelectRentalVariantId, displayRentalFee, parseRentalQuote, type RentalQuote } from "@/lib/rental-ui";
+import { autoSelectRentalVariantId, changedTermsFromError, displayRentalFee, needsDownPayment, parseRentalQuote, type RentalQuote } from "@/lib/rental-ui";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -58,6 +58,9 @@ export default function RentalDetailPage() {
   // loaded it says so instead of showing a guessed amount.
   const [quote, setQuote] = useState<RentalQuote | null>(null);
   const [quoteState, setQuoteState] = useState<"loading" | "ok" | "error">("loading");
+  // Set when the API refused the booking because the terms changed since the
+  // page loaded: the page now shows the new terms and the customer re-submits.
+  const [termsChanged, setTermsChanged] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -118,10 +121,24 @@ export default function RentalDetailPage() {
         startDate,
         returnDate: endDate,
         pickupDate: startDate,
+        // The amounts shown on this page. The API recomputes and stores its
+        // own; if they differ it refuses (409 RENTAL_TERMS_CHANGED) instead of
+        // booking terms the customer hasn't seen.
+        ...(quote
+          ? { quotedRentalFee: quote.rentalFee, quotedDeposit: quote.deposit, quotedDownPayment: quote.downPayment }
+          : {}),
       });
       toast.success(t('rentals.rentalBookedSuccess'));
       router.push('/account/rentals');
     } catch (err) {
+      const current = err instanceof ApiError && err.status === 409 ? changedTermsFromError(err.data) : null;
+      if (current) {
+        setQuote(current);
+        setQuoteState("ok");
+        setTermsChanged(true);
+        toast.error(t('rentals.termsChanged').replace('{amount}', formatPrice(current.downPayment)));
+        return;
+      }
       // Show the API's reason (incomplete profile, dates taken, too long…).
       const apiMsg = err instanceof ApiError ? err.message : '';
       const isGeneric = !apiMsg || /^Request failed with status/.test(apiMsg);
@@ -437,6 +454,11 @@ export default function RentalDetailPage() {
             {rentalDays > 0 && quoteState === "loading" && (
               <div className="mt-6 h-32 rounded-xl border border-border bg-muted animate-pulse" data-testid="rental-quote-loading" />
             )}
+            {termsChanged && (
+              <p className="mt-6 text-xs text-amber-600 flex items-center gap-1" data-testid="rental-terms-changed">
+                <AlertTriangle className="h-3 w-3" /> {quote ? t('rentals.termsChanged').replace('{amount}', formatPrice(quote.downPayment)) : null}
+              </p>
+            )}
             {rentalDays > 0 && quote && (
               <div className="mt-6 p-4 rounded-xl border border-border bg-card" data-testid="rental-price-breakdown">
                 <h3 className="text-sm font-semibold text-foreground mb-4">
@@ -468,12 +490,18 @@ export default function RentalDetailPage() {
                     </span>
                   </div>
                   <div className="border-t border-border pt-2">
-                    <div className="flex justify-between text-gold-600">
-                      <span className="font-medium">
-                        {t('rentals.downPaymentLine').replace('{pct}', String(quote.downPaymentPct))}
-                      </span>
-                      <span className="font-bold" data-testid="rental-down-payment">{formatPrice(quote.downPayment)}</span>
-                    </div>
+                    {needsDownPayment(quote) ? (
+                      <div className="flex justify-between text-gold-600">
+                        <span className="font-medium">
+                          {t('rentals.downPaymentLine').replace('{pct}', String(quote.downPaymentPct))}
+                        </span>
+                        <span className="font-bold" data-testid="rental-down-payment">{formatPrice(quote.downPayment)}</span>
+                      </div>
+                    ) : (
+                      <div className="flex justify-between text-gold-600" data-testid="rental-no-down-payment">
+                        <span className="font-medium">{t('rentals.noDownPaymentLine')}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between text-muted-foreground mt-1">
                       <span>{t('rentals.remainingBeforeDispatch')}</span>
                       <span>{formatPrice(quote.remaining)}</span>
@@ -517,7 +545,9 @@ export default function RentalDetailPage() {
                 </p>
               ) : quote ? (
                 <p className="text-xs text-muted-foreground text-center mt-2" data-testid="rental-payment-note">
-                  {t('rentals.noOnlinePaymentNote').replace('{amount}', formatPrice(quote.downPayment))}
+                  {needsDownPayment(quote)
+                    ? t('rentals.noOnlinePaymentNote').replace('{amount}', formatPrice(quote.downPayment))
+                    : t('rentals.noOnlinePaymentNoDownPayment')}
                 </p>
               ) : null}
             </div>
