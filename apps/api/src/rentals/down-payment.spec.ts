@@ -133,7 +133,10 @@ describe('cancellations, refunds, deposits and the payment cap', () => {
     expect(prisma.rentalOrder.updateMany).not.toHaveBeenCalled();
     const svc = readFileSync(join(__dirname, 'rentals.service.ts'), 'utf8');
     // no cancellation / status / reschedule path rewrites the stored down payment
-    expect((svc.match(/downPaymentAmount/g) ?? []).length).toBe(2); // computed once + stored once, in create()
+    // PR #16's booking hold READS the stored amount (`downPaymentAmount: Number(...downPaymentAmount)`
+    // passed to decideHold); reads are not writes, so they are excluded.
+    const writes = svc.replace(/downPaymentAmount: Number\((rental\.)?downPaymentAmount\)/g, '');
+    expect((writes.match(/downPaymentAmount/g) ?? []).length).toBe(2); // computed once + stored once, in create()
   });
 
   it('only COMPLETED payments count towards the down payment (refunded or pending ones never do)', async () => {
