@@ -720,6 +720,25 @@ export class PaymentsService {
     if (existing && typeof existing === 'object' && ('posSessionId' in existing || existing.verification)) {
       throw new BadRequestException('POS payments are managed from the POS (refund or reverse), not edited here.');
     }
+    // Refunds are never a status edit. Money going back to a customer is a
+    // NEW linked payout row written by the workflow that owns it — rental
+    // refunds: /rental-money refund requests (request → independent approval
+    // → payout); orders: POST /orders/:id/refunds; POS: the POS refund /
+    // exchange flows. Flipping the original COMPLETED row to REFUNDED skipped
+    // approval and made the rental ledger drop the amount from "collected"
+    // AND count it as "refunded".
+    if (dto.status === 'REFUNDED' && payment.status !== 'REFUNDED') {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        code: 'USE_REFUND_WORKFLOW',
+        message: payment.rentalOrderId
+          ? 'Rental refunds go through a refund request (request, independent approval, payout).'
+          : payment.orderId
+            ? 'Order refunds are recorded with POST /orders/:id/refunds.'
+            : 'Refunds are recorded through their refund workflow, not by changing a payment status.',
+      });
+    }
     // REVERSED isn't in the DTO's PaymentStatus enum, so the ValidationPipe already refuses it here.
     if (dto.status !== payment.status && !canTransitionPayment(payment.status, dto.status)) {
       throw new ConflictException({

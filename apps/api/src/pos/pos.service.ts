@@ -356,6 +356,17 @@ export class PosService {
     const result = await this.prisma.$transaction(async (tx) => {
       const p = await tx.payment.findFirst({ where: { id: paymentId, tenantId } });
       if (!p) throw new NotFoundException('Payment not found.');
+      // A rental payment is never reversed here: dropping it from the rental
+      // ledger without the refund workflow would bypass approval and leave
+      // the booking marked paid. Corrections go through a rental refund
+      // request (or the owner-approved correction procedure).
+      if (p.rentalOrderId) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'USE_REFUND_WORKFLOW',
+          message: 'Rental payments cannot be reversed from the POS. Use a rental refund request.',
+        });
+      }
       const gr: any = p.gatewayResponse ?? {};
       if (!isNonCash(p.method) || gr?.verification?.evidence !== 'manual') {
         throw new BadRequestException('Only manually confirmed card / mobile-money POS payments can be reversed here.');
