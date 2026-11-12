@@ -25,6 +25,8 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { Public } from '../auth/decorators/public.decorator';
@@ -130,7 +132,9 @@ export class RentalsController {
     return this.rentalsService.update(id, dto);
   }
 
-  @UseGuards(AdminGuard)
+  // Staff with rentals:update-status only (SUPER_ADMIN holds every permission).
+  @UseGuards(AdminGuard, PermissionGuard)
+  @RequiresPermission('rentals:update-status')
   @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,
@@ -140,7 +144,8 @@ export class RentalsController {
     return this.rentalsService.updateStatus(id, dto.status, dto.expectedStatus, user, dto.returnedAt);
   }
 
-  @UseGuards(AdminGuard)
+  @UseGuards(AdminGuard, PermissionGuard)
+  @RequiresPermission('rentals:update-status')
   @Patch(':id/ready')
   markReadyForPickup(@Param('id') id: string) {
     return this.rentalsService.markReadyForPickup(id);

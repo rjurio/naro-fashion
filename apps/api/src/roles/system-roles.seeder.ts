@@ -7,6 +7,9 @@ import { PrismaService } from '../prisma/prisma.service';
 export const MANAGER_EXCLUDED = [
   'admins:create', 'admins:delete', 'roles:manage', 'settings:manage', 'audit:export',
   'payments:manage', 'payment-methods:manage', 'recycle-bin:purge',
+  // Owner decision 2026-11-12: National ID review stays SUPER_ADMIN-only
+  // until explicitly granted to a designated role (also on fresh installs).
+  'id-verification:review',
 ];
 
 export const STAFF_CODES = [

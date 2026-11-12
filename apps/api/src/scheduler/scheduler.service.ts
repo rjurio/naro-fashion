@@ -6,9 +6,18 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { InstagramService } from '../cms/instagram.service';
 import {
-  DEFAULT_RENTAL_HOLD_TTL_HOURS,
   UNPAID_HOLD_STATUSES,
 } from '../rentals/rental-rules';
+import {
+  adoptLegacyHold,
+  holdExpiryMessage,
+  holdExpiryReason,
+  HoldExpiryReason,
+  INFLIGHT_PAYMENT_GRACE_HOURS,
+  pickupCutoff,
+  rentalHoldTtlHours,
+} from '../rentals/rental-hold';
+import { customerIdState, lockCustomerIdState } from '../id-verification/id-approval';
 
 /** Mapping from admin-friendly interval keys to cron expressions */
 export const INSTAGRAM_SYNC_INTERVALS: Record<string, string> = {
@@ -497,52 +506,96 @@ export class SchedulerService implements OnModuleInit {
   // ============================================================
 
   /**
-   * Every 30 minutes — cancel abandoned unpaid rental bookings.
+   * Every 30 minutes — release unconfirmed rental bookings whose hold has
+   * expired (owner rules 2026-11-12, rentals/rental-hold.ts):
+   *  - the booking's explicit deadline (`holdExpiresAt`) has passed: no ID
+   *    submitted within 48 h of booking, no new ID within 48 h of a
+   *    rejection, or no down payment within 48 h of the ID approval. While
+   *    an ID waits for staff review the deadline is null (paused); a 0 %
+   *    down-payment booking has none either;
+   *  - or its pickup day (EAT) has ended before it was confirmed — this
+   *    bounds paused and 0 % bookings too.
    *
-   * A rental is created in PENDING_ID_VERIFICATION / ID_VERIFIED (or legacy
-   * PENDING_PAYMENT/PENDING) and immediately counts against availability. If
-   * the customer never pays, the gown was blocked forever. Any rental still in
-   * an unpaid hold status with NO COMPLETED payment after
-   * RENTAL_HOLD_TTL_HOURS (default 48) is moved to CANCELLED, which
-   * NON_BLOCKING_RENTAL_STATUSES excludes from availability.
+   * Never cancelled here: a booking with any COMPLETED payment (money
+   * received: staff decide), and a booking with an in-flight PENDING /
+   * PROCESSING payment younger than INFLIGHT_PAYMENT_GRACE_HOURS (a Mobile
+   * Money payment started before the deadline is not cancelled under the
+   * customer; the next run decides once it resolves).
+   *
+   * Race-safe and idempotent: each booking is re-read and cancelled inside a
+   * transaction holding the SAME advisory locks as booking/rescheduling
+   * (per product), ID submission/review (per customer) and payment
+   * initiation (per rental), and the update is a CAS on the observed state
+   * plus "no COMPLETED payment". A second run, or one racing an approval,
+   * payment or reschedule, changes nothing.
+   *
+   * Bookings created before these rules (holdState NULL) are first
+   * classified ("adopted") from the customer's documents; their deadline is
+   * never earlier than the old rule's (created + 48 h).
    *
    * Lives here (not in RentalsService) because RentalsService depends on the
    * request-scoped TenantContext, and @Cron can't run on request-scoped
-   * providers. Cross-tenant by design (cron); each update is a CAS on the
-   * observed status so a payment/approval landing mid-run wins.
+   * providers. Cross-tenant by design (cron).
    */
   @Cron('0 */30 * * * *', { name: 'rental-hold-expiry' })
   async handleExpiredRentalHolds(now: Date = new Date()): Promise<number> {
     try {
-      const raw = Number(this.configService.get<string>('RENTAL_HOLD_TTL_HOURS'));
-      const ttlHours = raw > 0 ? raw : DEFAULT_RENTAL_HOLD_TTL_HOURS;
-      const cutoff = new Date(now.getTime() - ttlHours * 60 * 60 * 1000);
+      const ttlHours = rentalHoldTtlHours(this.configService.get<string>('RENTAL_HOLD_TTL_HOURS'));
+      await this.adoptLegacyHolds(now, ttlHours);
 
-      const stale = await this.prisma.rentalOrder.findMany({
+      const cutoff = pickupCutoff(now);
+      const candidates = await this.prisma.rentalOrder.findMany({
         where: {
           status: { in: UNPAID_HOLD_STATUSES },
-          createdAt: { lt: cutoff },
           payments: { none: { status: 'COMPLETED' } },
+          OR: [{ holdExpiresAt: { lte: now } }, { pickupDate: { lt: cutoff } }],
         },
-        select: { id: true, tenantId: true, status: true, rentalNumber: true, notes: true },
+        select: {
+          id: true,
+          tenantId: true,
+          userId: true,
+          productId: true,
+          rentalNumber: true,
+          user: { select: { email: true, firstName: true } },
+          product: { select: { name: true } },
+        },
+        orderBy: { createdAt: 'asc' },
         take: 500,
       });
 
       let cancelled = 0;
-      for (const r of stale) {
-        const note = `[Auto-cancelled ${now.toISOString()}] Unpaid hold expired after ${ttlHours}h.`;
-        const res = await this.prisma.rentalOrder.updateMany({
-          where: {
-            id: r.id,
-            tenantId: r.tenantId,
-            status: r.status,
-            payments: { none: { status: 'COMPLETED' } },
-          },
-          data: { status: 'CANCELLED', notes: r.notes ? `${r.notes}\n${note}` : note },
-        });
-        if (res.count > 0) {
-          cancelled++;
-          this.logger.warn(`[RENTAL HOLD] ${r.rentalNumber} auto-cancelled (unpaid > ${ttlHours}h)`);
+      for (const r of candidates) {
+        // One booking's failure (lock timeout, DB blip) must not stop the run;
+        // it is retried on the next one.
+        let outcome: Awaited<ReturnType<SchedulerService['expireRentalHold']>>;
+        try {
+          outcome = await this.expireRentalHold(r, now);
+        } catch (err: any) {
+          this.logger.error(`[RENTAL_HOLD] ${r.rentalNumber} not processed: ${err?.message}`);
+          continue;
+        }
+        if (outcome.kind === 'skipped') {
+          this.logger.log(`[RENTAL_HOLD] ${r.rentalNumber} expired but kept: ${outcome.why}`);
+          continue;
+        }
+        if (outcome.kind !== 'cancelled') continue;
+        cancelled++;
+        this.logger.warn(
+          `[RENTAL_HOLD] ${r.rentalNumber} auto-cancelled (${outcome.reason}; holdState ${outcome.holdState ?? '-'}; deadline ${outcome.holdExpiresAt?.toISOString() ?? 'none'})`,
+        );
+        if (r.user?.email) {
+          try {
+            await this.notifications.sendRentalHoldExpired({
+              customerEmail: r.user.email,
+              customerName: r.user.firstName ?? undefined,
+              rentalNumber: r.rentalNumber,
+              productName: r.product?.name,
+              message: outcome.message,
+              tenantId: r.tenantId,
+            });
+          } catch (err: any) {
+            this.logger.error(`[RENTAL_HOLD] notification failed for ${r.rentalNumber}: ${err?.message}`);
+          }
         }
       }
       if (cancelled > 0) this.logger.log(`Rental hold expiry: ${cancelled} cancelled.`);
@@ -551,6 +604,116 @@ export class SchedulerService implements OnModuleInit {
       this.logger.error('Error in rental hold expiry cron:', error);
       return 0;
     }
+  }
+
+  /** Re-check and cancel ONE expired booking under the shared locks. */
+  private async expireRentalHold(
+    r: { id: string; tenantId: string | null; userId: string; productId: string },
+    now: Date,
+  ): Promise<
+    | { kind: 'cancelled'; reason: HoldExpiryReason; holdState: string | null; holdExpiresAt: Date | null; message: string }
+    | { kind: 'skipped'; why: string }
+    | { kind: 'none' }
+  > {
+    return this.prisma.$transaction(async (tx) => {
+      // Same lock order as RentalsService.create(): product, then customer.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${r.productId}))`;
+      if (r.tenantId) await lockCustomerIdState(tx, r.tenantId, r.userId);
+      const paymentLock = `payment:rental:${r.id}`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${paymentLock}))`;
+
+      const cur = await tx.rentalOrder.findFirst({
+        where: { id: r.id, tenantId: r.tenantId },
+        select: { status: true, holdState: true, holdExpiresAt: true, pickupDate: true, notes: true },
+      });
+      if (!cur || !UNPAID_HOLD_STATUSES.includes(cur.status)) return { kind: 'none' as const };
+      const reason = holdExpiryReason(cur, now);
+      if (!reason) return { kind: 'none' as const };
+
+      const graceStart = new Date(now.getTime() - INFLIGHT_PAYMENT_GRACE_HOURS * 60 * 60 * 1000);
+      const inflight = await tx.payment.count({
+        where: {
+          rentalOrderId: r.id,
+          tenantId: r.tenantId,
+          status: { in: ['PENDING', 'PROCESSING'] },
+          createdAt: { gt: graceStart },
+        },
+      });
+      if (inflight > 0) return { kind: 'skipped' as const, why: `${inflight} payment(s) in progress` };
+
+      const message = holdExpiryMessage(reason, cur.holdState);
+      const note = `[Auto-cancelled ${now.toISOString()}] ${message} (${reason}${
+        cur.holdExpiresAt ? `, deadline ${cur.holdExpiresAt.toISOString()}` : ''
+      })`;
+      const res = await tx.rentalOrder.updateMany({
+        where: {
+          id: r.id,
+          tenantId: r.tenantId,
+          status: cur.status,
+          holdState: cur.holdState,
+          holdExpiresAt: cur.holdExpiresAt,
+          pickupDate: cur.pickupDate,
+          payments: { none: { status: 'COMPLETED' } },
+        },
+        data: { status: 'CANCELLED', notes: cur.notes ? `${cur.notes}\n${note}` : note },
+      });
+      if (res.count === 0) return { kind: 'none' as const };
+      return {
+        kind: 'cancelled' as const,
+        reason,
+        holdState: cur.holdState,
+        holdExpiresAt: cur.holdExpiresAt,
+        message,
+      };
+    });
+  }
+
+  /** Classify unconfirmed bookings created before the hold rules (holdState NULL). */
+  private async adoptLegacyHolds(now: Date, ttlHours: number): Promise<number> {
+    const legacy = await this.prisma.rentalOrder.findMany({
+      where: { status: { in: UNPAID_HOLD_STATUSES }, holdState: null },
+      select: { id: true, tenantId: true, userId: true, status: true, createdAt: true, downPaymentAmount: true, rentalNumber: true },
+      orderBy: { createdAt: 'asc' },
+      take: 500,
+    });
+    let adopted = 0;
+    for (const r of legacy) {
+      let decision: { holdState: string; holdExpiresAt: Date | null } | null = null;
+      try {
+        decision = await this.prisma.$transaction(async (tx) => {
+          if (r.tenantId) await lockCustomerIdState(tx, r.tenantId, r.userId);
+          const id = r.tenantId
+            ? await customerIdState(tx, r.tenantId, r.userId)
+            : { state: 'NONE' as const, approvedAt: null, rejectedAt: null };
+          const hold = adoptLegacyHold({
+            status: r.status,
+            createdAt: r.createdAt,
+            downPaymentAmount: Number(r.downPaymentAmount),
+            idState: id.state,
+            approvedAt: id.approvedAt,
+            rejectedAt: id.rejectedAt,
+            ttlHours,
+          });
+          const res = await tx.rentalOrder.updateMany({
+            where: { id: r.id, tenantId: r.tenantId, status: r.status, holdState: null },
+            data: hold,
+          });
+          return res.count > 0 ? hold : null;
+        });
+      } catch (err: any) {
+        // Not adopted this run (retried next run); expiry of the others continues.
+        this.logger.error(`[RENTAL_HOLD] ${r.rentalNumber} not adopted: ${err?.message}`);
+        continue;
+      }
+      if (decision) {
+        adopted++;
+        this.logger.log(
+          `[RENTAL_HOLD] ${r.rentalNumber} adopted: ${decision.holdState}, deadline ${decision.holdExpiresAt?.toISOString() ?? 'none'}`,
+        );
+      }
+    }
+    if (adopted > 0) this.logger.log(`[RENTAL_HOLD] ${adopted} existing booking(s) given an explicit hold deadline (${now.toISOString()}).`);
+    return adopted;
   }
 
   // ============================================================

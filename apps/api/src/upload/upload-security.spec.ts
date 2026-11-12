@@ -136,7 +136,9 @@ describe('upload controller wiring', () => {
     expect(bare).toHaveLength(0);
   });
 
-  it('the ID-document streaming route is admin-guarded', () => {
-    expect(src).toMatch(/@Get\('id-document\/:tenantScopedKey'\)\s*\n\s*@UseGuards\(AdminGuard\)/);
+  it('the ID-document streaming route is admin-guarded and needs id-verification:review (same as approving IDs)', () => {
+    expect(src).toMatch(
+      /@Get\('id-document\/:tenantScopedKey'\)\s*\n\s*@UseGuards\(AdminGuard, PermissionGuard\)\s*\n\s*@RequiresPermission\('id-verification:review'\)/,
+    );
   });
 });

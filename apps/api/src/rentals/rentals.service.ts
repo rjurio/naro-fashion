@@ -38,9 +38,14 @@ import {
   assertRentalTransition,
   computeLateFee,
   resolveReturnedAt,
+  transitionRequiresApprovedId,
+  ID_NOT_APPROVED,
+  ID_NOT_APPROVED_MESSAGE,
 } from './rental-rules';
 import { notAvailableForRental } from './rental-sale-guard';
 import { findRentalAvailabilityBlock, RentalBlockReason } from './rental-availability';
+import { customerIdState, hasApprovedId, lockCustomerIdState } from '../id-verification/id-approval';
+import { decideHold } from './rental-hold';
 
 @Injectable()
 export class RentalsService {
@@ -200,14 +205,6 @@ export class RentalsService {
     const totalRentalPrice = terms.rentalFee;
     const downPaymentAmount = terms.downPayment;
 
-    // Check ID verification status
-    const idDoc = await this.prisma.customerIDDocument.findFirst({
-      where: { userId, verificationStatus: 'APPROVED', tenantId },
-    });
-    const initialStatus = idDoc
-      ? 'ID_VERIFIED'
-      : 'PENDING_ID_VERIFICATION';
-
     const rentalNumber = `RNT-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     // The pre-check above and the insert are separate statements: a booking
@@ -221,6 +218,22 @@ export class RentalsService {
 
       const blocked = await findRentalAvailabilityBlock(tx, query);
       if (blocked) throw this.bookingRefusal(blocked);
+
+      // National ID: read under the per-customer lock ID approval also takes,
+      // so a booking and an approval for the same customer never interleave
+      // (else the booking could be stored PENDING_ID_VERIFICATION right after
+      // the approval reconciled the customer's waiting bookings). A request
+      // without an approved ID is still accepted (owner rule 2026-11-12).
+      await lockCustomerIdState(tx, tenantId, userId);
+      const approved = await hasApprovedId(tx, tenantId, userId);
+      const initialStatus = approved ? 'ID_VERIFIED' : 'PENDING_ID_VERIFICATION';
+
+      // Explicit hold deadline (rentals/rental-hold.ts, owner rules
+      // 2026-11-12): no ID yet -> 48 h to submit one; ID waiting for staff
+      // review -> paused; ID approved -> 48 h to pay the down payment, or no
+      // payment deadline when none is due. Read under the same lock.
+      const idState = approved ? 'APPROVED' : (await customerIdState(tx, tenantId, userId)).state;
+      const hold = decideHold({ idState, downPaymentAmount: Number(downPaymentAmount), at: new Date() });
 
       return tx.rentalOrder.create({
         data: {
@@ -236,6 +249,8 @@ export class RentalsService {
           downPaymentAmount,
           damageDeposit: depositAmount,
           status: initialStatus,
+          holdState: hold.holdState,
+          holdExpiresAt: hold.holdExpiresAt,
           notes: dto.notes,
           pickupTime: dto.pickupTime,
           weddingDate: dto.weddingDate ? new Date(dto.weddingDate) : undefined,
@@ -360,7 +375,22 @@ export class RentalsService {
     // actualReturnDate + late fee), CANCELLED only before dispatch.
     assertRentalTransition(rental.status, status);
 
+    // National ID (owner rule 2026-11-12): while the item is in the shop, no
+    // transition other than cancelling may happen without an APPROVED ID —
+    // checked against the customer's documents now, whatever the rental's
+    // status says. Covers every jump (e.g. PENDING_ID_VERIFICATION straight
+    // to READY_FOR_PICKUP / ACTIVE) and offline replays.
+    await this.assertApprovedIdFor(rental, status);
+
     const data: any = { status };
+    if (status === 'ID_VERIFIED') {
+      // Staff moved the booking to ID_VERIFIED by hand (the approved ID was
+      // just checked): same fresh payment window as an ID approval.
+      Object.assign(
+        data,
+        decideHold({ idState: 'APPROVED', downPaymentAmount: Number(rental.downPaymentAmount), at: new Date() }),
+      );
+    }
     if (status === 'RETURNED') {
       // Offline replays carry the real return time (validated, ≤30 days old).
       const resolved = resolveReturnedAt(returnedAtRaw, new Date());
@@ -407,7 +437,11 @@ export class RentalsService {
         variant: { select: { id: true, name: true } },
       },
     });
-    await this.auditService.log('UPDATE_STATUS', 'Rental', id, { from: rental.status, to: status });
+    await this.auditService.log('UPDATE_STATUS', 'Rental', id, {
+      from: rental.status,
+      to: status,
+      ...(data.holdState !== undefined && { holdState: data.holdState, holdExpiresAt: data.holdExpiresAt }),
+    });
     return updated;
   }
 
@@ -418,6 +452,8 @@ export class RentalsService {
     if (!rental) {
       throw new NotFoundException('Rental order not found');
     }
+    // "Ready for pickup" tells staff the item can be handed over: same ID rule.
+    await this.assertApprovedIdFor(rental, 'READY_FOR_PICKUP');
 
     const marked = await this.prisma.rentalOrder.update({
       where: { id },
@@ -425,6 +461,30 @@ export class RentalsService {
     });
     await this.auditService.log('MARK_READY', 'Rental', id);
     return marked;
+  }
+
+  /**
+   * Refuse (422 ID_NOT_APPROVED, audited) a transition that needs an approved
+   * National ID when the rental's customer has none. See
+   * transitionRequiresApprovedId (rental-rules.ts).
+   */
+  private async assertApprovedIdFor(
+    rental: { id: string; status: string; userId: string | null },
+    target: string,
+  ): Promise<void> {
+    if (!transitionRequiresApprovedId(rental.status, target)) return;
+    const tenantId = this.tenantContext.requireId;
+    if (await hasApprovedId(this.prisma, tenantId, rental.userId)) return;
+    await this.auditService.log('UPDATE_STATUS_DENIED', 'Rental', rental.id, {
+      from: rental.status,
+      to: target,
+      reason: ID_NOT_APPROVED,
+    });
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      code: ID_NOT_APPROVED,
+      message: ID_NOT_APPROVED_MESSAGE,
+    });
   }
 
   async getAvailability(
