@@ -744,7 +744,7 @@
     "faqPayment": "Payment Methods",
     "faqPaymentContent": "We accept Mobile Money (M-Pesa, Tigo Pesa, Airtel Money), Visa/Mastercard, bank transfers, and Cash on Delivery. All online payments are processed securely through our payment partners.",
     "faqRentals": "Gown Rentals",
-    "faqRentalsContent": "To rent an item, verify your national ID once, choose your dates and send a booking request. No payment is taken online. If the item needs a down payment, the booking page shows the exact amount before you send the request, and the store contacts you to arrange it. The rest of the rental fee and the refundable deposit are paid before pickup; the deposit is refunded after the item is returned in good condition. Even when no down payment is needed, the rental fee and the deposit still apply.",
+    "faqRentalsContent": "Choose the item you want to rent and your rental dates, then send your request. We will confirm the item's availability and the down payment required, if any. No payment is taken online when you send the request. The rest of the rental fee and the refundable deposit are paid before pickup, according to your booking terms.",
     "faqAccount": "Account & Security",
     "faqAccountContent": "You can create an account using your email or sign in with Google/Facebook. We use industry-standard encryption to protect your personal information. You can update your profile, manage addresses, and track orders from your account dashboard.",
     "termsTitle": "Terms of Service",

@@ -159,6 +159,12 @@ describe('storefront rental wiring', () => {
     for (const k of ['pages.faqRentalsContent', 'rentals.noDownPaymentStepDesc', 'rentals.noOnlinePaymentNoDownPayment']) {
       expect([k, /\d\s*%/.test(at(en, k)), /\d\s*%/.test(at(sw, k))]).toEqual([k, false, false]);
     }
+    // Owner's approved Swahili FAQ answer, 2026-11-12 (verbatim).
+    expect(at(sw, 'pages.faqRentalsContent')).toBe(
+      'Chagua bidhaa unayotaka kukodi na tarehe za kukodi, kisha tuma ombi lako. Tutakuthibitishia upatikanaji wa bidhaa ' +
+      'na kiasi cha kianzio kinachohitajika, ikiwa kipo. Hakuna malipo yanayofanyika mtandaoni wakati wa kutuma ombi. ' +
+      'Salio la ada ya kukodi na amana inayorejeshwa vitalipwa kulingana na masharti ya uhifadhi wako kabla ya kuchukua bidhaa.',
+    );
     const home = read('app/page.tsx');
     expect(home).not.toMatch(/rental_section_features: '[^']*\d+% /);
     const adminCms = require('fs').readFileSync(
@@ -170,8 +176,11 @@ describe('storefront rental wiring', () => {
     const en = JSON.parse(read('messages/en.json'));
     const sw = JSON.parse(read('messages/sw.json'));
     expect(at(en, 'pages.faqRentalsContent')).toMatch(/No payment is taken online/);
-    expect(at(en, 'pages.faqRentalsContent')).toMatch(/no down payment is needed, the rental fee and the deposit still apply/);
-    expect(at(sw, 'pages.faqRentalsContent')).toMatch(/Hakuna malipo yanayofanywa mtandaoni/);
+    // a down payment only "if any"; the fee balance and the deposit still apply
+    expect(at(en, 'pages.faqRentalsContent')).toMatch(/down payment required, if any/);
+    expect(at(en, 'pages.faqRentalsContent')).toMatch(/rental fee and the refundable deposit are paid before pickup/);
+    expect(at(sw, 'pages.faqRentalsContent')).toMatch(/Hakuna malipo yanayofanyika mtandaoni/);
+    expect(at(sw, 'pages.faqRentalsContent')).toMatch(/ikiwa kipo/);
     expect(at(sw, 'pages.faqRentalsContent')).toMatch(/kianzio/);
     expect(at(sw, 'pages.faqRentalsContent')).toMatch(/amana inayorejeshwa/);
     // 0 %: the fee and the refundable deposit still apply (EN + SW)
@@ -233,7 +242,7 @@ describe('storefront rental wiring', () => {
     expect(faq).not.toMatch(/\d\s*%/);
     expect(faq).toMatch(/[Aa]mana inayorejeshwa/);
     // "online" appears only to say that NO payment is taken online
-    expect(faq.replace('Hakuna malipo yanayofanywa mtandaoni', '')).not.toMatch(/mtandaoni|online|kadi/i);
+    expect(faq.replace('Hakuna malipo yanayofanyika mtandaoni', '')).not.toMatch(/mtandaoni|online|kadi/i);
   });
 
   it('no Swahili rental string implies an online payment (none is taken online)', () => {

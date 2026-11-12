@@ -550,18 +550,18 @@ async function main() {
   });
 
   console.log('\nFAQ (policy-neutral wording)');
-  await check('FAQ rentals answer: no fixed %, no online payment, 0 % still has fee + deposit (EN + SW)', async () => {
+  await check('FAQ rentals answer (owner wording): no fixed %, no online payment, down payment only if any, fee + deposit before pickup (EN + SW)', async () => {
     setMode({});
     const p = await open(desktop, '/pages/faq');
-    await p.getByText(/Even when no down payment is needed, the rental fee and the deposit still apply/).waitFor();
+    await p.getByText(/the down payment required, if any/).waitFor();
     const en = await p.locator('body').innerText();
-    const ans = en.slice(en.indexOf('To rent an item'), en.indexOf('still apply.') + 12);
+    const ans = en.slice(en.indexOf('Choose the item you want to rent'), en.indexOf('according to your booking terms.') + 32);
     assert(ans.length > 50 && !/\d\s*%/.test(ans) && /No payment is taken online/.test(ans), `EN: ${ans}`);
     await p.close();
     const q = await open(sw, '/pages/faq');
-    await q.getByText(/Hata pale ambapo hakuna kianzio, ada ya kukodi na amana bado zinatumika/).waitFor();
+    await q.getByText(/kiasi cha kianzio kinachohitajika, ikiwa kipo/).waitFor();
     const swTxt = await q.locator('body').innerText();
-    const swAns = swTxt.slice(swTxt.indexOf('Ili kukodi bidhaa'), swTxt.indexOf('bado zinatumika.') + 16);
+    const swAns = swTxt.slice(swTxt.indexOf('Chagua bidhaa unayotaka kukodi'), swTxt.indexOf('kabla ya kuchukua bidhaa.') + 25);
     assert(swAns.length > 50 && !/\d\s*%/.test(swAns) && /amana inayorejeshwa/.test(swAns), `SW: ${swAns}`);
     await q.close();
   });
