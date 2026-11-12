@@ -109,6 +109,13 @@ export class RefundRequestsService {
     if (r.layawayId) {
       await this.prisma.layaway.updateMany({ where: { id: r.layawayId, tenantId: this.tenantId }, data: { financialDisposition: 'REFUND_REJECTED' } });
     }
+    if (r.kind === REFUND_KINDS.POS_RETURN) {
+      // The goods held in the shop are handed back to the customer (they were never restocked).
+      await this.prisma.refundRequest.updateMany({
+        where: { id, tenantId: this.tenantId },
+        data: { lines: { ...((r.lines as any) ?? {}), goodsDisposition: 'HAND_BACK_TO_CUSTOMER' } as any },
+      });
+    }
     await this.audit.log('REFUND_REJECTED', 'RefundRequest', id, { subject: r.subject, kind: r.kind, amount: Number(r.amount), reason: dto.reason });
     return this.get(id);
   }
@@ -159,6 +166,16 @@ export class RefundRequestsService {
         );
         paymentId = out.paymentId;
         paid = Number(out.refundAmount);
+        await this.prisma.refundRequest.updateMany({
+          where: { id, tenantId: this.tenantId },
+          data: {
+            lines: {
+              ...l,
+              goodsDisposition: (l.items ?? []).every((x: any) => x.condition === 'DAMAGED') ? 'DAMAGED_NOT_RESTOCKED'
+                : (l.items ?? []).some((x: any) => x.condition === 'DAMAGED') ? 'PARTLY_RESTOCKED' : 'RESTOCKED',
+            } as any,
+          },
+        });
       } else {
         paymentId = await this.moneyOnlyPayout(r, dto.method, reference, dto.verificationNote ?? null, actor.id);
       }

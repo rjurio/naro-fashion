@@ -113,7 +113,7 @@ function makePos(opts: { grantedCodes?: string[]; existingRef?: string | null; p
     },
     productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findFirst: jest.fn(async () => ({ stock: 9 })) },
     inventoryTransaction: { create: jest.fn().mockResolvedValue({}) },
-    posSession: { update: jest.fn().mockResolvedValue({}) },
+    posSession: { update: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     layaway: {
       create: jest.fn(async ({ data }: any) => ({ id: 'l1', ...data })),
       updateMany: jest.fn(async () => ({ count: opts.layawayActive === false ? 0 : 1 })),

@@ -75,7 +75,7 @@ describe('PATCH /payments/:id (PaymentsService.updateStatus) — no silent histo
 describe('POS refunds after a reversal', () => {
   function make(order: any) {
     const tx: any = {
-      order: { findFirst: jest.fn().mockResolvedValue(order), update: jest.fn() },
+      order: { findFirst: jest.fn().mockResolvedValue(order), update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       orderItem: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn().mockResolvedValue([{ quantity: 1, refundedQuantity: 1 }]),
