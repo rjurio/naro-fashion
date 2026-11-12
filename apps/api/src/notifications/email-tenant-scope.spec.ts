@@ -101,10 +101,13 @@ describe('ID verification submit only accepts private refs of the caller tenant'
     const prisma: any = {
       customerIDDocument: {
         findFirst: jest.fn(async () => null),
-        create: jest.fn(async ({ data }: any) => data),
+        create: jest.fn(async ({ data }: any) => ({ id: 'doc1', ...data })),
       },
+      rentalOrder: { updateMany: jest.fn(async () => ({ count: 0 })) },
+      $executeRaw: jest.fn(async () => 1),
     };
-    return new IdVerificationService(prisma, {} as any, { requireId: 'A' } as any);
+    prisma.$transaction = jest.fn(async (cb: any) => cb(prisma));
+    return new IdVerificationService(prisma, {} as any, { requireId: 'A' } as any, {} as any, {} as any);
   }
 
   it('accepts refs produced for the caller tenant', async () => {

@@ -253,12 +253,14 @@ describe('Orders — expectedStatus', () => {
 // ---------------------------------------------------------------------------
 describe('Rentals — expectedStatus', () => {
   function make(status = 'READY_FOR_PICKUP') {
-    const rental = { id: 'r1', tenantId: 't1', status };
+    const rental = { id: 'r1', tenantId: 't1', status, userId: 'u1' };
     const prisma: any = {
       rentalOrder: {
         findFirst: jest.fn(async () => rental),
         updateMany: jest.fn(async () => ({ count: 1 })),
       },
+      // The customer holds an approved National ID (needed to hand over the item).
+      customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'doc1' })) },
     };
     return { svc: new RentalsService(prisma, tenantContext, audit), prisma };
   }

@@ -19,6 +19,9 @@ import { createReadStream } from 'fs';
 import { UploadService, MAX_ID_DOC_BYTES, MAX_MODEL_BYTES } from './upload.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { ReviewerTwoFactorGuard } from '../id-verification/reviewer-two-factor.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
@@ -211,9 +214,13 @@ export class UploadController {
    * `encodeURIComponent('<tenantId>/<file>')`. The tenant segment must equal
    * the caller's tenant (platform admins excepted); keys are whitelisted by
    * regex so path traversal is impossible. Every view is audit-logged.
+   * Viewing an ID image is part of ID review, so it needs the same
+   * `id-verification:review` permission as approving/rejecting (owner rule
+   * 2026-11-12: SUPER_ADMIN only until granted to a designated role).
    */
   @Get('id-document/:tenantScopedKey')
-  @UseGuards(AdminGuard)
+  @UseGuards(AdminGuard, PermissionGuard, ReviewerTwoFactorGuard)
+  @RequiresPermission('id-verification:review')
   async streamIdDocument(
     @Param('tenantScopedKey') key: string,
     @CurrentUser() user: any,

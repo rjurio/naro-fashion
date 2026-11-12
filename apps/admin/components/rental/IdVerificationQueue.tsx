@@ -28,13 +28,17 @@ export default function IdVerificationQueue({ onChanged }: { onChanged?: () => v
   const [actionId, setActionId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
+  // 403: this admin lacks id-verification:review (only authorised staff review IDs).
+  const [forbidden, setForbidden] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const data = await adminApi.getPendingVerifications();
       setItems(Array.isArray(data) ? data : []);
-    } catch {
+      setForbidden(false);
+    } catch (err: any) {
       setItems([]);
+      setForbidden(err?.status === 403);
     } finally {
       setLoading(false);
     }
@@ -47,8 +51,17 @@ export default function IdVerificationQueue({ onChanged }: { onChanged?: () => v
   const approve = async (id: string) => {
     setActionId(id);
     try {
-      await adminApi.approveVerification(id);
-      toast('ID verified', 'success');
+      const res = await adminApi.approveVerification(id);
+      // The API moves this customer's bookings that were waiting for the ID;
+      // one is confirmed only if its down payment was already received.
+      const r = res?.reconciled;
+      const parts = r && r.idVerified > 0
+        ? [`${r.idVerified} waiting booking${r.idVerified === 1 ? '' : 's'} moved to ID Verified`]
+        : [];
+      if (r?.confirmed > 0) parts.push(`${r.confirmed} confirmed (down payment already received)`);
+      if (r?.paymentDueBy) parts.push(`down payment due by ${new Date(r.paymentDueBy).toLocaleString()}`);
+      if (r?.expired > 0) parts.push(`${r.expired} already expired (released automatically)`);
+      toast(parts.length ? `ID verified — ${parts.join(', ')}` : 'ID verified', 'success');
       setItems((prev) => prev.filter((v) => v.id !== id));
       onChanged?.();
     } catch (err: any) {
@@ -83,6 +96,13 @@ export default function IdVerificationQueue({ onChanged }: { onChanged?: () => v
       <div className="flex items-center justify-center py-6">
         <Loader2 className="w-5 h-5 animate-spin text-brand-gold" />
       </div>
+    );
+  }
+  if (forbidden) {
+    return (
+      <p className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 text-sm text-[hsl(var(--muted-foreground))]">
+        National ID reviews need the &quot;Review National ID Documents&quot; permission. Ask a super admin to grant it to your role.
+      </p>
     );
   }
   if (items.length === 0) return null;
