@@ -286,7 +286,7 @@ export default function ProductSearch({ onAddToCart, categories, catalog, offlin
           ) : scanFeedback.type === 'rentalOnly' ? (
             <><XCircle className="w-4 h-4" /> {scanFeedback.productName} is rental only — it cannot be sold.</>
           ) : scanFeedback.type === 'needsOnline' ? (
-            <><XCircle className="w-4 h-4" /> {scanFeedback.productName} is a buy-or-rent gown — it can only be sold while online.</>
+            <><XCircle className="w-4 h-4" /> {scanFeedback.productName} is a buy-or-rent item — it can only be sold while online.</>
           ) : (
             <><XCircle className="w-4 h-4" /> Barcode not found: {scanFeedback.code}</>
           )}

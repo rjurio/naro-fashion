@@ -663,7 +663,7 @@ export default function InventoryPage() {
             />
             {adjustForm.type === 'RESTOCK' && (
               <p className="mt-1 text-xs text-muted-foreground" data-testid="restock-note-hint">
-                Required for buy-or-rent gowns: a restock makes a sold gown available to rent again, so say where the gown came from.
+                Required for buy-or-rent items: a restock makes a sold item available to rent again, so say where it came from.
               </p>
             )}
           </FormField>

@@ -150,7 +150,7 @@ export class InventoryService {
         error: 'Bad Request',
         code: 'RESTOCK_REASON_REQUIRED',
         message:
-          'Restocking a buy-or-rent gown makes it available to rent again. Add a note saying where the gown came from (at least 5 characters).',
+          'Restocking a buy-or-rent item makes it available to rent again. Add a note saying where the item came from (at least 5 characters).',
       });
     }
     const quantityBefore = variant.stock;

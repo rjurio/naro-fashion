@@ -29,11 +29,11 @@ const product = (over: any = {}) => ({
 });
 
 describe('PosService.getCatalog', () => {
-  it('queries only THIS tenant’s active, non-deleted products', async () => {
+  it('queries only THIS tenant’s active, non-deleted, non-archived products', async () => {
     const { service, findMany } = makeService([product()]);
     await service.getCatalog();
     const args = findMany.mock.calls[0][0];
-    expect(args.where).toEqual({ tenantId: 't1', isActive: true, deletedAt: null });
+    expect(args.where).toEqual({ tenantId: 't1', isActive: true, deletedAt: null, archivedAt: null });
     expect(args.select.variants.where).toEqual({ isActive: true });
     expect(args.take).toBe(POS_CATALOG_MAX_PRODUCTS + 1);
   });
