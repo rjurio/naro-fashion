@@ -27,7 +27,6 @@ import {
 } from './util/two-fa-crypto';
 import { isTokenTypeAllowed } from './util/jwt-secrets';
 import { AdminUsersService } from '../admin-users/admin-users.service';
-import { adminRequiresTwoFactor } from './auth.service';
 import {
   generateRecoveryCodes,
   hashRecoveryCode,
