@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { IsString, IsOptional, IsEmail, IsBoolean, IsInt, IsNumber, IsIn, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsEmail, IsBoolean, IsInt, IsNumber, IsIn, Min, Max, IsDateString } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../notifications/email.service';
@@ -7,6 +7,7 @@ import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 import { parseDurationMs as parseDuration } from '../auth/auth.service';
 import { sanitizeRichText } from '../common/sanitize-html.util';
+import { conflictException, parseExpectedUpdatedAt } from '../common/offline-sync.util';
 
 /**
  * SiteSetting keys whose VALUES are secrets and must never leave the server
@@ -61,6 +62,12 @@ export class CreatePageDto {
 }
 
 export class UpdatePageDto {
+  /**
+   * Optimistic concurrency: the page's updatedAt as the editor (or a script)
+   * last read it. If the page changed since, nothing is written and the API
+   * answers 409 CONFLICT with the current page. Omit = no check (old clients).
+   */
+  @IsOptional() @IsDateString() expectedUpdatedAt?: string;
   @IsOptional() @IsString() title?: string;
   @IsOptional() @IsString() titleSwahili?: string;
   @IsOptional() @IsString() slug?: string;
@@ -312,12 +319,31 @@ export class CmsService {
   }
 
   async updatePage(id: string, dto: UpdatePageDto) {
-    const page = await this.prisma.page.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
+    const tenantId = this.tenantContext.requireId;
+    const expectedUpdatedAt = parseExpectedUpdatedAt(dto.expectedUpdatedAt);
+    const page = await this.prisma.page.findFirst({ where: { id, tenantId } });
     if (!page || page.deletedAt) throw new NotFoundException('Page not found');
-    const data: any = { ...dto };
+    const { expectedUpdatedAt: _ignored, ...rest } = dto;
+    const data: any = { ...rest };
     if (dto.content !== undefined) data.content = sanitizeRichText(dto.content);
-    const updated = await this.prisma.page.update({ where: { id }, data });
-    await this.auditService.log('UPDATE', 'Page', id);
+
+    let updated;
+    if (expectedUpdatedAt) {
+      // Atomic compare-and-swap on updatedAt: a newer edit (another admin, or
+      // the editor while a scripted update runs) is never silently
+      // overwritten. 0 rows -> 409 CONFLICT with the current page.
+      const claim = await this.prisma.page.updateMany({
+        where: { id, tenantId, deletedAt: null, updatedAt: expectedUpdatedAt },
+        data,
+      });
+      if (claim.count === 0) {
+        throw conflictException(await this.prisma.page.findFirst({ where: { id, tenantId } }));
+      }
+      updated = await this.prisma.page.findFirst({ where: { id, tenantId } });
+    } else {
+      updated = await this.prisma.page.update({ where: { id }, data });
+    }
+    await this.auditService.log('UPDATE', 'Page', id, expectedUpdatedAt ? { versionChecked: true } : undefined);
     return updated;
   }
 
