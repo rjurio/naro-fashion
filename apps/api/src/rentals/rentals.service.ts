@@ -44,7 +44,7 @@ import {
   ID_NOT_APPROVED_MESSAGE,
 } from './rental-rules';
 import { notAvailableForRental } from './rental-sale-guard';
-import { findRentalAvailabilityBlock, RentalBlockReason } from './rental-availability';
+import { findRentalAvailability, findRentalAvailabilityBlock, RentalBlockReason } from './rental-availability';
 import { customerIdState, hasApprovedId, lockCustomerIdState } from '../id-verification/id-approval';
 import { decideHold, MAX_STAFF_EXTENSION_DAYS, pickupCutoff, pickupExpiryAt } from './rental-hold';
 import { ExtendRentalHoldDto } from './dto/rental-hold-actions.dto';
@@ -179,7 +179,8 @@ export class RentalsService {
 
     // Fast pre-check for a quick answer: the SAME rule the availability
     // endpoint uses. Not trusted: it is repeated under the lock below.
-    const query = { tenantId, product, startDate, returnDate, bufferDays };
+    // M2: the chosen variant (size) — on unit-managed products a unit must fit it.
+    const query = { tenantId, product, startDate, returnDate, bufferDays, variantId: dto.variantId };
     const early = await findRentalAvailabilityBlock(this.prisma, query);
     if (early) throw this.bookingRefusal(early);
 
@@ -218,8 +219,8 @@ export class RentalsService {
     return this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dto.productId}))`;
 
-      const blocked = await findRentalAvailabilityBlock(tx, query);
-      if (blocked) throw this.bookingRefusal(blocked);
+      const availability = await findRentalAvailability(tx, query);
+      if (availability.block) throw this.bookingRefusal(availability.block);
 
       // National ID: read under the per-customer lock ID approval also takes,
       // so a booking and an approval for the same customer never interleave
@@ -251,6 +252,8 @@ export class RentalsService {
           downPaymentAmount,
           damageDeposit: depositAmount,
           status: initialStatus,
+          // M2: the physical unit, allocated under the per-product lock (null: legacy product).
+          rentalUnitId: availability.unitId,
           holdState: hold.holdState,
           holdExpiresAt: hold.holdExpiresAt,
           notes: dto.notes,
@@ -759,7 +762,7 @@ export class RentalsService {
       // Same date-window rule as a booking (RETURNED / INSPECTION still hold
       // their window), excluding this rental. The gown is already committed
       // to this customer, so the sale / overdue rules are not re-applied.
-      const blocked = await findRentalAvailabilityBlock(tx, {
+      const availability = await findRentalAvailability(tx, {
         tenantId,
         product: { id: rental.productId, availabilityMode: 'RENTAL_ONLY' },
         startDate,
@@ -767,10 +770,14 @@ export class RentalsService {
         bufferDays,
         excludeRentalId: id,
         scope: 'reschedule',
+        // M2: keep the booking's unit when it's still free on the new dates, else move to a free one.
+        variantId: rental.variantId,
+        currentUnitId: rental.rentalUnitId ?? null,
       });
-      if (blocked) {
+      if (availability.block) {
         throw new ConflictException('Product is not available for the selected dates');
       }
+      if (availability.unitId && availability.unitId !== rental.rentalUnitId) data.rentalUnitId = availability.unitId;
       return tx.rentalOrder.update({ where: { id }, data, include });
     });
   }

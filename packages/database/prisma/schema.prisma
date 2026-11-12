@@ -517,6 +517,7 @@ model Product {
   // Powers the future `list archived products` admin/AI surface; cheap
   // and tiny since the column is null on every row at rollout.
   @@index([archivedAt])
+  rentalUnits RentalUnit[]
 }
 
 model ProductVariant {
@@ -546,6 +547,7 @@ model ProductVariant {
   @@index([productId])
   @@index([sku])
   @@index([barcode])
+  rentalUnitFits RentalUnitVariant[]
 }
 
 model ProductImage {
@@ -945,6 +947,14 @@ model RentalOrder {
   createdByAdminId String?
   // When the customer accepted the rental terms / agreement.
   termsAcceptedAt  DateTime?
+  // POS rental MVP (M2): the physical unit allocated to this booking (null:
+  // product without units = legacy one-booking-at-a-time rule).
+  rentalUnitId     String?
+  handedOverAt        DateTime?
+  handedOverByAdminId String?
+  returnCondition     String?   // GOOD | MINOR_DAMAGE | DAMAGED | MISSING_PARTS
+  returnNotes         String?
+  returnedByAdminId   String?
   // The deadline a customer reminder was sent for (one reminder per deadline).
   holdReminderFor  DateTime?
 
@@ -967,6 +977,7 @@ model RentalOrder {
   variant  ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   payments Payment[]
   refundRequests RentalRefundRequest[]
+  rentalUnit RentalUnit? @relation(fields: [rentalUnitId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   checklist RentalChecklistEntry[]
   reminders RentalPreparationReminder[]
 
@@ -978,6 +989,63 @@ model RentalOrder {
   @@index([returnDate])
   @@index([productId, startDate, returnDate])
   @@index([status, holdExpiresAt])
+  @@index([rentalUnitId])
+}
+
+/// One physical item that can be rented (POS rental MVP, M2): a gown, a
+/// bouquet... A product with NO units keeps the legacy rule (one booking at a
+/// time). With units, availability is "at least one free unit that fits the
+/// chosen variant", allocated under the per-product booking lock.
+model RentalUnit {
+  id             String    @id @default(cuid())
+  tenantId       String?
+  productId      String
+  code           String    // printed tag / barcode, unique per tenant
+  label          String?
+  status         String    @default("ACTIVE") // ACTIVE | MAINTENANCE | RETIRED | SOLD | LOST
+  conditionNotes String?
+  acquiredAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  product Product            @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  fits    RentalUnitVariant[]
+  blocks  RentalUnitBlock[]
+  rentals RentalOrder[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([productId])
+}
+
+/// Which variants (sizes) a unit can serve. No rows = it fits every variant.
+model RentalUnitVariant {
+  unitId    String
+  variantId String
+
+  unit    RentalUnit     @relation(fields: [unitId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@id([unitId, variantId])
+  @@index([variantId])
+}
+
+/// A period in which a unit can't be booked (cleaning, alteration,
+/// maintenance, held by the owner).
+model RentalUnitBlock {
+  id               String   @id @default(cuid())
+  tenantId         String?
+  unitId           String
+  startsAt         DateTime
+  endsAt           DateTime
+  reason           String
+  createdByAdminId String
+  createdAt        DateTime @default(now())
+
+  unit RentalUnit @relation(fields: [unitId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@index([unitId])
 }
 
 model RentalPreparationReminder {
