@@ -1015,6 +1015,14 @@ class AdminApiClient {
   markRentalReady(id: string) {
     return this.patch<any>(`/rentals/${id}/ready`, {});
   }
+  /** Give an unconfirmed booking a new, bounded deadline (rentals:update-status; audited). */
+  extendRentalHold(id: string, body: { until: string; note: string }) {
+    return this.patch<any>(`/rentals/${id}/hold/extend`, body);
+  }
+  /** Record the payout of money held on a cancelled booking (payments:manage; audited). */
+  recordRentalRefund(id: string, body: { amount: number; method: 'MOBILE_MONEY' | 'BANK_TRANSFER' | 'CASH'; reference?: string; note: string }) {
+    return this.patch<any>(`/rentals/${id}/refund-recorded`, body);
+  }
   getActiveRentals() {
     return this.get<any>('/rentals/admin', { params: { status: 'ACTIVE' } });
   }

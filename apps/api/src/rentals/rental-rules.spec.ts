@@ -114,9 +114,11 @@ describe('RentalsService.updateStatus → RETURNED records late fee from booked 
   it('reports a concurrent status change as a conflict', async () => {
     const prisma: any = {
       rentalOrder: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'r1', status: 'FULLY_PAID' }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'r1', status: 'FULLY_PAID', userId: 'u1' }),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      // The customer holds an approved National ID (needed to hand over the item).
+      customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'doc1' })) },
     };
     const svc = new RentalsService(prisma, { requireId: 't1' } as any, { log: jest.fn() } as any);
     await expect(svc.updateStatus('r1', 'READY_FOR_PICKUP')).rejects.toBeInstanceOf(ConflictException);
@@ -174,44 +176,8 @@ describe('RentalsService.update — date edits re-check availability under the a
   });
 });
 
-describe('SchedulerService.handleExpiredRentalHolds', () => {
-  function make(ttl?: string, stale: any[] = []) {
-    const prisma: any = {
-      rentalOrder: {
-        findMany: jest.fn().mockResolvedValue(stale),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      },
-    };
-    const config: any = { get: jest.fn().mockReturnValue(ttl) };
-    const svc = new SchedulerService(prisma, {} as any, config, {} as any, {} as any);
-    return { svc, prisma };
-  }
-
-  it('cancels unpaid holds older than the TTL (default 48h) with a status CAS', async () => {
-    const now = new Date('2026-10-04T12:00:00Z');
-    const { svc, prisma } = make(undefined, [
-      { id: 'r1', tenantId: 't1', status: 'PENDING_ID_VERIFICATION', rentalNumber: 'RNT-1', notes: null },
-    ]);
-    const n = await svc.handleExpiredRentalHolds(now);
-    expect(n).toBe(1);
-    const q = prisma.rentalOrder.findMany.mock.calls[0][0].where;
-    expect(q.createdAt.lt).toEqual(new Date('2026-10-02T12:00:00Z'));
-    expect(q.status.in).toEqual(expect.arrayContaining(['PENDING_ID_VERIFICATION', 'PENDING_PAYMENT']));
-    expect(q.payments).toEqual({ none: { status: 'COMPLETED' } });
-    const u = prisma.rentalOrder.updateMany.mock.calls[0][0];
-    expect(u.where).toMatchObject({ id: 'r1', tenantId: 't1', status: 'PENDING_ID_VERIFICATION' });
-    expect(u.data.status).toBe('CANCELLED');
-  });
-
-  it('honours RENTAL_HOLD_TTL_HOURS', async () => {
-    const now = new Date('2026-10-04T12:00:00Z');
-    const { svc, prisma } = make('6');
-    await svc.handleExpiredRentalHolds(now);
-    expect(prisma.rentalOrder.findMany.mock.calls[0][0].where.createdAt.lt).toEqual(
-      new Date('2026-10-04T06:00:00Z'),
-    );
-  });
-});
+// SchedulerService.handleExpiredRentalHolds (revised hold rules, 2026-11-12):
+// see rental-hold.spec.ts.
 
 describe('SchedulerService.getAdminContact', () => {
   it('prefers the tenant SUPER_ADMIN; env only as fallback', async () => {

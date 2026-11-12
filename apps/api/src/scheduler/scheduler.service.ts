@@ -6,9 +6,27 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { InstagramService } from '../cms/instagram.service';
 import {
-  DEFAULT_RENTAL_HOLD_TTL_HOURS,
   UNPAID_HOLD_STATUSES,
 } from '../rentals/rental-rules';
+import {
+  adoptLegacyHold,
+  CONFIRMED_NOT_COLLECTED_STATUSES,
+  expiryInstant,
+  formatEatDeadline,
+  holdExpiryMessage,
+  holdExpiryReason,
+  HoldExpiryReason,
+  inflightPaymentProtects,
+  paymentReviewHold,
+  pickupCutoff,
+  pickupExpiryAt,
+  REMINDABLE_HOLD_STATES,
+  reminderAction,
+  REMINDER_LEAD_HOURS,
+  REMINDER_MIN_LEAD_HOURS,
+  rentalHoldTtlHours,
+} from '../rentals/rental-hold';
+import { customerIdState, lockCustomerIdState } from '../id-verification/id-approval';
 
 /** Mapping from admin-friendly interval keys to cron expressions */
 export const INSTAGRAM_SYNC_INTERVALS: Record<string, string> = {
@@ -497,60 +515,425 @@ export class SchedulerService implements OnModuleInit {
   // ============================================================
 
   /**
-   * Every 30 minutes — cancel abandoned unpaid rental bookings.
+   * Every 30 minutes — the unconfirmed-booking ("hold") job
+   * (owner rules 2026-11-12, rentals/rental-hold.ts):
    *
-   * A rental is created in PENDING_ID_VERIFICATION / ID_VERIFIED (or legacy
-   * PENDING_PAYMENT/PENDING) and immediately counts against availability. If
-   * the customer never pays, the gown was blocked forever. Any rental still in
-   * an unpaid hold status with NO COMPLETED payment after
-   * RENTAL_HOLD_TTL_HOURS (default 48) is moved to CANCELLED, which
-   * NON_BLOCKING_RENTAL_STATUSES excludes from availability.
+   *  1. adopt bookings created before the hold rules (holdState NULL);
+   *  2. expire holds whose deadline (`holdExpiresAt`) or pickup day (EAT) has
+   *     passed:
+   *       - no money received → CANCELLED (customer emailed);
+   *       - money received → PAYMENT_REVIEW: staff have
+   *         RENTAL_PAYMENT_REVIEW_HOURS (72) to extend, take the rest, or
+   *         cancel; the dates stay held meanwhile;
+   *       - PAYMENT_REVIEW not resolved in time → CANCELLED + REFUND_DUE (the
+   *         money is never forfeited; finance staff pay it out and record it);
+   *     a payment in progress holds an expired booking back only if it was
+   *     started BEFORE the expiry, and only for RENTAL_HOLD_PAYMENT_GRACE_MINUTES
+   *     after it (default 120) — new attempts can't postpone it;
+   *  3. flag CONFIRMED bookings not collected by the end of their pickup day
+   *     as NO_SHOW_REVIEW (never auto-cancelled: money was received);
+   *  4. remind customers ~24 h before an actionable deadline (upload an ID,
+   *     upload a new ID, pay the down payment) — once per deadline, never
+   *     while an ID waits for staff, never for confirmed / cancelled bookings.
+   *
+   * Race-safe and idempotent: each booking is re-read and changed inside a
+   * transaction holding the SAME advisory locks as booking/rescheduling
+   * (per product), ID submission/review (per customer) and payment
+   * initiation (per rental), with a CAS on the observed state. A second run,
+   * or one racing an approval, payment or reschedule, changes nothing.
    *
    * Lives here (not in RentalsService) because RentalsService depends on the
    * request-scoped TenantContext, and @Cron can't run on request-scoped
-   * providers. Cross-tenant by design (cron); each update is a CAS on the
-   * observed status so a payment/approval landing mid-run wins.
+   * providers. Cross-tenant by design (cron).
    */
   @Cron('0 */30 * * * *', { name: 'rental-hold-expiry' })
   async handleExpiredRentalHolds(now: Date = new Date()): Promise<number> {
     try {
-      const raw = Number(this.configService.get<string>('RENTAL_HOLD_TTL_HOURS'));
-      const ttlHours = raw > 0 ? raw : DEFAULT_RENTAL_HOLD_TTL_HOURS;
-      const cutoff = new Date(now.getTime() - ttlHours * 60 * 60 * 1000);
+      const ttlHours = rentalHoldTtlHours(this.configService.get<string>('RENTAL_HOLD_TTL_HOURS'));
+      await this.adoptLegacyHolds(now, ttlHours);
 
-      const stale = await this.prisma.rentalOrder.findMany({
+      const cutoff = pickupCutoff(now);
+      const candidates = await this.prisma.rentalOrder.findMany({
         where: {
           status: { in: UNPAID_HOLD_STATUSES },
-          createdAt: { lt: cutoff },
-          payments: { none: { status: 'COMPLETED' } },
+          OR: [{ holdExpiresAt: { lte: now } }, { pickupDate: { lt: cutoff } }],
         },
-        select: { id: true, tenantId: true, status: true, rentalNumber: true, notes: true },
+        select: {
+          id: true,
+          tenantId: true,
+          userId: true,
+          productId: true,
+          rentalNumber: true,
+          user: { select: { email: true, firstName: true } },
+          product: { select: { name: true } },
+        },
+        orderBy: { createdAt: 'asc' },
         take: 500,
       });
 
       let cancelled = 0;
-      for (const r of stale) {
-        const note = `[Auto-cancelled ${now.toISOString()}] Unpaid hold expired after ${ttlHours}h.`;
-        const res = await this.prisma.rentalOrder.updateMany({
-          where: {
-            id: r.id,
-            tenantId: r.tenantId,
-            status: r.status,
-            payments: { none: { status: 'COMPLETED' } },
-          },
-          data: { status: 'CANCELLED', notes: r.notes ? `${r.notes}\n${note}` : note },
-        });
-        if (res.count > 0) {
-          cancelled++;
-          this.logger.warn(`[RENTAL HOLD] ${r.rentalNumber} auto-cancelled (unpaid > ${ttlHours}h)`);
+      for (const r of candidates) {
+        // One booking's failure (lock timeout, DB blip) must not stop the run;
+        // it is retried on the next one.
+        let outcome: Awaited<ReturnType<SchedulerService['expireRentalHold']>>;
+        try {
+          outcome = await this.expireRentalHold(r, now);
+        } catch (err: any) {
+          this.logger.error(`[RENTAL_HOLD] ${r.rentalNumber} not processed: ${err?.message}`);
+          continue;
+        }
+        if (outcome.kind === 'none') continue;
+        if (outcome.kind === 'skipped') {
+          this.logger.log(`[RENTAL_HOLD] ${r.rentalNumber} expired but kept: ${outcome.why}`);
+          continue;
+        }
+        if (outcome.kind === 'review') {
+          this.logger.warn(
+            `[RENTAL_HOLD] REVIEW: ${r.rentalNumber} expired (${outcome.reason}) with ${outcome.net} TZS received — PAYMENT_REVIEW until ${outcome.until.toISOString()} (staff: extend, take the rest, or cancel)`,
+          );
+          continue;
+        }
+        cancelled++;
+        this.logger.warn(
+          outcome.kind === 'released'
+            ? `[RENTAL_HOLD] ${r.rentalNumber} released after staff review; ${outcome.net} TZS REFUND_DUE`
+            : `[RENTAL_HOLD] ${r.rentalNumber} auto-cancelled (${outcome.reason}; holdState ${outcome.holdState ?? '-'}; deadline ${outcome.holdExpiresAt?.toISOString() ?? 'none'})`,
+        );
+        if (r.user?.email) {
+          try {
+            await this.notifications.sendRentalHoldExpired({
+              customerEmail: r.user.email,
+              customerName: r.user.firstName ?? undefined,
+              rentalNumber: r.rentalNumber,
+              productName: r.product?.name,
+              message: outcome.message,
+              moneyHeld: outcome.kind === 'released',
+              tenantId: r.tenantId,
+            });
+          } catch (err: any) {
+            this.logger.error(`[RENTAL_HOLD] notification failed for ${r.rentalNumber}: ${err?.message}`);
+          }
         }
       }
       if (cancelled > 0) this.logger.log(`Rental hold expiry: ${cancelled} cancelled.`);
+
+      try {
+        await this.flagNoShows(now);
+      } catch (err: any) {
+        this.logger.error(`[RENTAL_HOLD] no-show check failed: ${err?.message}`);
+      }
+      try {
+        await this.sendHoldReminders(now);
+      } catch (err: any) {
+        this.logger.error(`[RENTAL_HOLD] reminders failed: ${err?.message}`);
+      }
       return cancelled;
     } catch (error) {
       this.logger.error('Error in rental hold expiry cron:', error);
       return 0;
     }
+  }
+
+  /** COMPLETED minus REFUNDED payments on a rental (money still held). */
+  private async netPaid(tx: any, rentalOrderId: string, tenantId: string | null): Promise<number> {
+    const [c, r] = await Promise.all([
+      tx.payment.aggregate({ _sum: { amount: true }, where: { rentalOrderId, tenantId, status: 'COMPLETED' } }),
+      tx.payment.aggregate({ _sum: { amount: true }, where: { rentalOrderId, tenantId, status: 'REFUNDED' } }),
+    ]);
+    return Math.max(0, Math.round((Number(c._sum.amount ?? 0) - Number(r._sum.amount ?? 0)) * 100) / 100);
+  }
+
+  /** The shared locks, in the same order as RentalsService.create(): product, customer, payment. */
+  private async lockRental(tx: any, r: { id: string; tenantId: string | null; userId: string; productId: string }) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${r.productId}))`;
+    if (r.tenantId) await lockCustomerIdState(tx, r.tenantId, r.userId);
+    const paymentLock = `payment:rental:${r.id}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${paymentLock}))`;
+  }
+
+  /** Re-check and act on ONE expired booking under the shared locks. */
+  private async expireRentalHold(
+    r: { id: string; tenantId: string | null; userId: string; productId: string },
+    now: Date,
+  ): Promise<
+    | { kind: 'cancelled'; reason: HoldExpiryReason; holdState: string | null; holdExpiresAt: Date | null; message: string }
+    | { kind: 'released'; net: number; message: string }
+    | { kind: 'review'; reason: HoldExpiryReason; net: number; until: Date }
+    | { kind: 'skipped'; why: string }
+    | { kind: 'none' }
+  > {
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockRental(tx, r);
+
+      const cur = await tx.rentalOrder.findFirst({
+        where: { id: r.id, tenantId: r.tenantId },
+        select: { status: true, holdState: true, holdExpiresAt: true, pickupDate: true, notes: true },
+      });
+      if (!cur || !UNPAID_HOLD_STATUSES.includes(cur.status)) return { kind: 'none' as const };
+      const net = await this.netPaid(tx, r.id, r.tenantId);
+      const iso = now.toISOString();
+      const withNote = (note: string) => (cur.notes ? `${cur.notes}\n${note}` : note);
+
+      // Staff review window (money received) is over: release the dates, and
+      // flag the money for refund. Never forfeited automatically.
+      if (cur.holdState === 'PAYMENT_REVIEW') {
+        if (!cur.holdExpiresAt || cur.holdExpiresAt.getTime() > now.getTime()) return { kind: 'none' as const };
+        const res = await tx.rentalOrder.updateMany({
+          where: { id: r.id, tenantId: r.tenantId, status: cur.status, holdState: 'PAYMENT_REVIEW', holdExpiresAt: cur.holdExpiresAt },
+          data: {
+            status: 'CANCELLED',
+            holdState: net > 0 ? 'REFUND_DUE' : 'PAYMENT_REVIEW',
+            notes: withNote(
+              `[Auto-released ${iso}] The staff review window ended without a resolution. ${net} TZS received is due for refund (REFUND_DUE).`,
+            ),
+          },
+        });
+        if (res.count === 0) return { kind: 'none' as const };
+        return { kind: 'released' as const, net, message: holdExpiryMessage('HOLD_DEADLINE', 'PAYMENT_REVIEW') };
+      }
+
+      const reason = holdExpiryReason(cur, now);
+      if (!reason) return { kind: 'none' as const };
+
+      // Bounded protection for a payment in progress: only one started before
+      // the expiry, and only until the expiry + the grace.
+      const expiredAt = expiryInstant(cur, reason);
+      const inflight = await tx.payment.findMany({
+        where: { rentalOrderId: r.id, tenantId: r.tenantId, status: { in: ['PENDING', 'PROCESSING'] } },
+        select: { createdAt: true },
+      });
+      const protecting = inflight.filter((p: { createdAt: Date }) => inflightPaymentProtects(p.createdAt, expiredAt, now));
+      if (protecting.length > 0) {
+        return { kind: 'skipped' as const, why: `${protecting.length} payment(s) started before the expiry still in progress` };
+      }
+
+      // Money received: never cancelled here — staff review, bounded.
+      if (net > 0) {
+        const review = paymentReviewHold(now);
+        const res = await tx.rentalOrder.updateMany({
+          where: {
+            id: r.id,
+            tenantId: r.tenantId,
+            status: cur.status,
+            holdState: cur.holdState,
+            holdExpiresAt: cur.holdExpiresAt,
+            pickupDate: cur.pickupDate,
+          },
+          data: {
+            ...review,
+            notes: withNote(
+              `[Payment review ${iso}] Expired (${reason}) with ${net} TZS received; staff review until ${review.holdExpiresAt!.toISOString()}.`,
+            ),
+          },
+        });
+        if (res.count === 0) return { kind: 'none' as const };
+        return { kind: 'review' as const, reason, net, until: review.holdExpiresAt! };
+      }
+
+      const message = holdExpiryMessage(reason, cur.holdState);
+      const note = `[Auto-cancelled ${iso}] ${message} (${reason}${
+        cur.holdExpiresAt ? `, deadline ${cur.holdExpiresAt.toISOString()}` : ''
+      })`;
+      const res = await tx.rentalOrder.updateMany({
+        where: {
+          id: r.id,
+          tenantId: r.tenantId,
+          status: cur.status,
+          holdState: cur.holdState,
+          holdExpiresAt: cur.holdExpiresAt,
+          pickupDate: cur.pickupDate,
+          payments: { none: { status: 'COMPLETED' } },
+        },
+        data: { status: 'CANCELLED', notes: withNote(note) },
+      });
+      if (res.count === 0) return { kind: 'none' as const };
+      return {
+        kind: 'cancelled' as const,
+        reason,
+        holdState: cur.holdState,
+        holdExpiresAt: cur.holdExpiresAt,
+        message,
+      };
+    });
+  }
+
+  /**
+   * Explicit no-show rule: a CONFIRMED booking (paid) not handed over by the
+   * end of its pickup day is flagged NO_SHOW_REVIEW for staff (hand over late,
+   * reschedule, or cancel → REFUND_DUE). Never auto-cancelled: money was paid
+   * and the cancellation policy is a manual review.
+   */
+  private async flagNoShows(now: Date): Promise<number> {
+    const cutoff = pickupCutoff(now);
+    const rows = await this.prisma.rentalOrder.findMany({
+      where: {
+        status: { in: CONFIRMED_NOT_COLLECTED_STATUSES },
+        pickupDate: { lt: cutoff },
+        OR: [{ holdState: null }, { holdState: { notIn: ['NO_SHOW_REVIEW', 'REFUND_DUE', 'REFUND_RECORDED'] } }],
+      },
+      select: { id: true, tenantId: true, rentalNumber: true, status: true, pickupDate: true, holdState: true, notes: true },
+      take: 500,
+    });
+    let flagged = 0;
+    for (const r of rows) {
+      const note = `[No-show review ${now.toISOString()}] Not collected by the end of the pickup day; staff decide (hand over, reschedule or cancel).`;
+      const res = await this.prisma.rentalOrder.updateMany({
+        where: { id: r.id, tenantId: r.tenantId, status: r.status, pickupDate: r.pickupDate, holdState: r.holdState },
+        data: { holdState: 'NO_SHOW_REVIEW', holdExpiresAt: null, notes: r.notes ? `${r.notes}\n${note}` : note },
+      });
+      if (res.count > 0) {
+        flagged++;
+        this.logger.warn(`[RENTAL_HOLD] REVIEW: ${r.rentalNumber} (${r.status}) not collected by its pickup day — NO_SHOW_REVIEW`);
+      }
+    }
+    return flagged;
+  }
+
+  /**
+   * ~24 h before an actionable deadline, remind the customer once (per
+   * deadline value): upload an ID, upload a new ID, or pay the down payment.
+   * Claimed by CAS under the shared locks BEFORE sending, so a reminder is
+   * never sent twice and never after an approval / rejection / payment /
+   * cancellation that landed first. Never while an ID waits for staff (that
+   * state has no deadline), never for 0 % / confirmed / cancelled / expired
+   * bookings. The email carries the booking number, the deadline in EAT and
+   * the amount due — no ID details.
+   */
+  private async sendHoldReminders(now: Date): Promise<number> {
+    const from = new Date(now.getTime() + REMINDER_MIN_LEAD_HOURS * 3600e3);
+    const to = new Date(now.getTime() + REMINDER_LEAD_HOURS * 3600e3);
+    const rows = await this.prisma.rentalOrder.findMany({
+      where: {
+        status: { in: UNPAID_HOLD_STATUSES },
+        holdState: { in: REMINDABLE_HOLD_STATES as unknown as string[] },
+        holdExpiresAt: { gt: from, lte: to },
+        pickupDate: { gte: pickupCutoff(now) },
+      },
+      select: {
+        id: true,
+        tenantId: true,
+        userId: true,
+        productId: true,
+        rentalNumber: true,
+        holdExpiresAt: true,
+        holdReminderFor: true,
+        user: { select: { email: true, firstName: true } },
+        product: { select: { name: true } },
+      },
+      orderBy: { holdExpiresAt: 'asc' },
+      take: 200,
+    });
+    let sent = 0;
+    for (const r of rows) {
+      if (r.holdReminderFor && r.holdExpiresAt && r.holdReminderFor.getTime() === r.holdExpiresAt.getTime()) continue;
+      if (!r.user?.email) continue;
+      let claim: { action: NonNullable<ReturnType<typeof reminderAction>>; deadline: Date; amountDue: number | null } | null = null;
+      try {
+        claim = await this.prisma.$transaction(async (tx) => {
+          await this.lockRental(tx, r);
+          const cur = await tx.rentalOrder.findFirst({
+            where: { id: r.id, tenantId: r.tenantId },
+            select: { status: true, holdState: true, holdExpiresAt: true, holdReminderFor: true, pickupDate: true, downPaymentAmount: true },
+          });
+          if (!cur || !UNPAID_HOLD_STATUSES.includes(cur.status) || !cur.holdExpiresAt) return null;
+          const action = reminderAction(cur.holdState);
+          if (!action) return null;
+          if (cur.holdExpiresAt.getTime() <= from.getTime() || cur.holdExpiresAt.getTime() > to.getTime()) return null;
+          if (cur.holdReminderFor && cur.holdReminderFor.getTime() === cur.holdExpiresAt.getTime()) return null;
+          let amountDue: number | null = null;
+          if (action === 'PAY_DOWN_PAYMENT') {
+            amountDue = Math.round((Number(cur.downPaymentAmount) - (await this.netPaid(tx, r.id, r.tenantId))) * 100) / 100;
+            if (amountDue <= 0) return null; // covered: settlement confirms it
+          }
+          const res = await tx.rentalOrder.updateMany({
+            where: {
+              id: r.id,
+              tenantId: r.tenantId,
+              status: cur.status,
+              holdState: cur.holdState,
+              holdExpiresAt: cur.holdExpiresAt,
+              OR: [{ holdReminderFor: null }, { holdReminderFor: { not: cur.holdExpiresAt } }],
+            },
+            data: { holdReminderFor: cur.holdExpiresAt },
+          });
+          if (res.count === 0) return null;
+          // The customer must act before the earlier of the deadline and the end of the pickup day.
+          const pickupEnd = pickupExpiryAt(cur.pickupDate);
+          const deadline = pickupEnd.getTime() < cur.holdExpiresAt.getTime() ? pickupEnd : cur.holdExpiresAt;
+          return { action, deadline, amountDue };
+        });
+      } catch (err: any) {
+        this.logger.error(`[RENTAL_HOLD] reminder for ${r.rentalNumber} not processed: ${err?.message}`);
+        continue;
+      }
+      if (!claim) continue;
+      try {
+        await this.notifications.sendRentalHoldReminder({
+          customerEmail: r.user.email,
+          customerName: r.user.firstName ?? undefined,
+          rentalNumber: r.rentalNumber,
+          productName: r.product?.name,
+          action: claim.action,
+          deadline: formatEatDeadline(claim.deadline),
+          amountDue: claim.amountDue,
+          tenantId: r.tenantId,
+        });
+        sent++;
+      } catch (err: any) {
+        // At most once: the claim is kept, so a failed email is not retried.
+        this.logger.error(`[RENTAL_HOLD] reminder email failed for ${r.rentalNumber}: ${err?.message}`);
+      }
+    }
+    if (sent > 0) this.logger.log(`[RENTAL_HOLD] ${sent} deadline reminder(s) sent.`);
+    return sent;
+  }
+
+  /** Classify unconfirmed bookings created before the hold rules (holdState NULL). */
+  private async adoptLegacyHolds(now: Date, ttlHours: number): Promise<number> {
+    const legacy = await this.prisma.rentalOrder.findMany({
+      where: { status: { in: UNPAID_HOLD_STATUSES }, holdState: null },
+      select: { id: true, tenantId: true, userId: true, status: true, createdAt: true, downPaymentAmount: true, rentalNumber: true },
+      orderBy: { createdAt: 'asc' },
+      take: 500,
+    });
+    let adopted = 0;
+    for (const r of legacy) {
+      let decision: { holdState: string; holdExpiresAt: Date | null } | null = null;
+      try {
+        decision = await this.prisma.$transaction(async (tx) => {
+          if (r.tenantId) await lockCustomerIdState(tx, r.tenantId, r.userId);
+          const id = r.tenantId
+            ? await customerIdState(tx, r.tenantId, r.userId)
+            : { state: 'NONE' as const, approvedAt: null, rejectedAt: null };
+          const hold = adoptLegacyHold({
+            status: r.status,
+            createdAt: r.createdAt,
+            downPaymentAmount: Number(r.downPaymentAmount),
+            idState: id.state,
+            approvedAt: id.approvedAt,
+            rejectedAt: id.rejectedAt,
+            ttlHours,
+          });
+          const res = await tx.rentalOrder.updateMany({
+            where: { id: r.id, tenantId: r.tenantId, status: r.status, holdState: null },
+            data: hold,
+          });
+          return res.count > 0 ? hold : null;
+        });
+      } catch (err: any) {
+        // Not adopted this run (retried next run); expiry of the others continues.
+        this.logger.error(`[RENTAL_HOLD] ${r.rentalNumber} not adopted: ${err?.message}`);
+        continue;
+      }
+      if (decision) {
+        adopted++;
+        this.logger.log(
+          `[RENTAL_HOLD] ${r.rentalNumber} adopted: ${decision.holdState}, deadline ${decision.holdExpiresAt?.toISOString() ?? 'none'}`,
+        );
+      }
+    }
+    if (adopted > 0) this.logger.log(`[RENTAL_HOLD] ${adopted} existing booking(s) given an explicit hold deadline (${now.toISOString()}).`);
+    return adopted;
   }
 
   // ============================================================

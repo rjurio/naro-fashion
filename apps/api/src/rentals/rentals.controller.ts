@@ -22,9 +22,12 @@ import {
   RentalAvailabilityQueryDto,
   parseAvailabilityWindow,
 } from './dto/rental-availability-query.dto';
+import { ExtendRentalHoldDto, RecordRentalRefundDto } from './dto/rental-hold-actions.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { Public } from '../auth/decorators/public.decorator';
@@ -130,7 +133,9 @@ export class RentalsController {
     return this.rentalsService.update(id, dto);
   }
 
-  @UseGuards(AdminGuard)
+  // Staff with rentals:update-status only (SUPER_ADMIN holds every permission).
+  @UseGuards(AdminGuard, PermissionGuard)
+  @RequiresPermission('rentals:update-status')
   @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,
@@ -140,10 +145,27 @@ export class RentalsController {
     return this.rentalsService.updateStatus(id, dto.status, dto.expectedStatus, user, dto.returnedAt);
   }
 
-  @UseGuards(AdminGuard)
+  @UseGuards(AdminGuard, PermissionGuard)
+  @RequiresPermission('rentals:update-status')
   @Patch(':id/ready')
   markReadyForPickup(@Param('id') id: string) {
     return this.rentalsService.markReadyForPickup(id);
+  }
+
+  /** Staff: give an unconfirmed booking (incl. PAYMENT_REVIEW) a new, bounded deadline. Audited. */
+  @UseGuards(AdminGuard, PermissionGuard)
+  @RequiresPermission('rentals:update-status')
+  @Patch(':id/hold/extend')
+  extendHold(@Param('id') id: string, @Body() dto: ExtendRentalHoldDto) {
+    return this.rentalsService.extendHold(id, dto);
+  }
+
+  /** Finance: record the payout of money held on a cancelled booking (REFUND_DUE → REFUND_RECORDED). Audited. */
+  @UseGuards(AdminGuard, PermissionGuard)
+  @RequiresPermission('payments:manage')
+  @Patch(':id/refund-recorded')
+  recordRefund(@Param('id') id: string, @Body() dto: RecordRentalRefundDto) {
+    return this.rentalsService.recordRefund(id, dto);
   }
 
   @UseGuards(AdminGuard)
