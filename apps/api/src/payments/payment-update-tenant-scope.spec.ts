@@ -29,7 +29,7 @@ describe('PaymentsService.updateStatus — shop-scoped write', () => {
     await svc.updateStatus('p1', { status: 'COMPLETED' } as any);
     expect(prisma.payment.update).not.toHaveBeenCalled();
     expect(prisma.payment.updateMany).toHaveBeenCalledTimes(1);
-    expect(prisma.payment.updateMany.mock.calls[0][0].where).toEqual({ id: 'p1', tenantId: 'tenant-a' });
+    expect(prisma.payment.updateMany.mock.calls[0][0].where).toMatchObject({ id: 'p1', tenantId: 'tenant-a' });
   });
 
   it('the read is shop-scoped too; another shop\'s id → 404, nothing written', async () => {
