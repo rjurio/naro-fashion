@@ -1,4 +1,5 @@
 import { lockRentalMoney, netHeld } from './refund-due';
+import { lateDays, lateFeeFor, lateFeeSentence, lateFeeTerms, storedLateFeeTerms } from './late-fee';
 import { assertHandoverSafeguard } from './handover-safeguard';
 import {
   Injectable,
@@ -231,6 +232,14 @@ export class RentalsService {
     }
     const depositAmount = terms.deposit;
     const totalRentalPrice = terms.rentalFee;
+    // LF-2026-11: the late-fee terms of THIS booking, stored and later used at return.
+    const agreedLateFee = lateFeeTerms({
+      rentalFee: Number(totalRentalPrice),
+      productPct: (product as any).latePenaltyPercent,
+      shopDefaultPct: (policy as any)?.defaultLateFeePct,
+      capPct: (policy as any)?.lateFeeCapPct,
+      freeRentalPerDay: (policy as any)?.freeRentalLateFeePerDay,
+    });
     const downPaymentAmount = terms.downPayment;
 
     const rentalNumber = `RNT-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
@@ -276,6 +285,7 @@ export class RentalsService {
           totalRentalPrice,
           downPaymentAmount,
           damageDeposit: depositAmount,
+          lateFeeTerms: agreedLateFee as any,
           status: initialStatus,
           // M2: the physical unit, allocated under the per-product lock (null: legacy product).
           rentalUnitId: availability.unitId,
@@ -455,15 +465,22 @@ export class RentalsService {
         }),
         this.prisma.rentalPolicy.findFirst({ where: { tenantId } }),
       ]);
-      const { lateFee } = computeLateFee({
-        bookedReturnDate: rental.returnDate,
-        actualReturnDate: returnedAt,
-        flatRentalPrice: Number(rental.totalRentalPrice),
-        latePenaltyPercent:
-          product?.latePenaltyPercent != null ? Number(product.latePenaltyPercent) : null,
-        policyLateFeePerDay: policy ? Number(policy.lateFeePerDay) : null,
-      });
-      data.lateFee = lateFee;
+      // LF-2026-11 bookings use the terms agreed at booking (cap included);
+      // bookings made before keep the rule they were made under.
+      const agreed = storedLateFeeTerms((rental as any).lateFeeTerms);
+      if (agreed) {
+        data.lateFee = lateFeeFor(agreed, lateDays(rental.returnDate, returnedAt));
+      } else {
+        const { lateFee } = computeLateFee({
+          bookedReturnDate: rental.returnDate,
+          actualReturnDate: returnedAt,
+          flatRentalPrice: Number(rental.totalRentalPrice),
+          latePenaltyPercent:
+            product?.latePenaltyPercent != null ? Number(product.latePenaltyPercent) : null,
+          policyLateFeePerDay: policy ? Number(policy.lateFeePerDay) : null,
+        });
+        data.lateFee = lateFee;
+      }
     }
 
     // Compare-and-swap on the status we validated against, so two admins
@@ -725,6 +742,7 @@ export class RentalsService {
         rentalDepositAmount: true,
         rentalDownPaymentPct: true,
         rentalDownPaymentMode: true,
+        latePenaltyPercent: true,
       },
     });
     if (!product) {
@@ -732,9 +750,21 @@ export class RentalsService {
     }
     const policy = await this.prisma.rentalPolicy.findFirst({
       where: { tenantId },
-      select: { defaultDownPaymentPct: true },
+      select: { defaultDownPaymentPct: true, defaultLateFeePct: true, lateFeeCapPct: true, freeRentalLateFeePerDay: true },
     });
-    return publicQuote(this.termsFor(product, policy, tenantId, productId));
+    const t = this.termsFor(product, policy, tenantId, productId);
+    // The late-fee terms a booking made now would carry (same function as create()).
+    const lateFee = lateFeeTerms({
+      rentalFee: t.rentalFee, productPct: product.latePenaltyPercent, shopDefaultPct: policy?.defaultLateFeePct,
+      capPct: policy?.lateFeeCapPct, freeRentalPerDay: policy?.freeRentalLateFeePerDay,
+    });
+    return {
+      ...publicQuote(t),
+      lateFee: {
+        basis: lateFee.basis, pct: lateFee.pct, perDay: lateFee.perDay, capAmount: lateFee.capAmount, version: lateFee.version,
+        text: { en: lateFeeSentence(lateFee, 'en'), sw: lateFeeSentence(lateFee, 'sw') },
+      },
+    };
   }
 
   /**
@@ -888,7 +918,7 @@ export class RentalsService {
 
   async getOverdueRentals() {
     const now = new Date();
-    return this.prisma.rentalOrder.findMany({
+    const rows = await this.prisma.rentalOrder.findMany({
       where: {
         tenantId: this.tenantContext.requireId,
         returnDate: { lt: now },
@@ -900,6 +930,13 @@ export class RentalsService {
         product: { select: { id: true, name: true } },
         variant: { select: { id: true, name: true } },
       },
+    });
+    // The late fee accrued so far, from the SAME terms the return will use
+    // (an estimate until the item is returned; legacy bookings: null).
+    return rows.map((r: any) => {
+      const agreed = storedLateFeeTerms(r.lateFeeTerms);
+      const days = lateDays(r.returnDate, now);
+      return { ...r, daysLate: days, lateFeeAccrued: agreed ? lateFeeFor(agreed, days) : null };
     });
   }
 

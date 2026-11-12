@@ -38,6 +38,8 @@ const PERMISSIONS = [
   // R2: the independent reviewer who approves a physical count before a product switches to per-gown availability.
   // R1 rollback safety switch (break-glass; never auto-granted).
   { code: 'rentals:handover-safeguard', name: 'Change the Rental Hand-over Safety Switch', module: 'rentals', action: 'handover-safeguard' },
+  // LF-2026-11: the independent approver of late-fee waivers (never auto-granted).
+  { code: 'rentals:waive-late-fee', name: 'Approve Late-Fee Waivers (second person)', module: 'rentals', action: 'waive-late-fee' },
   { code: 'rentals:approve-unit-tracking', name: 'Approve Gown Counts (second person)', module: 'rentals', action: 'approve-unit-tracking' },
   // customers
   { code: 'customers:view', name: 'View Customers', module: 'customers', action: 'view' },
