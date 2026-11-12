@@ -136,6 +136,8 @@ function route(method, path, q) {
   if (path.startsWith('/wishlist/check')) return [200, { inWishlist: false }];
   if (path === '/events') return [200, { data: [], meta: { total: 0 } }];
   if (path === '/cms/settings/business-profile') return [200, {}];
+  // no CMS page: the storefront's built-in (i18n) page text is shown
+  if (path.startsWith('/cms/pages/')) return [404, { message: 'Page not found', statusCode: 404 }];
   if (path === '/cms/storefront-stats') return [200, { productCount: 0, rentalCount: 0, customerCount: 0 }];
   if (path === '/analytics/track') return [204, null];
   return [200, []]; // categories, flash-sales, cms/*, payment-methods, reviews …
@@ -545,6 +547,23 @@ async function main() {
     await p.getByTestId('rentals-load-error').waitFor();
     assert(/Jaribu tena/.test(await p.getByTestId('rentals-load-error').innerText()), 'retry not Swahili');
     await p.close();
+  });
+
+  console.log('\nFAQ (policy-neutral wording)');
+  await check('FAQ rentals answer: no fixed %, no online payment, 0 % still has fee + deposit (EN + SW)', async () => {
+    setMode({});
+    const p = await open(desktop, '/pages/faq');
+    await p.getByText(/Even when no down payment is needed, the rental fee and the deposit still apply/).waitFor();
+    const en = await p.locator('body').innerText();
+    const ans = en.slice(en.indexOf('To rent an item'), en.indexOf('still apply.') + 12);
+    assert(ans.length > 50 && !/\d\s*%/.test(ans) && /No payment is taken online/.test(ans), `EN: ${ans}`);
+    await p.close();
+    const q = await open(sw, '/pages/faq');
+    await q.getByText(/Hata pale ambapo hakuna kianzio, ada ya kukodi na amana bado zinatumika/).waitFor();
+    const swTxt = await q.locator('body').innerText();
+    const swAns = swTxt.slice(swTxt.indexOf('Ili kukodi bidhaa'), swTxt.indexOf('bado zinatumika.') + 16);
+    assert(swAns.length > 50 && !/\d\s*%/.test(swAns) && /amana inayorejeshwa/.test(swAns), `SW: ${swAns}`);
+    await q.close();
   });
 
   console.log('\norder history (/account/orders)');
