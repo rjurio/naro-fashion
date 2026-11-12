@@ -26,6 +26,8 @@ import {
   resolveTwoFaKey,
 } from './util/two-fa-crypto';
 import { isTokenTypeAllowed } from './util/jwt-secrets';
+import { AdminUsersService } from '../admin-users/admin-users.service';
+import { adminRequiresTwoFactor } from './auth.service';
 import {
   generateRecoveryCodes,
   hashRecoveryCode,
@@ -185,6 +187,13 @@ function statefulDelegate(row: any) {
     findUnique: jest.fn(async ({ where, select }: any) =>
       where.id === row.id || where.email === row.email ? pick(select) : null,
     ),
+    findFirst: jest.fn(async ({ where, select }: any) => {
+      if (where.passwordResetToken !== undefined) {
+        const ok = row.passwordResetToken === where.passwordResetToken && row.passwordResetExpires > new Date();
+        return ok ? pick(select) : null;
+      }
+      return where.id === row.id && (where.tenantId === undefined || where.tenantId === row.tenantId) ? pick(select) : null;
+    }),
     update: jest.fn(async ({ where, data, select }: any) => {
       if (where.id !== row.id) throw new Error('not found');
       applyData(row, data);
@@ -705,6 +714,64 @@ describe('AuthService two-factor flows', () => {
       admin.twoFASecret = null; // stale legacy flag only
       const p2: any = await service.getProfile('a1', true);
       expect(p2.is2FAEnabled).toBe(false);
+    });
+  });
+
+  describe('P0d readiness: recovery never bypasses 2FA, and audit rows never hold secrets', () => {
+    beforeEach(() => {
+      (service as any).notifications.sendPasswordResetEmail.mockResolvedValue(undefined);
+    });
+
+    const resetLinkToken = () => {
+      const calls = (service as any).notifications.sendPasswordResetEmail.mock.calls;
+      const url: string = calls[calls.length - 1][1];
+      return new URL(url).searchParams.get('token') as string;
+    };
+
+    it('after a password reset, 2FA is still required; challenges issued before the reset are dead', async () => {
+      const secret = await enrol();
+      const before = service.issueTwoFactorChallenge(admin);
+      await service.forgotPassword('adm@x.tz', undefined, { ipAddress: '10.0.0.1' });
+      await service.resetPassword(resetLinkToken(), 'NewPassw0rd1', { ipAddress: '10.0.0.1' });
+      expect(adminRequiresTwoFactor(admin)).toBe(true); // the login controller will ask for the code
+      const signedIn: any = await service.validateUser('adm@x.tz', 'NewPassw0rd1', null);
+      expect(adminRequiresTwoFactor(signedIn)).toBe(true);
+      await expect(service.verifyTwoFactorLogin(before, codeFor(secret))).rejects.toBeInstanceOf(UnauthorizedException);
+      await expect(service.verifyTwoFactorLogin(service.issueTwoFactorChallenge(admin), codeFor(secret))).resolves.toMatchObject({ id: 'a1' });
+    });
+
+    it('an admin unlock clears the lock but leaves 2FA required and the password unchanged', async () => {
+      await enrol();
+      admin.failedLoginAttempts = 10;
+      admin.lockedUntil = new Date(Date.now() + 600_000);
+      const hashBefore = admin.passwordHash;
+      const admins = new AdminUsersService(prisma as any, { requireId: 't1', id: 't1' } as any, { ip: '10.0.0.2' });
+      await admins.unlock('a1', { id: 'boss', role: 'SUPER_ADMIN' });
+      expect(admin.lockedUntil).toBeNull();
+      expect(admin.failedLoginAttempts).toBe(0);
+      expect(admin.passwordHash).toBe(hashBefore);
+      expect(adminRequiresTwoFactor(admin)).toBe(true);
+      await expect(service.validateUser('adm@x.tz', 'wrong-pass', null)).resolves.toBeNull();
+    });
+
+    it('a full 2FA lifecycle writes no secret, code, recovery code, token or password into any audit row', async () => {
+      const secret = await enrol();
+      const firstCodes = [...lastRecoveryCodes];
+      const used: string[] = [codeFor(secret)];
+      await service.verifyTwoFactorLogin(service.issueTwoFactorChallenge(admin), used[0]);
+      await expect(service.verifyTwoFactorLogin(service.issueTwoFactorChallenge(admin), '000000')).rejects.toThrow();
+      await service.verifyTwoFactorLogin(service.issueTwoFactorChallenge(admin), firstCodes[0]);
+      const regen: any = await service.regenerateRecoveryCodes(principal, 'Correct1pass', firstCodes[1]);
+      await service.forgotPassword('adm@x.tz', undefined, { ipAddress: '10.0.0.3' });
+      const rawReset = resetLinkToken();
+      const storedResetHash = admin.passwordResetToken;
+      await service.resetPassword(rawReset, 'NewPassw0rd1');
+      const rows = JSON.stringify((prisma.adminActivityLog.create as jest.Mock).mock.calls.map((c) => c[0].data));
+      const forbidden = [secret, admin.twoFASecret, ...firstCodes, ...regen.recoveryCodes, ...used, rawReset, storedResetHash, 'Correct1pass', 'NewPassw0rd1', admin.passwordHash]
+        .filter((s) => typeof s === 'string' && s.length >= 6);
+      for (const s of forbidden) expect(rows).not.toContain(s);
+      expect(rows).not.toMatch(/eyJ[A-Za-z0-9_-]{10,}/); // no JWTs
+      expect(rows).toContain('PASSWORD_RESET_COMPLETED');
     });
   });
 });
