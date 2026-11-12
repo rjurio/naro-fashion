@@ -200,10 +200,26 @@ export class PaymentSettlementService {
         ? { notIn: FINAL_PAYMENT_STATUSES }
         : { in: ['PENDING', 'PROCESSING'] };
 
+    // Provider evidence: the ONLY place a payment becomes PROVIDER_CONFIRMED
+    // (payments/payment-confirmation.ts). Only stamped when the gateway's own
+    // payload is being written, so no existing record is ever replaced.
+    const settlementStamp =
+      effectiveStatus === 'COMPLETED' && !amountShort
+        ? { _settlement: { providerVerified: true, source, at: new Date().toISOString() } }
+        : {};
     const gatewayResponse =
       args.gatewayResponse === undefined
         ? undefined
-        : amountShort
+        : effectiveStatus === 'COMPLETED' && !amountShort
+          ? {
+              ...(typeof args.gatewayResponse === 'object' &&
+              args.gatewayResponse !== null &&
+              !Array.isArray(args.gatewayResponse)
+                ? args.gatewayResponse
+                : { response: args.gatewayResponse }),
+              ...settlementStamp,
+            }
+          : amountShort
           ? {
               ...(typeof args.gatewayResponse === 'object' &&
               args.gatewayResponse !== null &&

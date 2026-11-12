@@ -151,9 +151,18 @@ export default function ReceiptModal({ orderId, onClose }: Props) {
 
             <div style={{ fontSize: '11px' }}>
               {receipt.payments.map((p: any, i: number) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>{PAYMENT_METHOD_LABELS[p.method] ?? p.method}</span>
-                  <span>{p.amount.toLocaleString()} TZS</span>
+                <div key={i}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{PAYMENT_METHOD_LABELS[p.method] ?? p.method}</span>
+                    <span>{p.amount.toLocaleString()} TZS</span>
+                  </div>
+                  {/* Never let a manual confirmation read as provider-verified. */}
+                  {p.confirmationState && p.confirmationState !== 'CASH_RECEIVED' && (
+                    <div style={{ fontSize: '10px', color: '#666' }} data-testid="receipt-confirmation">
+                      {p.confirmationLabel}
+                      {p.transactionRef ? ` · Ref ${p.transactionRef}` : ''}
+                    </div>
+                  )}
                 </div>
               ))}
               {receipt.changeDue > 0 && (

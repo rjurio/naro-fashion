@@ -26,6 +26,7 @@ export default function LayawayModal({ onClose }: Props) {
   const [payAmount, setPayAmount] = useState(0);
   const [payMethod, setPayMethod] = useState('CASH');
   const [payRef, setPayRef] = useState('');
+  const [payApproval, setPayApproval] = useState('');
   const [payProcessing, setPayProcessing] = useState(false);
 
   useEffect(() => {
@@ -46,12 +47,16 @@ export default function LayawayModal({ onClose }: Props) {
 
   const handlePayment = async () => {
     if (!payingLayawayId || payAmount <= 0 || payProcessing) return;
+    // P0c: non-cash needs evidence; card also needs the slip's approval code.
+    if (payMethod !== 'CASH' && payRef.trim().length < 4) { toast.error('Enter the transaction / terminal reference.'); return; }
+    if (payMethod === 'CARD' && !/^[A-Za-z0-9]{4,12}$/.test(payApproval.trim())) { toast.error('Enter the approval code from the terminal slip.'); return; }
     setPayProcessing(true);
     try {
       await adminApi.posLayawayPayment(payingLayawayId, {
         amount: payAmount,
         method: payMethod,
         transactionRef: payRef || undefined,
+        approvalCode: payMethod === 'CARD' ? payApproval.trim() || undefined : undefined,
       });
       setPayingLayawayId(null);
       loadLayaways();
@@ -243,7 +248,17 @@ export default function LayawayModal({ onClose }: Props) {
                     value={payRef}
                     onChange={(e) => setPayRef(e.target.value)}
                     className="w-full px-3 py-2 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm"
-                    placeholder="Transaction ref..."
+                    placeholder={payMethod === 'CARD' ? 'Terminal receipt ref (required)...' : 'Transaction ref from the SMS (required)...'}
+                  />
+                )}
+                {payMethod === 'CARD' && (
+                  <input
+                    type="text"
+                    value={payApproval}
+                    onChange={(e) => setPayApproval(e.target.value)}
+                    className="w-full px-3 py-2 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm"
+                    placeholder="Approval code on the slip (required)..."
+                    aria-label="Card approval code"
                   />
                 )}
               </div>

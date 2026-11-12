@@ -30,6 +30,7 @@ import HeldSalesModal from './components/HeldSalesModal';
 import LayawayModal from './components/LayawayModal';
 import ExchangeModal from './components/ExchangeModal';
 import SyncStatusBadge from '@/components/offline/SyncStatusBadge';
+import { useAuth } from '@/contexts/AuthContext';
 
 const NEEDS_INTERNET = 'Needs internet';
 const NO_OFFLINE_SHIFT = 'Open a shift while online before selling offline.';
@@ -47,6 +48,34 @@ export default function PosPage() {
   const router = useRouter();
   const { online } = useSyncStatus();
   const offline = !online;
+  // P0c: what this operator may confirm. Fetched online, cached per user for
+  // offline (unknown offline → cash only), so nobody takes a card/M-Pesa
+  // payment that the server will later refuse.
+  const { user } = useAuth();
+  const capsKey = user?.id ? `naro-pos-caps:${user.id}` : null;
+  const [canConfirmManual, setCanConfirmManual] = useState<boolean | null>(() => {
+    if (typeof window === 'undefined' || !capsKey) return null;
+    try {
+      const v = window.localStorage.getItem(capsKey);
+      return v === null ? null : v === 'true';
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    if (!online || !capsKey) return;
+    let cancelled = false;
+    adminApi
+      .posGetCapabilities()
+      .then((caps) => {
+        if (cancelled) return;
+        const v = !!caps?.canConfirmManualPayments;
+        setCanConfirmManual(v);
+        try { window.localStorage.setItem(capsKey, String(v)); } catch { /* storage blocked */ }
+      })
+      .catch(() => { /* keep the cached value */ });
+    return () => { cancelled = true; };
+  }, [online, capsKey]);
   const catalog = usePosCatalog(online);
 
   // Session
@@ -470,6 +499,7 @@ export default function PosPage() {
               onPaymentsConfirmed={handleCompleteSale}
               disabled={cartItems.length === 0 || processing}
               offline={offline}
+              canConfirmManual={canConfirmManual}
             />
 
             {/* Hold Sale Button */}

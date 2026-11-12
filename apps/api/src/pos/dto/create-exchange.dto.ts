@@ -44,6 +44,16 @@ export class CreateExchangeDto {
   @IsString()
   settlementMethod?: string;
 
+  /** Non-cash settlement evidence (P0c): customer's / shop's transfer reference, or terminal receipt no. */
+  @IsOptional()
+  @IsString()
+  settlementRef?: string;
+
+  /** Card settlement only: terminal approval code. */
+  @IsOptional()
+  @IsString()
+  settlementApprovalCode?: string;
+
   @IsOptional()
   @IsString()
   reason?: string;

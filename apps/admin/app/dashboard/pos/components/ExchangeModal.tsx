@@ -43,6 +43,8 @@ export default function ExchangeModal({ onClose, onComplete }: Props) {
   const [productSearch, setProductSearch] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [settlementMethod, setSettlementMethod] = useState('CASH');
+  const [settlementRef, setSettlementRef] = useState('');
+  const [settlementApproval, setSettlementApproval] = useState('');
   const [reason, setReason] = useState('');
   const [processing, setProcessing] = useState(false);
 
@@ -133,6 +135,11 @@ export default function ExchangeModal({ onClose, onComplete }: Props) {
 
   const handleExchange = async () => {
     if (returnItems.length === 0 || processing) return;
+    // P0c: a non-cash settlement (either direction) needs its evidence.
+    if (priceDifference !== 0 && settlementMethod !== 'CASH') {
+      if (settlementRef.trim().length < 4) { toast.error('Enter the transaction / terminal reference for the settlement.'); return; }
+      if (settlementMethod === 'CARD' && !/^[A-Za-z0-9]{4,12}$/.test(settlementApproval.trim())) { toast.error('Enter the approval code from the terminal slip.'); return; }
+    }
     setProcessing(true);
     try {
       await adminApi.posCreateExchange({
@@ -148,6 +155,8 @@ export default function ExchangeModal({ onClose, onComplete }: Props) {
           unitPrice: i.unitPrice,
         })),
         settlementMethod: priceDifference !== 0 ? settlementMethod : undefined,
+        settlementRef: priceDifference !== 0 && settlementMethod !== 'CASH' ? settlementRef.trim() || undefined : undefined,
+        settlementApprovalCode: priceDifference !== 0 && settlementMethod === 'CARD' ? settlementApproval.trim() || undefined : undefined,
         reason: reason || undefined,
       });
       onComplete();
@@ -362,6 +371,25 @@ export default function ExchangeModal({ onClose, onComplete }: Props) {
                   <option key={m} value={m}>{PAYMENT_METHOD_LABELS[m] ?? m}</option>
                 ))}
               </select>
+              {settlementMethod !== 'CASH' && (
+                <input
+                  type="text"
+                  value={settlementRef}
+                  onChange={(e) => setSettlementRef(e.target.value)}
+                  placeholder={settlementMethod === 'CARD' ? 'Terminal receipt ref (required)...' : 'Transaction ref (required)...'}
+                  className="w-full px-3 py-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm"
+                />
+              )}
+              {settlementMethod === 'CARD' && (
+                <input
+                  type="text"
+                  value={settlementApproval}
+                  onChange={(e) => setSettlementApproval(e.target.value)}
+                  placeholder="Approval code on the slip (required)..."
+                  aria-label="Card approval code"
+                  className="w-full px-3 py-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm"
+                />
+              )}
 
               <textarea
                 value={reason}
