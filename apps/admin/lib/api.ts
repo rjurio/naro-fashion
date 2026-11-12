@@ -1015,6 +1015,55 @@ class AdminApiClient {
   markRentalReady(id: string) {
     return this.patch<any>(`/rentals/${id}/ready`, {});
   }
+
+  // ---- Walk-in POS rentals (POS rental MVP). Online only: never queued offline.
+  posRentalCatalog(q?: string) {
+    return this.get<any[]>('/pos-rentals/catalog', q ? { params: { q } } : undefined);
+  }
+  posRentalQuote(body: { productId: string; variantId: string; startDate: string; returnDate: string; pickupDate: string }) {
+    return this.post<any>('/pos-rentals/quote', body);
+  }
+  posRentalCustomers(q: string) {
+    return this.get<any[]>('/pos-rentals/customers', { params: { q } });
+  }
+  posRentalCreateCustomer(body: Record<string, string | undefined>) {
+    return this.post<any>('/pos-rentals/customers', body);
+  }
+  posRentalAddAddress(customerId: string, body: { street: string; city: string; region: string }) {
+    return this.post<any>(`/pos-rentals/customers/${customerId}/address`, body);
+  }
+  /** Idempotent: a retry after a dropped connection never creates a second booking. */
+  posRentalCreate(body: Record<string, unknown>, idempotencyKey: string) {
+    return this.post<any>('/pos-rentals', body, { headers: { 'Idempotency-Key': idempotencyKey } });
+  }
+  posRentalLookup(rentalNumber: string) {
+    return this.get<any>(`/pos-rentals/lookup/${encodeURIComponent(rentalNumber)}`);
+  }
+  posRentalDetail(id: string) {
+    return this.get<any>(`/pos-rentals/${id}`);
+  }
+  posRentalIdInPerson(id: string, body: { idType: string; idNumber: string }) {
+    return this.post<any>(`/pos-rentals/${id}/id-in-person`, body);
+  }
+  /** Idempotent: a retried payment is recorded once. */
+  posRentalPay(id: string, body: Record<string, unknown>, idempotencyKey: string) {
+    return this.post<any>(`/pos-rentals/${id}/payments`, body, { headers: { 'Idempotency-Key': idempotencyKey } });
+  }
+  posRentalAgreement(id: string) {
+    return this.get<any>(`/pos-rentals/${id}/agreement`);
+  }
+  posRentalReceipt(id: string, paymentId: string) {
+    return this.get<any>(`/pos-rentals/${id}/receipts/${paymentId}`);
+  }
+  posRentalHandover(id: string, body: { unitCode?: string; notes?: string }) {
+    return this.post<any>(`/pos-rentals/${id}/handover`, body);
+  }
+  posRentalReturn(id: string, body: { condition: string; notes?: string; unitStatus?: string }) {
+    return this.post<any>(`/pos-rentals/${id}/return`, body);
+  }
+  rentalRefundRequest(rentalId: string, body: Record<string, unknown>) {
+    return this.post<any>(`/rental-money/rentals/${rentalId}/refund-requests`, body);
+  }
   /** Give an unconfirmed booking a new, bounded deadline (rentals:update-status; audited). */
   extendRentalHold(id: string, body: { until: string; note: string }) {
     return this.patch<any>(`/rentals/${id}/hold/extend`, body);

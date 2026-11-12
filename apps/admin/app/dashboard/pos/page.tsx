@@ -30,6 +30,7 @@ import HeldSalesModal from './components/HeldSalesModal';
 import LayawayModal from './components/LayawayModal';
 import ExchangeModal from './components/ExchangeModal';
 import SyncStatusBadge from '@/components/offline/SyncStatusBadge';
+import PosRentalMode from '@/components/pos-rental/PosRentalMode';
 import { useAuth } from '@/contexts/AuthContext';
 
 const NEEDS_INTERNET = 'Needs internet';
@@ -105,6 +106,8 @@ export default function PosPage() {
   const [note, setNote] = useState('');
   const [showLayaway, setShowLayaway] = useState(false);
   const [showExchange, setShowExchange] = useState(false);
+  // POS rental MVP: Sale (default, unchanged) or walk-in Rental mode.
+  const [mode, setMode] = useState<'SALE' | 'RENTAL'>('SALE');
 
   // Load session on mount
   useEffect(() => {
@@ -388,6 +391,21 @@ export default function PosPage() {
           {/* Online / offline + sync status (POS has no TopBar) */}
           <SyncStatusBadge compact />
 
+          <div className="flex rounded-lg border border-[hsl(var(--border))] overflow-hidden text-xs" role="tablist">
+            {(['SALE', 'RENTAL'] as const).map((m) => (
+              <button
+                key={m}
+                data-testid={`pos-mode-${m.toLowerCase()}`}
+                role="tab"
+                aria-selected={mode === m}
+                onClick={() => setMode(m)}
+                className={`px-3 py-1.5 ${mode === m ? 'bg-brand-gold text-white' : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]'}`}
+              >
+                {m === 'SALE' ? 'Sale' : 'Rental'}
+              </button>
+            ))}
+          </div>
+
           <button
             onClick={() => setShowHeldSales(true)}
             disabled={offline}
@@ -448,8 +466,10 @@ export default function PosPage() {
         </div>
       </div>
 
-      {/* Main Content - Two Panels */}
-      <div className="flex-1 flex overflow-hidden">
+      {mode === 'RENTAL' && <PosRentalMode sessionId={session.id} online={online} />}
+
+      {/* Main Content - Two Panels (sale mode; kept mounted so the cart survives a mode switch) */}
+      <div className={`flex-1 flex overflow-hidden ${mode === 'RENTAL' ? 'hidden' : ''}`}>
         {/* Left Panel - Product Search */}
         <div className="w-1/2 border-r border-[hsl(var(--border))] flex flex-col">
           <ProductSearch onAddToCart={addToCart} categories={categories} catalog={catalog} offline={offline} />
