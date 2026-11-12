@@ -153,6 +153,34 @@ describe('storefront rental wiring', () => {
     expect(page).toMatch(/useState\(true\)/);
   });
 
+  it('live customer-facing rental copy names no fixed down-payment percentage (FAQ, homepage + admin CMS defaults)', () => {
+    const en = JSON.parse(read('messages/en.json'));
+    const sw = JSON.parse(read('messages/sw.json'));
+    for (const k of ['pages.faqRentalsContent', 'rentals.noDownPaymentStepDesc', 'rentals.noOnlinePaymentNoDownPayment']) {
+      expect([k, /\d\s*%/.test(at(en, k)), /\d\s*%/.test(at(sw, k))]).toEqual([k, false, false]);
+    }
+    const home = read('app/page.tsx');
+    expect(home).not.toMatch(/rental_section_features: '[^']*\d+% /);
+    const adminCms = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../admin/app/dashboard/cms/settings/page.tsx'), 'utf8');
+    expect(adminCms).not.toMatch(/key: 'rental_section_features'[^\n]*\d+% down payment/);
+  });
+
+  it('the FAQ explains the down payment without implying online payment, and says 0 % still has obligations', () => {
+    const en = JSON.parse(read('messages/en.json'));
+    const sw = JSON.parse(read('messages/sw.json'));
+    expect(at(en, 'pages.faqRentalsContent')).toMatch(/No payment is taken online/);
+    expect(at(en, 'pages.faqRentalsContent')).toMatch(/no down payment is needed, the rental fee and the deposit still apply/);
+    expect(at(sw, 'pages.faqRentalsContent')).toMatch(/Hakuna malipo yanayofanywa mtandaoni/);
+    expect(at(sw, 'pages.faqRentalsContent')).toMatch(/kianzio/);
+    expect(at(sw, 'pages.faqRentalsContent')).toMatch(/amana inayorejeshwa/);
+    // 0 %: the fee and the refundable deposit still apply (EN + SW)
+    for (const k of ['rentals.noDownPaymentStepDesc', 'rentals.noOnlinePaymentNoDownPayment']) {
+      expect(at(en, k)).toMatch(/rental fee and the refundable deposit/);
+      expect(at(sw, k)).toMatch(/Ada ya kukodi na amana inayorejeshwa/);
+    }
+  });
+
   it('booking page sends the amounts it showed and handles a terms change without booking', () => {
     const s = read('app/rentals/[slug]/page.tsx');
     expect(s).toMatch(/quotedRentalFee: quote\.rentalFee, quotedDeposit: quote\.deposit, quotedDownPayment: quote\.downPayment/);
@@ -198,11 +226,14 @@ describe('storefront rental wiring', () => {
     }
   });
 
-  it('the rentals FAQ uses the approved terms: kianzio for the 25%, amana inayorejeshwa for the deposit', () => {
+  it('the rentals FAQ uses the approved terms: kianzio for the down payment, amana inayorejeshwa for the deposit', () => {
     const faq: string = at(JSON.parse(read('messages/sw.json')), 'pages.faqRentalsContent');
-    expect(faq).toMatch(/kianzio cha 25%/);
-    expect(faq).toMatch(/Amana inayorejeshwa/);
-    expect(faq).not.toMatch(/mtandaoni|online|kadi/i);
+    // Owner 2026-11-12: no fixed percentage in live copy (it depends on the policy).
+    expect(faq).toMatch(/kianzio/);
+    expect(faq).not.toMatch(/\d\s*%/);
+    expect(faq).toMatch(/[Aa]mana inayorejeshwa/);
+    // "online" appears only to say that NO payment is taken online
+    expect(faq.replace('Hakuna malipo yanayofanywa mtandaoni', '')).not.toMatch(/mtandaoni|online|kadi/i);
   });
 
   it('no Swahili rental string implies an online payment (none is taken online)', () => {

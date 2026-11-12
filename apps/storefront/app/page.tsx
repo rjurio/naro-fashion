@@ -108,7 +108,7 @@ const CMS_DEFAULTS: Record<string, string> = {
   rental_section_badge: 'Premium Rental Service',
   rental_section_title: 'Rent Designer Gowns for Your Special Occasion',
   rental_section_description: 'Why buy when you can rent? Access our exclusive collection of designer gowns and formal wear at a fraction of the price.',
-  rental_section_features: 'Designer gowns\nDaily rental rates\nCleaning included\n25% down payment\nFree alterations',
+  rental_section_features: 'Designer gowns\nDaily rental rates\nCleaning included\nDown payment shown before you book\nFree alterations',
   rental_section_cta: 'Browse All Gowns',
 };
 

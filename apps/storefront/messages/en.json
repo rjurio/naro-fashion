@@ -456,9 +456,9 @@
     "loadMoreFailed": "Couldn't load more items. Please try again.",
     "retry": "Try again",
     "noDownPaymentStep": "No down payment needed",
-    "noDownPaymentStepDesc": "No down payment is required to confirm your rental booking. If an item needs one, the exact amount will be shown before confirmation.",
+    "noDownPaymentStepDesc": "No down payment is required to confirm your rental booking. The rental fee and the refundable deposit still apply. If an item needs a down payment, the exact amount will be shown before confirmation.",
     "noDownPaymentLine": "No down payment required",
-    "noOnlinePaymentNoDownPayment": "No payment is taken online, and no down payment is needed for this booking. The store will contact you to confirm it.",
+    "noOnlinePaymentNoDownPayment": "No payment is taken online, and no down payment is needed for this booking. The rental fee and the refundable deposit are still paid before pickup. The store will contact you to confirm the booking.",
     "termsChanged": "The rental terms changed after this page was loaded. The down payment is now {amount}. Please check the new amounts and request the booking again."
   },
   "flashSales": {
@@ -744,7 +744,7 @@
     "faqPayment": "Payment Methods",
     "faqPaymentContent": "We accept Mobile Money (M-Pesa, Tigo Pesa, Airtel Money), Visa/Mastercard, bank transfers, and Cash on Delivery. All online payments are processed securely through our payment partners.",
     "faqRentals": "Gown Rentals",
-    "faqRentalsContent": "To rent an item, you need to verify your national ID (one-time process). Select your dates, pay a 25% down payment to reserve, and complete the full payment before pickup. A damage deposit is required and will be refunded after the item is returned in good condition.",
+    "faqRentalsContent": "To rent an item, verify your national ID once, choose your dates and send a booking request. No payment is taken online. If the item needs a down payment, the booking page shows the exact amount before you send the request, and the store contacts you to arrange it. The rest of the rental fee and the refundable deposit are paid before pickup; the deposit is refunded after the item is returned in good condition. Even when no down payment is needed, the rental fee and the deposit still apply.",
     "faqAccount": "Account & Security",
     "faqAccountContent": "You can create an account using your email or sign in with Google/Facebook. We use industry-standard encryption to protect your personal information. You can update your profile, manage addresses, and track orders from your account dashboard.",
     "termsTitle": "Terms of Service",

@@ -456,9 +456,9 @@
     "loadMoreFailed": "Imeshindwa kupakia bidhaa zaidi. Tafadhali jaribu tena.",
     "retry": "Jaribu tena",
     "noDownPaymentStep": "Hakuna kianzio",
-    "noDownPaymentStepDesc": "Hakuna kianzio kinachohitajika ili kuthibitisha nafasi yako ya kukodi. Ikiwa bidhaa inahitaji kianzio, kiasi halisi kitaonyeshwa kabla ya kuthibitisha.",
+    "noDownPaymentStepDesc": "Hakuna kianzio kinachohitajika ili kuthibitisha nafasi yako ya kukodi. Ada ya kukodi na amana inayorejeshwa bado zinatumika. Ikiwa bidhaa inahitaji kianzio, kiasi halisi kitaonyeshwa kabla ya kuthibitisha.",
     "noDownPaymentLine": "Hakuna kianzio kinachohitajika",
-    "noOnlinePaymentNoDownPayment": "Hakuna malipo yanayofanywa mtandaoni, na hakuna kianzio kinachohitajika kwa uhifadhi huu. Duka litawasiliana nawe kuuthibitisha.",
+    "noOnlinePaymentNoDownPayment": "Hakuna malipo yanayofanywa mtandaoni, na hakuna kianzio kinachohitajika kwa uhifadhi huu. Ada ya kukodi na amana inayorejeshwa bado hulipwa kabla ya kuchukua bidhaa. Duka litawasiliana nawe kuthibitisha uhifadhi.",
     "termsChanged": "Masharti ya kukodi yamebadilika baada ya ukurasa huu kufunguliwa. Kianzio sasa ni {amount}. Tafadhali kagua viwango vipya kisha uombe kuhifadhi tena."
   },
   "flashSales": {
@@ -744,7 +744,7 @@
     "faqPayment": "Njia za Malipo",
     "faqPaymentContent": "Tunakubali Pesa za Simu (M-Pesa, Tigo Pesa, Airtel Money), Visa/Mastercard, uhamisho wa benki, na Malipo Wakati wa Kupokea. Malipo yote ya mtandaoni yanashughulikiwa kwa usalama kupitia washirika wetu wa malipo.",
     "faqRentals": "Kukodisha Gauni",
-    "faqRentalsContent": "Ili kukodi bidhaa, unahitaji kuthibitisha kitambulisho chako cha taifa (mchakato wa mara moja). Chagua tarehe zako, lipa kianzio cha 25% ili kuhifadhi nafasi, na kamilisha malipo kamili kabla ya kuchukua. Amana inayorejeshwa (ya uharibifu) inahitajika na itarejeshwa baada ya bidhaa kurejeshwa katika hali nzuri.",
+    "faqRentalsContent": "Ili kukodi bidhaa, thibitisha kitambulisho chako cha taifa mara moja, chagua tarehe zako na utume ombi la kuhifadhi. Hakuna malipo yanayofanywa mtandaoni. Ikiwa bidhaa inahitaji kianzio, ukurasa wa kuhifadhi unaonyesha kiasi kamili kabla ya kutuma ombi, na duka litawasiliana nawe kukipanga. Salio la ada ya kukodi na amana inayorejeshwa hulipwa kabla ya kuchukua bidhaa; amana hurejeshwa baada ya bidhaa kurejeshwa ikiwa katika hali nzuri. Hata pale ambapo hakuna kianzio, ada ya kukodi na amana bado zinatumika.",
     "faqAccount": "Akaunti na Usalama",
     "faqAccountContent": "Unaweza kutengeneza akaunti kwa kutumia barua pepe yako au kuingia na Google/Facebook. Tunatumia usimbaji fiche wa kiwango cha tasnia kulinda taarifa zako binafsi. Unaweza kusasisha wasifu wako, kusimamia anwani, na kufuatilia oda kutoka dashibodi ya akaunti yako.",
     "termsTitle": "Masharti ya Huduma",

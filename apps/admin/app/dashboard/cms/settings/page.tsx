@@ -46,7 +46,7 @@ const SETTING_DEFINITIONS: SettingDef[] = [
   { key: 'rental_section_badge', label: 'Badge Text', type: 'text', group: 'Rental Section', defaultValue: 'Premium Rental Service', bilingual: true },
   { key: 'rental_section_title', label: 'Title', type: 'text', group: 'Rental Section', defaultValue: 'Rent Designer Gowns for Your Special Occasion', bilingual: true },
   { key: 'rental_section_description', label: 'Description', type: 'text', group: 'Rental Section', defaultValue: 'Why buy when you can rent? Access our exclusive collection of designer gowns and formal wear at a fraction of the price.', bilingual: true },
-  { key: 'rental_section_features', label: 'Features (one per line)', type: 'textarea', group: 'Rental Section', defaultValue: 'Designer gowns\nDaily rental rates\nCleaning included\n25% down payment\nFree alterations', hint: 'Each line becomes a feature pill on the storefront', bilingual: true },
+  { key: 'rental_section_features', label: 'Features (one per line)', type: 'textarea', group: 'Rental Section', defaultValue: 'Designer gowns\nDaily rental rates\nCleaning included\nDown payment shown before you book\nFree alterations', hint: 'Each line becomes a feature pill on the storefront', bilingual: true },
   { key: 'rental_section_cta', label: 'Button Text', type: 'text', group: 'Rental Section', defaultValue: 'Browse All Gowns', bilingual: true },
 ];
 
