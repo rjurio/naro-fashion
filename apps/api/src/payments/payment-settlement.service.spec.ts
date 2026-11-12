@@ -22,6 +22,8 @@ function makePrisma(overrides: Record<string, any> = {}) {
       findFirst: jest.fn(),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
+    // Default: the rental's customer holds an approved National ID.
+    customerIDDocument: { findFirst: jest.fn().mockResolvedValue({ id: 'doc1' }) },
     ...overrides,
   } as any;
 }
@@ -151,11 +153,24 @@ describe('PaymentSettlementService parent roll-up', () => {
     await svc.updateRentalPaymentStatus('r1', 't1');
     expect(prisma.rentalOrder.updateMany).not.toHaveBeenCalled();
 
-    prisma.rentalOrder.findFirst.mockResolvedValue({ id: 'r1', rentalNumber: 'R1', status: 'ID_VERIFIED', downPaymentAmount: 250 });
+    prisma.rentalOrder.findFirst.mockResolvedValue({ id: 'r1', rentalNumber: 'R1', status: 'ID_VERIFIED', userId: 'u1', downPaymentAmount: 250 });
     await svc.updateRentalPaymentStatus('r1', 't1');
     expect(prisma.rentalOrder.updateMany).toHaveBeenCalledWith({
       where: { id: 'r1', tenantId: 't1', status: 'ID_VERIFIED' },
       data: { status: 'DOWN_PAYMENT_PAID' },
+    });
+  });
+
+  it('never confirms a paid ID_VERIFIED rental whose customer has no approved National ID', async () => {
+    const prisma = makePrisma();
+    prisma.payment.aggregate.mockResolvedValue({ _sum: { amount: 250 } });
+    prisma.customerIDDocument.findFirst.mockResolvedValue(null);
+    prisma.rentalOrder.findFirst.mockResolvedValue({ id: 'r1', rentalNumber: 'R1', status: 'ID_VERIFIED', userId: 'u1', downPaymentAmount: 250 });
+    await new PaymentSettlementService(prisma).updateRentalPaymentStatus('r1', 't1');
+    expect(prisma.rentalOrder.updateMany).not.toHaveBeenCalled();
+    expect(prisma.customerIDDocument.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 't1', userId: 'u1', verificationStatus: 'APPROVED' },
+      select: { id: true },
     });
   });
 

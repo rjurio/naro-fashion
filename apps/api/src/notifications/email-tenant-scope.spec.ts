@@ -104,7 +104,7 @@ describe('ID verification submit only accepts private refs of the caller tenant'
         create: jest.fn(async ({ data }: any) => data),
       },
     };
-    return new IdVerificationService(prisma, {} as any, { requireId: 'A' } as any);
+    return new IdVerificationService(prisma, {} as any, { requireId: 'A' } as any, {} as any, {} as any);
   }
 
   it('accepts refs produced for the caller tenant', async () => {

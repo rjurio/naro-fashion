@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { hasApprovedId } from '../id-verification/id-approval';
 import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -327,6 +328,14 @@ export class PaymentSettlementService {
     const downPaymentDue = Number(rental.downPaymentAmount);
 
     if (totalPaid >= downPaymentDue && rental.status === 'ID_VERIFIED') {
+      // Owner rule 2026-11-12: never confirm without an APPROVED National ID,
+      // whatever the rental's status says (it may have been set by hand).
+      if (!(await hasApprovedId(this.prisma, tenantId, rental.userId))) {
+        this.logger.warn(
+          `REVIEW: rental ${rental.rentalNumber} has its down payment (${totalPaid} TZS) but the customer has no approved National ID — not confirmed.`,
+        );
+        return;
+      }
       await this.prisma.rentalOrder.updateMany({
         where: { id: rentalOrderId, tenantId, status: 'ID_VERIFIED' },
         data: { status: 'DOWN_PAYMENT_PAID' },

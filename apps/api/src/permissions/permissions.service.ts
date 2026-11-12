@@ -21,6 +21,10 @@ const PERMISSIONS = [
   // rentals
   { code: 'rentals:view', name: 'View Rentals', module: 'rentals', action: 'view' },
   { code: 'rentals:update-status', name: 'Update Rental Status', module: 'rentals', action: 'update-status' },
+  // National ID review (owner rule 2026-11-12: only authorised staff approve
+  // or reject IDs). Not in MANAGER_DEFAULT_GRANTS: existing roles don't get
+  // it; SUPER_ADMIN holds every permission. Grant it explicitly.
+  { code: 'id-verification:review', name: 'Review National ID Documents', module: 'id-verification', action: 'review' },
   { code: 'rentals:manage-checklist', name: 'Manage Rental Checklists', module: 'rentals', action: 'manage-checklist' },
   // customers
   { code: 'customers:view', name: 'View Customers', module: 'customers', action: 'view' },

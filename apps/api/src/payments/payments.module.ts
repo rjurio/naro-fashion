@@ -19,6 +19,8 @@ import { PaymentSettlementService } from './payment-settlement.service';
   ],
   exports: [
     PaymentsService,
+    // ID approval reconciles waiting bookings through the same roll-up.
+    PaymentSettlementService,
     SelcomProvider,
     ClickPesaProvider,
     PaymentProviderRegistry,

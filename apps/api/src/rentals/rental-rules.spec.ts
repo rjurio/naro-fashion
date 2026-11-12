@@ -114,9 +114,11 @@ describe('RentalsService.updateStatus → RETURNED records late fee from booked 
   it('reports a concurrent status change as a conflict', async () => {
     const prisma: any = {
       rentalOrder: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'r1', status: 'FULLY_PAID' }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'r1', status: 'FULLY_PAID', userId: 'u1' }),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      // The customer holds an approved National ID (needed to hand over the item).
+      customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'doc1' })) },
     };
     const svc = new RentalsService(prisma, { requireId: 't1' } as any, { log: jest.fn() } as any);
     await expect(svc.updateStatus('r1', 'READY_FOR_PICKUP')).rejects.toBeInstanceOf(ConflictException);

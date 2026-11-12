@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { conflictException } from '../common/offline-sync.util';
@@ -18,7 +19,11 @@ import {
   assertRentalTransition,
   computeLateFee,
   resolveReturnedAt,
+  transitionRequiresApprovedId,
+  ID_NOT_APPROVED,
+  ID_NOT_APPROVED_MESSAGE,
 } from './rental-rules';
+import { hasApprovedId, lockCustomerIdState } from '../id-verification/id-approval';
 
 @Injectable()
 export class RentalsService {
@@ -140,14 +145,6 @@ export class RentalsService {
     const totalRentalPrice = rentalPrice;
     const downPaymentAmount = totalRentalPrice * (downPaymentPct / 100);
 
-    // Check ID verification status
-    const idDoc = await this.prisma.customerIDDocument.findFirst({
-      where: { userId, verificationStatus: 'APPROVED', tenantId },
-    });
-    const initialStatus = idDoc
-      ? 'ID_VERIFIED'
-      : 'PENDING_ID_VERIFICATION';
-
     const rentalNumber = `RNT-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     // The pre-check above (checkAvailability) is a fast fail for UX, but it and
@@ -179,6 +176,16 @@ export class RentalsService {
           'Product is not available for the selected dates',
         );
       }
+
+      // National ID: read under the per-customer lock ID approval also takes,
+      // so a booking and an approval for the same customer never interleave
+      // (else the booking could be stored PENDING_ID_VERIFICATION right after
+      // the approval reconciled the customer's waiting bookings). A request
+      // without an approved ID is still accepted (owner rule 2026-11-12).
+      await lockCustomerIdState(tx, tenantId, userId);
+      const initialStatus = (await hasApprovedId(tx, tenantId, userId))
+        ? 'ID_VERIFIED'
+        : 'PENDING_ID_VERIFICATION';
 
       return tx.rentalOrder.create({
         data: {
@@ -318,6 +325,13 @@ export class RentalsService {
     // actualReturnDate + late fee), CANCELLED only before dispatch.
     assertRentalTransition(rental.status, status);
 
+    // National ID (owner rule 2026-11-12): while the item is in the shop, no
+    // transition other than cancelling may happen without an APPROVED ID —
+    // checked against the customer's documents now, whatever the rental's
+    // status says. Covers every jump (e.g. PENDING_ID_VERIFICATION straight
+    // to READY_FOR_PICKUP / ACTIVE) and offline replays.
+    await this.assertApprovedIdFor(rental, status);
+
     const data: any = { status };
     if (status === 'RETURNED') {
       // Offline replays carry the real return time (validated, ≤30 days old).
@@ -376,6 +390,8 @@ export class RentalsService {
     if (!rental) {
       throw new NotFoundException('Rental order not found');
     }
+    // "Ready for pickup" tells staff the item can be handed over: same ID rule.
+    await this.assertApprovedIdFor(rental, 'READY_FOR_PICKUP');
 
     const marked = await this.prisma.rentalOrder.update({
       where: { id },
@@ -383,6 +399,30 @@ export class RentalsService {
     });
     await this.auditService.log('MARK_READY', 'Rental', id);
     return marked;
+  }
+
+  /**
+   * Refuse (422 ID_NOT_APPROVED, audited) a transition that needs an approved
+   * National ID when the rental's customer has none. See
+   * transitionRequiresApprovedId (rental-rules.ts).
+   */
+  private async assertApprovedIdFor(
+    rental: { id: string; status: string; userId: string | null },
+    target: string,
+  ): Promise<void> {
+    if (!transitionRequiresApprovedId(rental.status, target)) return;
+    const tenantId = this.tenantContext.requireId;
+    if (await hasApprovedId(this.prisma, tenantId, rental.userId)) return;
+    await this.auditService.log('UPDATE_STATUS_DENIED', 'Rental', rental.id, {
+      from: rental.status,
+      to: target,
+      reason: ID_NOT_APPROVED,
+    });
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      code: ID_NOT_APPROVED,
+      message: ID_NOT_APPROVED_MESSAGE,
+    });
   }
 
   async getAvailability(
