@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { RefreshCw } from 'lucide-react';
 import { useToast } from '@/contexts/ToastContext';
-import adminApi, { isConflictError } from '@/lib/api';
+import adminApi, { ApiError, isConflictError } from '@/lib/api';
 import { PageHeader } from '@/components/ui/PageHeader';
 import ProductForm, { ProductFormData } from '@/components/products/ProductForm';
 import PendingSyncPill from '@/components/offline/PendingSyncPill';
@@ -19,6 +19,7 @@ export default function EditProductPage() {
   const [product, setProduct] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const stale = useStaleRecordDialog('product');
+  const [latestStock, setLatestStock] = useState<Record<string, number> | null>(null);
 
   const productId = params.id as string;
 
@@ -46,6 +47,20 @@ export default function EditProductPage() {
     } catch (err) {
       if (isConflictError(err)) {
         stale.open(load);
+        return;
+      }
+      // Inventory changed since the page was opened. Nothing was saved. Show
+      // the current stock (sent with the 409) and keep every other edit, so the
+      // admin can simply press Save again.
+      if (err instanceof ApiError && err.status === 409 && err.serverCode === 'STOCK_EDIT_NOT_ALLOWED') {
+        const rows: Array<{ variantId: string; current: number }> = Array.isArray(err.data?.variants) ? err.data.variants : [];
+        setLatestStock(Object.fromEntries(rows.map((r) => [r.variantId, Number(r.current)])));
+        toast(
+          'Nothing was saved: the stock changed after you opened this page (a sale, return or Inventory adjustment). ' +
+            'The current stock is now shown and your other changes are kept. Check them and press Save again. ' +
+            'To change stock itself, use Inventory.',
+          'error',
+        );
         return;
       }
       throw err;
@@ -84,7 +99,7 @@ export default function EditProductPage() {
         </div>
       )}
       <div className="mt-6">
-        <ProductForm
+        <ProductForm latestStock={latestStock}
           initialData={product}
           onSubmit={handleSubmit}
           submitLabel="Update Product"

@@ -39,6 +39,7 @@ describe('ProductsService — variant tenancy + diff update', () => {
       orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rentalOrder: { findMany: jest.fn().mockResolvedValue([]) },
       cartItem: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      inventoryTransaction: { create: jest.fn().mockResolvedValue({}) },
     };
     prisma.$transaction = jest.fn((fn: any) => fn(prisma));
     service = new ProductsService(prisma, { requireId: TENANT } as any, { log: jest.fn() } as any);
@@ -105,9 +106,9 @@ describe('ProductsService — variant tenancy + diff update', () => {
     beforeEach(() => {
       prisma.product.findFirst.mockResolvedValue({ id: 'p1', slug: 'gown', deletedAt: null });
       prisma.productVariant.findMany.mockResolvedValue([
-        { id: 'v_keep', sku: 'gown-v1' },
-        { id: 'v_sold', sku: 'gown-v2' },
-        { id: 'v_unused', sku: 'gown-v3' },
+        { id: 'v_keep', sku: 'gown-v1', stock: 4 },
+        { id: 'v_sold', sku: 'gown-v2', stock: 0 },
+        { id: 'v_unused', sku: 'gown-v3', stock: 0 },
       ]);
     });
 
@@ -124,7 +125,9 @@ describe('ProductsService — variant tenancy + diff update', () => {
       expect(prisma.productVariant.update).toHaveBeenCalledTimes(1);
       const upd = prisma.productVariant.update.mock.calls[0][0];
       expect(upd.where).toEqual({ id: 'v_keep' });
-      expect(upd.data).toMatchObject({ tenantId: TENANT, name: 'S (edited)', price: 120, stock: 4, sku: 'gown-v1' });
+      expect(upd.data).toMatchObject({ tenantId: TENANT, name: 'S (edited)', price: 120, sku: 'gown-v1' });
+      // the form's (unchanged) stock value is never written back (Nov 2026 stock-overwrite fix)
+      expect(upd.data).not.toHaveProperty('stock');
 
       // new variant created with tenantId
       expect(prisma.productVariant.create).toHaveBeenCalledTimes(1);
