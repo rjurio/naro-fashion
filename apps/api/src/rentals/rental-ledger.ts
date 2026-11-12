@@ -70,7 +70,7 @@ export function isRentalComponent(v: unknown): v is RentalComponent {
 }
 
 export interface LedgerRefundRequest {
-  component: string;
+  component: string | null;
   amount?: unknown;
   retainedAmount?: unknown;
   status: string;

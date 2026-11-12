@@ -95,13 +95,13 @@ describe('POS refunds after a reversal', () => {
 
   it('a sale paid 100% by a REVERSED card can NOT be refunded in cash', async () => {
     const { svc, tx } = make(order([{ status: 'REVERSED', amount: 1000, method: 'CARD' }]));
-    await expect(svc.refundSale('o1', { refundMethod: 'CASH' } as any, 'cashier')).rejects.toThrow(/exceed the amount paid/);
+    await expect(svc.executeSaleRefund('o1', { refundMethod: 'CASH' } as any, 'cashier', 'rr1')).rejects.toThrow(/exceed the amount paid/);
     expect(tx.payment.create).not.toHaveBeenCalled();
   });
 
   it('split sale: cash 400 kept + card 600 reversed → refunding the whole 1000 is refused', async () => {
     const { svc, tx } = make(order([{ status: 'COMPLETED', amount: 400, method: 'CASH' }, { status: 'REVERSED', amount: 600, method: 'CARD' }]));
-    await expect(svc.refundSale('o1', { refundMethod: 'CASH' } as any, 'cashier')).rejects.toThrow(/exceed the amount paid/);
+    await expect(svc.executeSaleRefund('o1', { refundMethod: 'CASH' } as any, 'cashier', 'rr1')).rejects.toThrow(/exceed the amount paid/);
     expect(tx.payment.create).not.toHaveBeenCalled();
   });
 });

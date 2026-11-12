@@ -111,18 +111,19 @@ export default function OrderRefundsPanel({ online = true, orderId, orderNumber,
     setSubmitting(true);
     setFormError(null);
     try {
-      const res = await adminApi.createOrderRefund(orderId, {
-        amount: Math.round(value * 100) / 100,
-        method,
-        reference: reference.trim() || undefined,
-        note: note.trim() || undefined,
-      });
-      toast(`Refund of ${tzs(value)} recorded for ${orderNumber}`, 'success');
+      if (note.trim().length < 3) {
+        setFormError('Give the reason for the refund.');
+        setSubmitting(false);
+        return;
+      }
+      // R1b: this only REQUESTS the refund. A different person approves it and
+      // someone other than you records the payout (Admin → Refunds).
+      await adminApi.createOrderRefund(orderId, { amount: Math.round(value * 100) / 100, reason: note.trim() });
+      toast(`Refund of ${tzs(value)} requested for ${orderNumber}: it must be approved, then paid out (Refunds)`, 'success');
       setOpen(false);
-      if (res?.paymentStatus) onPaymentStatusChange(String(res.paymentStatus));
       await load();
     } catch (err: any) {
-      setFormError(err?.message || 'Failed to record refund');
+      setFormError(err?.message || 'Failed to request the refund');
     } finally {
       setSubmitting(false);
     }
@@ -143,7 +144,7 @@ export default function OrderRefundsPanel({ online = true, orderId, orderNumber,
             onClick={(e) => { e.stopPropagation(); openModal(); }}
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            Record refund
+            Request refund
           </Button>
         )}
       </div>
@@ -197,14 +198,14 @@ export default function OrderRefundsPanel({ online = true, orderId, orderNumber,
       <Modal
         isOpen={open}
         onClose={() => { if (!submitting) setOpen(false); }}
-        title={`Record refund — ${orderNumber}`}
+        title={`Request refund — ${orderNumber}`}
         size="sm"
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setOpen(false)} disabled={submitting}>Cancel</Button>
             <Button onClick={submit} disabled={submitting || !online} title={online ? undefined : 'Needs internet'}>
               {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
-              {submitting ? 'Recording…' : 'Record refund'}
+              {submitting ? 'Requesting…' : 'Request refund'}
             </Button>
           </div>
         }
@@ -228,31 +229,7 @@ export default function OrderRefundsPanel({ online = true, orderId, orderNumber,
             />
           </label>
           <label className="block space-y-1">
-            <span className="text-xs font-medium text-[hsl(var(--foreground))]">Method</span>
-            <select value={method} onChange={(e) => setMethod(e.target.value as OrderRefundMethod)} className={inputCls}>
-              {METHOD_OPTIONS.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
-            {method === 'GATEWAY' && (
-              <span className="block text-[11px] text-amber-700 dark:text-amber-400">
-                Gateway refunds are not integrated yet for Selcom or ClickPesa — send the money back yourself and record it with another method.
-              </span>
-            )}
-          </label>
-          <label className="block space-y-1">
-            <span className="text-xs font-medium text-[hsl(var(--foreground))]">Reference (optional)</span>
-            <input
-              type="text"
-              maxLength={100}
-              placeholder="e.g. M-Pesa receipt or bank reference"
-              value={reference}
-              onChange={(e) => setReference(e.target.value)}
-              className={inputCls}
-            />
-          </label>
-          <label className="block space-y-1">
-            <span className="text-xs font-medium text-[hsl(var(--foreground))]">Note (optional)</span>
+            <span className="text-xs font-medium text-[hsl(var(--foreground))]">Reason (required)</span>
             <textarea
               rows={2}
               maxLength={500}

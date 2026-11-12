@@ -135,14 +135,15 @@ export default function ExchangeModal({ onClose, onComplete }: Props) {
 
   const handleExchange = async () => {
     if (returnItems.length === 0 || processing) return;
-    // P0c: a non-cash settlement (either direction) needs its evidence.
-    if (priceDifference !== 0 && settlementMethod !== 'CASH') {
+    // P0c: a non-cash settlement needs its evidence. R1b: only money COMING IN is
+    // settled here; when the customer is owed, a refund request is created.
+    if (priceDifference > 0 && settlementMethod !== 'CASH') {
       if (settlementRef.trim().length < 4) { toast.error('Enter the transaction / terminal reference for the settlement.'); return; }
       if (settlementMethod === 'CARD' && !/^[A-Za-z0-9]{4,12}$/.test(settlementApproval.trim())) { toast.error('Enter the approval code from the terminal slip.'); return; }
     }
     setProcessing(true);
     try {
-      await adminApi.posCreateExchange({
+      const ex = await adminApi.posCreateExchange({
         originalOrderId: originalOrder.id,
         returnedItems: returnItems.map((i) => ({
           orderItemId: i.orderItemId,
@@ -154,11 +155,14 @@ export default function ExchangeModal({ onClose, onComplete }: Props) {
           quantity: i.quantity,
           unitPrice: i.unitPrice,
         })),
-        settlementMethod: priceDifference !== 0 ? settlementMethod : undefined,
-        settlementRef: priceDifference !== 0 && settlementMethod !== 'CASH' ? settlementRef.trim() || undefined : undefined,
-        settlementApprovalCode: priceDifference !== 0 && settlementMethod === 'CARD' ? settlementApproval.trim() || undefined : undefined,
+        settlementMethod: priceDifference > 0 ? settlementMethod : undefined,
+        settlementRef: priceDifference > 0 && settlementMethod !== 'CASH' ? settlementRef.trim() || undefined : undefined,
+        settlementApprovalCode: priceDifference > 0 && settlementMethod === 'CARD' ? settlementApproval.trim() || undefined : undefined,
         reason: reason || undefined,
       });
+      if (ex?.refundRequestId) {
+        toast.success('Exchange done. The amount owed to the customer is a refund request: it must be approved, then paid out by someone else (Refunds).');
+      }
       onComplete();
       onClose();
     } catch (err: any) {

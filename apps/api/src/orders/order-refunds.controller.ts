@@ -5,7 +5,7 @@ import { PermissionGuard } from '../auth/guards/permission.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { OrderRefundsService } from './order-refunds.service';
-import { CreateOrderRefundDto } from './dto/create-order-refund.dto';
+import { RequestOrderRefundDto } from './dto/create-order-refund.dto';
 
 /**
  * Admin refund workflow for online orders. Both routes move/expose money, so
@@ -27,7 +27,7 @@ export class OrderRefundsController {
   @RequiresPermission('orders:refund')
   createRefund(
     @Param('id') id: string,
-    @Body() dto: CreateOrderRefundDto,
+    @Body() dto: RequestOrderRefundDto,
     @CurrentUser() user: any,
   ) {
     return this.refunds.createRefund(id, dto, user);

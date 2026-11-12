@@ -15,7 +15,8 @@ import {
   PROVIDER_CODES,
   ProviderCredentials,
 } from '../payments/payment-provider.types';
-import { CreateOrderRefundDto, ORDER_REFUND_METHODS } from './dto/create-order-refund.dto';
+import { CreateOrderRefundDto, ORDER_REFUND_METHODS, RequestOrderRefundDto } from './dto/create-order-refund.dto';
+import { OPEN_REFUND_STATUSES, openClaimedAmount, REFUND_KINDS } from '../refunds/refund-rules';
 import {
   PARTIALLY_REFUNDED,
   REFUNDABLE_PAYMENT_STATUSES,
@@ -151,8 +152,53 @@ export class OrderRefundsService {
     return (pm?.integrationParams as ProviderCredentials | null) ?? undefined;
   }
 
-  async createRefund(orderId: string, dto: CreateOrderRefundDto, user: any) {
+  /**
+   * R1b: POST /orders/:id/refunds now REQUESTS a refund. Nothing is paid and
+   * the order is unchanged; the amount is reserved against what is still
+   * refundable (collected − refunded − other open requests). The money is
+   * recorded only at payout (executeRefund), after an independent approval,
+   * by someone other than the requester.
+   */
+  async createRefund(orderId: string, dto: RequestOrderRefundDto, user: any) {
     const tenantId = this.tenantContext.requireId;
+    const amount = round2(Number(dto.amount));
+    const reason = dto.reason?.trim();
+    if (!reason) throw new BadRequestException('A refund needs a reason.');
+    const request = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('refund:order:' || ${orderId}::text))`;
+      const order = await tx.order.findFirst({ where: { id: orderId, tenantId }, select: { id: true, orderNumber: true, paymentStatus: true, channel: true } });
+      if (!order) throw new NotFoundException('Order not found');
+      if (order.channel === 'POS') throw new BadRequestException('POS sales are refunded from the POS screen (returns restock items and pay out of the drawer).');
+      if (!REFUNDABLE_PAYMENT_STATUSES.includes(order.paymentStatus)) {
+        throw new BadRequestException(`Order ${order.orderNumber} has payment status ${order.paymentStatus}; only REFUND_PENDING, PAID, PARTIAL or PARTIALLY_REFUNDED orders can be refunded.`);
+      }
+      const bal = await this.balances(tx, tenantId, orderId);
+      const open = await tx.refundRequest.findMany({ where: { tenantId, orderId, status: { in: OPEN_REFUND_STATUSES } } });
+      const room = round2(Math.max(0, bal.refundable - openClaimedAmount(open)));
+      if (amount > room + 0.001) {
+        throw new BadRequestException(`Refund amount (${amount}) exceeds what can still be refunded on ${order.orderNumber} (${room} after ${open.length} open request(s)).`);
+      }
+      return tx.refundRequest.create({
+        data: { tenantId, subject: 'ORDER', kind: REFUND_KINDS.ORDER_REFUND, orderId, amount, reason, status: 'REQUESTED', requestedById: user?.id },
+      });
+    });
+    await this.auditService.log('REFUND_REQUESTED', 'RefundRequest', request.id, { subject: 'ORDER', orderId, amount });
+    return { status: 'REQUESTED', refundRequest: request };
+  }
+
+  /**
+   * Executes an APPROVED ORDER refund at payout (RefundRequestsService.pay
+   * only). The original logic: cap, CAS on paymentStatus, REFUNDED row, audit;
+   * plus the link to the request and, for cash, the payer's own open shift.
+   */
+  async executeRefund(orderId: string, dto: CreateOrderRefundDto, user: any, refundRequestId: string) {
+    const tenantId = this.tenantContext.requireId;
+    let cashSessionId: string | null = null;
+    if (dto.method === 'CASH') {
+      const session = await this.prisma.posSession.findFirst({ where: { adminUserId: user?.id ?? '', status: 'OPEN', tenantId }, select: { id: true } });
+      if (!session) throw new BadRequestException('A cash payout needs your OPEN POS shift (the cash leaves your drawer).');
+      cashSessionId = session.id;
+    }
     const performedById: string | undefined = user?.id;
     const performedByName =
       [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim() || user?.email || null;
@@ -253,11 +299,13 @@ export class OrderRefundsService {
               status: 'REFUNDED',
               transactionRef: reference,
               providerCode,
+              refundRequestId,
               gatewayResponse: {
                 kind: ORDER_REFUND_KIND,
                 refundedBy: performedById ?? null,
                 refundedByName: performedByName,
                 note,
+                ...(cashSessionId ? { posSessionId: cashSessionId } : {}),
               },
             },
           });

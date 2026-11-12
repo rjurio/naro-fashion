@@ -89,7 +89,7 @@ describe('rental refund payout: the requester can never pay it out', () => {
     const err: any = await svc.pay('rr1', { method: 'CASH', sessionId: 's1' }, { id: 'cashier-1' }).catch((e: any) => e);
     expect(err).toBeInstanceOf(ForbiddenException);
     expect(err.getResponse().code).toBe('PAYOUT_BY_REQUESTER');
-    expect(svc.audit.log).toHaveBeenCalledWith('REFUND_PAYOUT_DENIED', 'RentalRefundRequest', 'rr1', { reason: 'PAYOUT_BY_REQUESTER' });
+    expect(svc.audit.log).toHaveBeenCalledWith('REFUND_PAYOUT_DENIED', 'RefundRequest', 'rr1', { reason: 'PAYOUT_BY_REQUESTER' });
     expect(svc.prisma.$transaction).not.toHaveBeenCalled();
     expect(svc.prisma.posSession.findFirst).not.toHaveBeenCalled();
   });
