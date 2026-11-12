@@ -1,4 +1,4 @@
-import { IsArray, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ExchangeReturnItemDto {
@@ -8,6 +8,11 @@ export class ExchangeReturnItemDto {
   @IsNumber()
   @Min(1)
   quantity: number;
+
+  /** R1b: DAMAGED units are recorded (DAMAGE ledger row) and NOT put back into stock. Default RESALEABLE. */
+  @IsOptional()
+  @IsIn(['RESALEABLE', 'DAMAGED'])
+  condition?: 'RESALEABLE' | 'DAMAGED';
 }
 
 export class ExchangeNewItemDto {

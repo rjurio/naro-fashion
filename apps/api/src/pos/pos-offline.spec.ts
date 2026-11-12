@@ -53,7 +53,7 @@ function makeService(opts: { stock?: number; session?: any; sessionById?: any } 
       findFirst: jest.fn(async () => ({ stock })),
     },
     inventoryTransaction: { create: jest.fn().mockResolvedValue({}) },
-    posSession: { update: jest.fn().mockResolvedValue({}) },
+    posSession: { update: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
   };
 
   const openSession = opts.session === undefined

@@ -156,8 +156,8 @@ export class RentalUnitsService {
           await tx.rentalUnitVariant.createMany({ data: [...new Set(dto.variantIds)].map((variantId) => ({ unitId: id, variantId })) });
         }
       }
-      return tx.rentalUnit.update({
-        where: { id },
+      await tx.rentalUnit.updateMany({
+        where: { id, tenantId: this.tenantId },
         data: {
           ...(dto.status ? { status: dto.status } : {}),
           ...(dto.label !== undefined ? { label: dto.label } : {}),
@@ -165,6 +165,7 @@ export class RentalUnitsService {
           ...(unverify ? { trackingVerifiedAt: null } : {}),
         },
       });
+      return (await tx.rentalUnit.findFirst({ where: { id, tenantId: this.tenantId } }))!;
     });
     await this.audit.log('UNIT_UPDATED', 'RentalUnit', id, {
       from: { status: unit.status }, to: { status: updated.status }, variantIds: dto.variantIds, note: dto.note, needsRecount: unverify,

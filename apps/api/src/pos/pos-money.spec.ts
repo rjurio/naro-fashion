@@ -144,6 +144,7 @@ function makeService(order: any, opts: { claimCount?: number; session?: any } = 
     order: {
       findFirst: jest.fn().mockResolvedValue(order),
       update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       create: jest.fn().mockResolvedValue({ id: 'new-order' }),
     },
     orderItem: {
@@ -159,7 +160,7 @@ function makeService(order: any, opts: { claimCount?: number; session?: any } = 
     inventoryTransaction: { create: jest.fn().mockResolvedValue({}) },
     payment: { create: jest.fn().mockResolvedValue({}) },
     posExchange: { create: jest.fn().mockImplementation((a: any) => Promise.resolve(a.data)) },
-    refundRequest: { create: jest.fn().mockResolvedValue({ id: 'rr-x' }) },
+    refundRequest: { create: jest.fn().mockResolvedValue({ id: 'rr-x' }), findMany: jest.fn().mockResolvedValue([]) },
   };
   const session = opts.session === undefined ? { id: 'sess-1', openingCash: 0 } : opts.session;
   const prisma: any = {
@@ -285,10 +286,13 @@ describe('PosService.createExchange', () => {
 describe('PosService.closeSession — expected cash', () => {
   it('= opening + net cash in − cash refunded, keyed by the session tag', async () => {
     const session = { id: 'sess-1', openingCash: 10000, tenantId: 't1', notes: null };
+    let written: any = {};
+    let closeWhere: any = null;
     const prisma: any = {
       posSession: {
-        findFirst: jest.fn().mockResolvedValue(session),
-        update: jest.fn().mockImplementation((a: any) => Promise.resolve(a.data)),
+        // 1st read: the open shift; 2nd read: the row after the shop-scoped close.
+        findFirst: jest.fn().mockImplementationOnce(() => Promise.resolve(session)).mockImplementation(() => Promise.resolve({ ...session, ...written })),
+        updateMany: jest.fn().mockImplementation((a: any) => { written = a.data; closeWhere = a.where; return Promise.resolve({ count: 1 }); }),
       },
       payment: {
         aggregate: jest
@@ -301,6 +305,7 @@ describe('PosService.closeSession — expected cash', () => {
     const res: any = await service.closeSession('cashier', { closingCash: 52000 } as any);
     expect(res.expectedCash).toBe(52000);
     expect(res.cashDifference).toBe(0);
+    expect(closeWhere).toEqual({ id: 'sess-1', tenantId: 't1', status: 'OPEN' });
     const [inArgs, outArgs] = prisma.payment.aggregate.mock.calls.map((c: any) => c[0]);
     expect(inArgs.where).toMatchObject({
       tenantId: 't1',

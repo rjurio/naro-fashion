@@ -444,8 +444,9 @@ export class PosService {
     const expectedCash = await this.computeExpectedCash(session);
     const cashDifference = round2(dto.closingCash - expectedCash);
 
-    return this.prisma.posSession.update({
-      where: { id: session.id },
+    // Shop-scoped, and only an OPEN shift closes (two closes can't both win).
+    const closed = await this.prisma.posSession.updateMany({
+      where: { id: session.id, tenantId: this.tenantContext.requireId, status: 'OPEN' },
       data: {
         closedAt: new Date(),
         closingCash: dto.closingCash,
@@ -455,6 +456,8 @@ export class PosService {
         status: 'CLOSED',
       },
     });
+    if (closed.count !== 1) throw new ConflictException('This shift was already closed. Reload.');
+    return this.prisma.posSession.findFirst({ where: { id: session.id, tenantId: this.tenantContext.requireId } });
   }
 
   /**
@@ -1052,9 +1055,9 @@ export class PosService {
         newOrder.oversoldDetails = oversoldLines as unknown as Prisma.JsonValue;
       }
 
-      // Update session stats
-      await tx.posSession.update({
-        where: { id: session.id },
+      // Update session stats (shop-scoped write)
+      await tx.posSession.updateMany({
+        where: { id: session.id, tenantId },
         data: {
           totalSales: { increment: total },
           totalTransactions: { increment: 1 },
@@ -1287,10 +1290,10 @@ export class PosService {
       if (order.status === 'CANCELLED') throw new BadRequestException('Cancelled sales cannot be refunded.');
       const open = await tx.refundRequest.findMany({ where: { tenantId, orderId, status: { in: OPEN_REFUND_STATUSES } } });
       const reservedQty = openClaimedQuantities(open);
-      const items: Array<{ orderItemId: string; quantity: number }> = [];
+      const items: Array<{ orderItemId: string; quantity: number; condition?: string }> = [];
       let estimate = 0;
       const wanted = !dto.items || dto.items.length === 0
-        ? order.items.map((i) => ({ orderItemId: i.id, quantity: i.quantity - i.refundedQuantity - (reservedQty.get(i.id) ?? 0) })).filter((x) => x.quantity > 0)
+        ? order.items.map((i) => ({ orderItemId: i.id, quantity: i.quantity - i.refundedQuantity - (reservedQty.get(i.id) ?? 0), condition: dto.condition })).filter((x) => x.quantity > 0)
         : dto.items;
       for (const w of wanted) {
         const item = order.items.find((i) => i.id === w.orderItemId);
@@ -1302,7 +1305,13 @@ export class PosService {
             `Cannot request more than the remaining ${remaining} unit(s) for this item (refunded ${item.refundedQuantity}, waiting in open requests ${reserved}, of ${item.quantity}).`,
           );
         }
-        items.push({ orderItemId: item.id, quantity: w.quantity });
+        // R1b: the condition of what was physically handed back decides its
+        // disposition at payout (only RESALEABLE is restocked).
+        const condition = (w as any).condition ?? dto.condition;
+        if (condition !== 'RESALEABLE' && condition !== 'DAMAGED') {
+          throw new BadRequestException('Record the condition of each returned item (RESALEABLE or DAMAGED).');
+        }
+        items.push({ orderItemId: item.id, quantity: w.quantity, condition } as any);
         estimate += refundValueForUnits(item, order, item.refundedQuantity + reserved, w.quantity);
       }
       if (items.length === 0) throw new BadRequestException('Nothing left to refund on this sale (or it is already requested).');
@@ -1317,7 +1326,9 @@ export class PosService {
         data: {
           tenantId, subject: 'POS_SALE', kind: REFUND_KINDS.POS_RETURN, orderId, amount: estimate, reason,
           status: 'REQUESTED', requestedById: cashierId,
-          lines: { items, refundMethod: dto.refundMethod, reason, note: dto.note ?? null } as any,
+          // Goods are physically in the shop but NOT in stock until payout:
+          // held pending the refund decision.
+          lines: { items, refundMethod: dto.refundMethod, reason, note: dto.note ?? null, goodsDisposition: 'HELD_PENDING_REFUND' } as any,
         },
       });
     });
@@ -1415,16 +1426,22 @@ export class PosService {
         // Net price actually paid (item discount + pro-rated order discount).
         refundAmount += refundValueForUnits(item, order, item.refundedQuantity, qty);
 
-        await this.restockVariant(
-          tx,
-          tenantId,
-          item.variantId,
-          item.productId,
-          qty,
-          order.orderNumber,
-          `POS ${isFullRefund ? 'refund' : 'partial refund'}: ${dto.reason ?? (isFullRefund ? 'Full refund' : 'Partial refund')}`,
-          cashierId,
-        );
+        const condition = (dto.items ?? []).find((x: any) => x.orderItemId === item.id)?.condition ?? dto.condition ?? 'RESALEABLE';
+        if (condition === 'DAMAGED') {
+          // Recorded, never sellable: a DAMAGE ledger row, stock unchanged.
+          await this.recordDamagedReturn(tx, tenantId, item.variantId, item.productId, qty, order.orderNumber, `POS return (damaged): ${dto.reason ?? ''}`, cashierId);
+        } else {
+          await this.restockVariant(
+            tx,
+            tenantId,
+            item.variantId,
+            item.productId,
+            qty,
+            order.orderNumber,
+            `POS ${isFullRefund ? 'refund' : 'partial refund'}: ${dto.reason ?? (isFullRefund ? 'Full refund' : 'Partial refund')}`,
+            cashierId,
+          );
+        }
       }
       refundAmount = round2(refundAmount);
 
@@ -1476,8 +1493,8 @@ export class PosService {
       });
       const fullyRefunded = after.every((i) => i.refundedQuantity >= i.quantity);
 
-      await tx.order.update({
-        where: { id: order.id },
+      await tx.order.updateMany({
+        where: { id: order.id, tenantId },
         data: {
           status: fullyRefunded ? 'REFUNDED' : order.status,
           paymentStatus: fullyRefunded ? 'REFUNDED' : 'PARTIAL',
@@ -1520,6 +1537,18 @@ export class PosService {
         reference,
         note,
         performedBy,
+      },
+    });
+  }
+
+  /** Returned but unfit for sale: a DAMAGE ledger row (quantityChange 0), stock untouched. */
+  private async recordDamagedReturn(tx: any, tenantId: string, variantId: string, productId: string, qty: number, reference: string, note: string, performedBy: string) {
+    const v = await tx.productVariant.findFirst({ where: { id: variantId, tenantId }, select: { stock: true } });
+    const stock = v?.stock ?? 0;
+    await tx.inventoryTransaction.create({
+      data: {
+        tenantId, productId, variantId, type: 'DAMAGE', quantityBefore: stock, quantityChange: 0, quantityAfter: stock,
+        reference, note: `${qty} unit(s) returned damaged, not restocked. ${note}`.trim(), performedBy,
       },
     });
   }
@@ -1866,8 +1895,8 @@ export class PosService {
 
       // Update session stats
       if (session) {
-        await tx.posSession.update({
-          where: { id: session.id },
+        await tx.posSession.updateMany({
+          where: { id: session.id, tenantId },
           data: {
             totalSales: { increment: Number(layaway.total) },
             totalTransactions: { increment: 1 },
@@ -2006,15 +2035,19 @@ export class PosService {
       // exchanged and then refunded again, even concurrently.
       let returnTotal = 0;
       const returnItemDetails: any[] = [];
+      // R1b: units waiting in an open refund request can't be exchanged too.
+      const exchangeReserved = openClaimedQuantities(
+        await tx.refundRequest.findMany({ where: { tenantId, orderId: originalOrder.id, status: { in: OPEN_REFUND_STATUSES } } }),
+      );
       for (const ri of dto.returnedItems) {
         const orderItem = originalOrder.items.find((i) => i.id === ri.orderItemId);
         if (!orderItem) {
           throw new BadRequestException(`Order item ${ri.orderItemId} not found.`);
         }
-        const remaining = orderItem.quantity - orderItem.refundedQuantity;
+        const remaining = orderItem.quantity - orderItem.refundedQuantity - (exchangeReserved.get(orderItem.id) ?? 0);
         if (ri.quantity > remaining) {
           throw new BadRequestException(
-            `Cannot return more than the remaining ${remaining} unit(s) for item ${ri.orderItemId}.`,
+            `Cannot return more than the remaining ${remaining} unit(s) for item ${ri.orderItemId} (units in an open refund request are reserved).`,
           );
         }
         const claim = await tx.orderItem.updateMany({
@@ -2065,10 +2098,16 @@ export class PosService {
 
       // Restock returned items (atomic, tenant-scoped, ledgered).
       for (const ri of returnItemDetails) {
-        await this.restockVariant(
-          tx, tenantId, ri.variantId, ri.productId, ri.quantity,
-          exchangeNumber, 'Exchange return', cashierId,
-        );
+        const cond = dto.returnedItems.find((x) => x.orderItemId === ri.orderItemId)?.condition ?? 'RESALEABLE';
+        ri.condition = cond;
+        if (cond === 'DAMAGED') {
+          await this.recordDamagedReturn(tx, tenantId, ri.variantId, ri.productId, ri.quantity, exchangeNumber, 'Exchange return (damaged)', cashierId);
+        } else {
+          await this.restockVariant(
+            tx, tenantId, ri.variantId, ri.productId, ri.quantity,
+            exchangeNumber, 'Exchange return', cashierId,
+          );
+        }
       }
 
       // New items: order + guarded stock decrement
@@ -2186,8 +2225,8 @@ export class PosService {
         select: { quantity: true, refundedQuantity: true },
       });
       const fullyReturned = after.every((i) => i.refundedQuantity >= i.quantity);
-      await tx.order.update({
-        where: { id: originalOrder.id },
+      await tx.order.updateMany({
+        where: { id: originalOrder.id, tenantId },
         data: {
           status: fullyReturned ? 'REFUNDED' : originalOrder.status,
           paymentStatus: fullyReturned ? 'REFUNDED' : 'PARTIAL',

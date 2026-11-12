@@ -29,7 +29,7 @@ function makeService(products: Record<string, P>) {
     payment: { create: jest.fn().mockResolvedValue({}) },
     productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findFirst: jest.fn(async () => ({ stock: 0 })) },
     inventoryTransaction: { create: jest.fn().mockResolvedValue({}) },
-    posSession: { update: jest.fn().mockResolvedValue({}) },
+    posSession: { update: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     layaway: { create: jest.fn(async ({ data }: any) => ({ id: 'l1', ...data })) },
   };
   const prisma: any = {

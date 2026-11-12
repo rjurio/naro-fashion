@@ -74,6 +74,13 @@ describe('pos.service tenant-scope + stock-safety invariants', () => {
     expect(code).not.toMatch(/balanceDue:\s*newBalanceDue/);
   });
 
+  it('POS shift writes are shop-scoped (no by-id posSession.update; every updateMany carries tenantId)', () => {
+    expect(code).not.toMatch(/posSession\.update\(/);
+    const writes = code.match(/posSession\.updateMany\(\{[\s\S]*?where:\s*\{[^}]*\}/g) ?? [];
+    expect(writes.length).toBeGreaterThanOrEqual(3);
+    for (const w of writes) expect(w).toMatch(/tenantId/);
+  });
+
   it('every POS payment.create tags the drawer session for cash reconciliation', () => {
     const creates = code.match(/payment\.create\(\{[\s\S]*?\n\s{6,10}\}\);/g) ?? [];
     // R1b: an exchange that owes the customer no longer writes a payment here

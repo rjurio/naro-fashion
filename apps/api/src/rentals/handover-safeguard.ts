@@ -32,20 +32,34 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 export const CHECKLIST_ENFORCEMENT_AVAILABLE = false; // R3 sets true together with its checklist gate
 
 export const HANDOVER_REQUIRES_CHECKLIST_BUILD = 'HANDOVER_REQUIRES_CHECKLIST_BUILD';
+/**
+ * R3's migration creates this table (design: POS_RENTAL_LAUNCH_PLAN.md §3.2).
+ * Migrations are expand-only and never rolled back with the code, so its mere
+ * EXISTENCE proves R3 has been deployed — even if the switch row below were
+ * missing, deleted or never written. R3 must keep this exact table name.
+ */
+export const R3_MARKER_TABLE = 'RentalChecklistSnapshot';
 export const HANDOVER_SAFEGUARD_UNAVAILABLE = 'HANDOVER_SAFEGUARD_UNAVAILABLE';
 
 /** Throws (422) when this build may not hand items over. Never throws for purchases (not called there). */
 export async function assertHandoverSafeguard(db: any, tenantId: string, buildHasChecklist = CHECKLIST_ENFORCEMENT_AVAILABLE): Promise<void> {
   let row: { checklistRequired: boolean } | null = null;
+  let r3Deployed = false;
   try {
     row = await db.rentalHandoverSafeguard.findFirst({ where: { tenantId }, select: { checklistRequired: true } });
+    // Second, independent signal (fail closed on "missing configuration"):
+    // R3's table exists → the checklist era has begun for this database.
+    if (typeof db.$queryRaw === 'function' && !buildHasChecklist) {
+      const found: Array<{ t: string | null }> = await db.$queryRaw`SELECT to_regclass(${'"' + R3_MARKER_TABLE + '"'})::text AS t`;
+      r3Deployed = !!found?.[0]?.t;
+    }
   } catch {
     throw new UnprocessableEntityException({
       statusCode: 422, code: HANDOVER_SAFEGUARD_UNAVAILABLE,
       message: "The hand-over safety check couldn't be read, so nothing can be handed over. Try again; if it persists, contact the owner.",
     });
   }
-  if (row?.checklistRequired && !buildHasChecklist) {
+  if ((row?.checklistRequired || r3Deployed) && !buildHasChecklist) {
     throw new UnprocessableEntityException({
       statusCode: 422, code: HANDOVER_REQUIRES_CHECKLIST_BUILD,
       message: 'Hand-overs need the mandatory checklist, which this version of the system does not have (it was rolled back). Nothing can be handed over until the checklist version is restored or the owner records an exception.',
@@ -69,10 +83,20 @@ export class HandoverSafeguardService {
   async get() {
     const tenantId = this.tenantContext.requireId;
     const row = await this.prisma.rentalHandoverSafeguard.findFirst({ where: { tenantId } });
+    // The same check hand-overs use (switch OR R3 marker table, fail closed).
+    let handoversAllowed = true;
+    let blockedBy: string | null = null;
+    try {
+      await assertHandoverSafeguard(this.prisma, tenantId);
+    } catch (e: any) {
+      handoversAllowed = false;
+      blockedBy = e?.getResponse?.()?.code ?? 'UNKNOWN';
+    }
     return {
       checklistRequired: !!row?.checklistRequired,
       buildHasChecklist: CHECKLIST_ENFORCEMENT_AVAILABLE,
-      handoversAllowed: !(row?.checklistRequired && !CHECKLIST_ENFORCEMENT_AVAILABLE),
+      handoversAllowed,
+      blockedBy,
       changedAt: row?.changedAt ?? null,
       changedById: row?.changedById ?? null,
       reason: row?.reason ?? null,
