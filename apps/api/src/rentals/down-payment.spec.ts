@@ -89,9 +89,11 @@ describe('settlement with the stored whole-shilling amount (partial payments)', 
   const makePrisma = (paid: number, stored: number, status = 'ID_VERIFIED') => ({
     payment: { aggregate: jest.fn(async () => ({ _sum: { amount: paid } })) },
     rentalOrder: {
-      findFirst: jest.fn(async () => ({ id: 'r1', rentalNumber: 'R1', status, downPaymentAmount: stored })),
+      findFirst: jest.fn(async () => ({ id: 'r1', rentalNumber: 'R1', status, userId: 'u1', downPaymentAmount: stored })),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
+    // National ID (PR #16): settlement confirms only a customer with an approved ID.
+    customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'doc1' })) },
   });
 
   it.each([
@@ -118,9 +120,11 @@ describe('cancellations, refunds, deposits and the payment cap', () => {
   const makePrisma = (paid: number, stored: number, status: string) => ({
     payment: { aggregate: jest.fn(async () => ({ _sum: { amount: paid } })) },
     rentalOrder: {
-      findFirst: jest.fn(async () => ({ id: 'r1', rentalNumber: 'R1', status, downPaymentAmount: stored })),
+      findFirst: jest.fn(async () => ({ id: 'r1', rentalNumber: 'R1', status, userId: 'u1', downPaymentAmount: stored })),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
+    // National ID (PR #16): settlement confirms only a customer with an approved ID.
+    customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'doc1' })) },
   });
 
   it('a CANCELLED booking never advances, even if enough was paid; its stored amount is untouched', async () => {
