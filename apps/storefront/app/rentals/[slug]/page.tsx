@@ -18,6 +18,7 @@ import {
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { formatPrice } from "@/lib/utils";
+import { computeDownPayment } from "@/lib/down-payment";
 import { productsApi, rentalsApi, ApiError } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -189,7 +190,8 @@ export default function RentalDetailPage() {
   };
 
   const rentalFee = rentalPrice;
-  const downPayment = Math.round(rentalFee * (downPaymentPercent / 100));
+  // Same rule as the booking (rounded up to a whole shilling; lib/down-payment.ts).
+  const downPayment = computeDownPayment(rentalFee, downPaymentPercent);
   const totalCost = rentalFee + depositAmount;
   const remainingPayment = totalCost - downPayment;
 
