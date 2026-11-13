@@ -337,6 +337,40 @@ export class PaymentSettlementService {
    * the customer paid before verification, the payment is recorded and an
    * admin advances the rental after approving the ID.
    */
+  /**
+   * Under the booking's refund lock: if the booking is (now) CANCELLED, raise
+   * refund requests for money received and not yet claimed, and flag it
+   * REFUND_DUE when money is held. Returns true when the booking is
+   * cancelled (the caller then stops: a cancelled booking is never advanced).
+   */
+  private async raiseLateCancellationRefunds(rental: any, tenantId: string, totalPaid: number): Promise<boolean> {
+    try {
+      const out = await this.prisma.$transaction(async (tx: any) => {
+        const created = await requestCancellationRefunds(
+          tx, tenantId, rental.id, SYSTEM_REQUESTER.LATE_PAYMENT, rental.cancellationReason ?? 'LATE_PAYMENT');
+        const current = await tx.rentalOrder.findFirst({ where: { id: rental.id, tenantId }, select: { status: true } });
+        const cancelled = current?.status === 'CANCELLED';
+        if (cancelled && (totalPaid > 0 || created.length > 0)) {
+          await tx.rentalOrder.updateMany({
+            where: { id: rental.id, tenantId, status: 'CANCELLED', OR: [{ holdState: null }, { holdState: { not: 'REFUND_DUE' } }] },
+            data: { holdState: 'REFUND_DUE', holdExpiresAt: null },
+          });
+        }
+        return { created, cancelled };
+      });
+      if (out.cancelled && totalPaid > 0) {
+        this.logger.warn(`REVIEW: rental ${rental.rentalNumber} is CANCELLED but has ${totalPaid} TZS of COMPLETED payments — refund review.`);
+      }
+      if (out.created.length) {
+        this.logger.warn(`Rental ${rental.rentalNumber}: late payment on a cancelled booking -> refund request(s) ${out.created.map((c: any) => `${c.component} ${c.amount}`).join(', ')}`);
+      }
+      return out.cancelled;
+    } catch (e: any) {
+      this.logger.error(`Rental ${rental.rentalNumber}: could not raise the late-payment refund request: ${e?.message ?? e}`);
+      return rental.status === 'CANCELLED';
+    }
+  }
+
   async updateRentalPaymentStatus(rentalOrderId: string, tenantId: string) {
     const rental = await this.prisma.rentalOrder.findFirst({
       where: { id: rentalOrderId, tenantId },
@@ -355,33 +389,19 @@ export class PaymentSettlementService {
     const ledger = rentalBalances(rental, rows);
     const feePaid = ledger.collected.RENTAL_FEE;
 
-    if (rental.status === 'CANCELLED' && totalPaid > 0) {
-      // e.g. a gateway payment that completed after the booking was released
-      // by the hold expiry job. Never re-opened automatically: refund review.
-      this.logger.warn(
-        `REVIEW: rental ${rental.rentalNumber} is CANCELLED but has ${totalPaid} TZS of COMPLETED payments — refund review.`,
-      );
-      // Flag it for finance (REFUND_DUE): money that arrived on a released booking.
-      await this.prisma.rentalOrder.updateMany({
-        where: {
-          id: rentalOrderId,
-          tenantId,
-          status: 'CANCELLED',
-          OR: [{ holdState: null }, { holdState: { not: 'REFUND_DUE' } }],
-        },
-        data: { holdState: 'REFUND_DUE', holdExpiresAt: null },
-      });
-      // Round 25C F: money that arrived after the cancellation becomes a full
-      // refund REQUEST (only the not-yet-requested part; idempotent on replays).
-      try {
-        const created = await this.prisma.$transaction((tx: any) =>
-          requestCancellationRefunds(tx, tenantId, rentalOrderId, SYSTEM_REQUESTER.LATE_PAYMENT, (rental as any).cancellationReason ?? 'LATE_PAYMENT'));
-        if (created.length) this.logger.warn(`Rental ${rental.rentalNumber}: late payment on a cancelled booking -> refund request(s) ${created.map((c) => `${c.component} ${c.amount}`).join(', ')}`);
-      } catch (e: any) {
-        this.logger.error(`Rental ${rental.rentalNumber}: could not raise the late-payment refund request: ${e?.message ?? e}`);
-      }
-      return;
-    }
+    // Money on a CANCELLED booking (e.g. a gateway payment that completed after
+    // the hold expiry job released it) is never re-opened automatically: it
+    // becomes a full refund REQUEST (round 25C F) and the booking is flagged
+    // REFUND_DUE for finance.
+    //
+    // Round 25D E: the status read above may be stale. A cancellation can be
+    // committing at this very moment, having counted the money BEFORE this
+    // payment completed; it then raises no request for it, and this check
+    // would see the old status and raise none either. So the check always
+    // runs under the booking's refund lock and re-reads the status there
+    // (requestCancellationRefunds does both): whichever side comes second
+    // requests exactly the money not yet claimed. Idempotent on replays.
+    if (await this.raiseLateCancellationRefunds(rental, tenantId, totalPaid)) return;
 
     const confirmable = ['ID_VERIFIED', 'DOWN_PAYMENT_PAID'].includes(rental.status);
     if (confirmable && ledger.downPaymentCovered) {
