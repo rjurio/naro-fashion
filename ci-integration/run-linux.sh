@@ -20,17 +20,21 @@ reset_schema() {
   (cd "$WT/packages/database" && DATABASE_URL="$(OWNER_URL "$1")" pnpm exec prisma migrate deploy >/dev/null)
 }
 start_api() { # <checkout> <schema> <port> <label>
-  (cd "$1/apps/api" && GIT_SHA="$4" DATABASE_URL="$(OWNER_URL "$2")" PORT="$3" NODE_ENV=development \
-    TENANT_SCOPE_ENFORCEMENT=warn STOREFRONT_URL=http://localhost:3101 ADMIN_URL=http://localhost:3132 \
-    SMTP_HOST= SMTP_USER= SMTP_PASS= JWT_SECRET=ci-only-jwt-secret-0123456789abcdef0123456789 \
-    JWT_REFRESH_SECRET=ci-only-refresh-secret-0123456789abcdef01234567 \
-    node dist/main.js > "$LOGS/api-$4-$2.log" 2>&1 & echo $! > "$LOGS/api.pid")
-  API_PID="$(cat "$LOGS/api.pid")"
-  curl -s --retry 120 --retry-connrefused --retry-delay 1 -o /dev/null "http://localhost:$3/api/v1/health" \
-    || { echo "API $4 did not start"; tail -40 "$LOGS/api-$4-$2.log"; return 1; }
-  echo "API $4 on :$3 ($2): $(curl -s "http://localhost:$3/api/v1/health")"
+  # exec: the background job IS the node process, so $! can be stopped.
+  ( cd "$1/apps/api" && exec env GIT_SHA="$4" DATABASE_URL="$(OWNER_URL "$2")" PORT="$3" NODE_ENV=development     TENANT_SCOPE_ENFORCEMENT=warn STOREFRONT_URL=http://localhost:3101 ADMIN_URL=http://localhost:3132     SMTP_HOST= SMTP_USER= SMTP_PASS= JWT_SECRET=ci-only-jwt-secret-0123456789abcdef0123456789     JWT_REFRESH_SECRET=ci-only-refresh-secret-0123456789abcdef01234567     node dist/main.js ) > "$LOGS/api-$4-$2.log" 2>&1 &
+  API_PID=$!
+  API_PORT="$3"
+  curl -s --retry 120 --retry-connrefused --retry-delay 1 -o /dev/null "http://localhost:$3/api/v1/health"     || { echo "API $4 did not start"; tail -40 "$LOGS/api-$4-$2.log"; return 1; }
+  local h; h="$(curl -s "http://localhost:$3/api/v1/health")"
+  echo "API $4 on :$3 ($2): $h"
+  case "$h" in *"\"commit\":\"$4\""*) ;; *) echo "wrong API answering on :$3"; return 1 ;; esac
 }
-stop_api() { [ -n "$API_PID" ] && kill "$API_PID" 2>/dev/null; sleep 1; API_PID=""; }
+stop_api() {
+  [ -n "$API_PID" ] || return 0
+  kill "$API_PID" 2>/dev/null
+  for _ in $(seq 1 30); do curl -s -o /dev/null "http://localhost:${API_PORT}/api/v1/health" || break; sleep 1; done
+  API_PID=""
+}
 suite() { # <label> <cmd...>
   local label="$1"; shift
   echo "::group::$label"
