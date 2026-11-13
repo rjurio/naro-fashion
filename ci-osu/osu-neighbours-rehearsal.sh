@@ -182,7 +182,7 @@ systemctl start pm2-root.service; sleep 2
 (cd /var/www/sportflow && PORT=3200 HOST=127.0.0.1 STANDIN_LABEL=sportflow rpm2 start server.js --name sportflow-web > /dev/null)
 rpm2 start /var/www/jumuiya/idle.js --name pm2-logrotate > /dev/null
 rpm2 start /var/www/jumuiya/idle.js --name jumuiya-cron > /dev/null && rpm2 stop jumuiya-cron > /dev/null
-rpm2 start /var/www/jumuiya/crash.js --name jumuiya-worker --max-restarts 2 --min-uptime 10000 --restart-delay 200 > /dev/null
+rpm2 start /var/www/jumuiya/crash.js --name jumuiya-worker --max-restarts 2 --restart-delay 200 > /dev/null
 for _ in $(seq 1 40); do rpm2 jlist | node "$SHIM/jlist-filter.js" | grep -q '^jumuiya-worker .*status=errored' && break; sleep 1; done
 rpm2 save > /dev/null
 # kiuruwi: its own account, unit and daemon
@@ -259,7 +259,14 @@ echo "== 7. end state"
 check "neighbours unchanged over the WHOLE run (same PIDs, restart counts, start times, status; both daemons never restarted)" 'same_as neighbours "$BASE" "$(neighbours)"'
 check "pm2-root.service + pm2-kiuruwi.service unit files unchanged" 'same_as units "$UNITS0" "$(units_state)"'
 check "recovery access unchanged: sshd_config, root authorized_keys, sudoers, PAM, firewall config, root password, ssh service" 'same_as access "$ACCESS0" "$(access_state)"'
-check "exactly two PM2 daemons left (root + kiuruwi), no stray naro daemon" '[ "$(pgrep -c -f "^PM2 v[^ ]*: God Daemon")" = 2 ] && ! pgrep -u naro -f "God Daemon"'
+daemons_ok() {
+  ps -eo pid,user,args | grep '[G]od Daemon'
+  [ "$(ps -eo args | grep -c '^PM2 v[^ ]*: God Daemon')" = 2 ] \
+    && [ "$(ps -o args= -p "$(cat /root/.pm2/pm2.pid)")" = "PM2 v6.0.14: God Daemon (/root/.pm2)" ] \
+    && [ "$(ps -o args= -p "$(cat "$KHOME/.pm2/pm2.pid")")" = "PM2 v6.0.14: God Daemon ($KHOME/.pm2)" ] \
+    && ! ps -u naro -o args= | grep -q 'God Daemon'
+}
+check "exactly two PM2 daemons left (root + kiuruwi), no stray naro daemon" 'daemons_ok'
 check "the naro account adds no login path (nologin shell, locked password, no ~/.ssh)" '[ "$(getent passwd naro | cut -d: -f7)" = /usr/sbin/nologin ] && getent shadow naro | cut -d: -f2 | grep -qE "^[!*]" && [ ! -e "$NHOME/.ssh" ]'
 echo "  pm2 calls traced from the deploy scripts over the whole run:"; sed 's/^/    /' "$TRACE"
 

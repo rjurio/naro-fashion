@@ -14,7 +14,7 @@ if [ "${1:-}" = "--filter" ] && [ "${3:-}" = "build" ]; then
     storefront|admin)
       d="apps/$app/.next"
       rm -rf "$d"
-      mkdir -p "$d/static/css" "$d/standalone/apps/$app"
+      mkdir -p "$d/static/css" "$d/standalone/apps/$app/.next"
       git rev-parse HEAD | sed "s/\$/-$app/" > "$d/BUILD_ID"
       echo '{}' > "$d/routes-manifest.json"
       echo 'body{}' > "$d/static/css/app.css"
