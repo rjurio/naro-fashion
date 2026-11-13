@@ -50,6 +50,7 @@ import { findRentalAvailability, findRentalAvailabilityBlock, RentalBlockReason 
 import { customerIdState, hasApprovedId, lockCustomerIdState } from '../id-verification/id-approval';
 import { decideHold, MAX_STAFF_EXTENSION_DAYS, pickupCutoff, pickupExpiryAt } from './rental-hold';
 import { rentalBalances } from './rental-ledger';
+import { assertPosRentalsReleased } from './pos-rental-release';
 import { userHasPermission } from '../auth/util/permission-check';
 
 /** Statuses that mean the item has been handed over. */
@@ -119,6 +120,10 @@ export class RentalsService {
     opts: { channel?: 'ONLINE' | 'POS'; createdByAdminId?: string; termsAccepted?: boolean } = {},
   ) {
     const channel = opts.channel ?? 'ONLINE';
+    // Walk-in POS rentals are not released until R5 (pos-rental-release.ts):
+    // a POS booking is refused here too, before anything is read or written,
+    // whatever route or role reached this shared path.
+    if (channel !== 'ONLINE') assertPosRentalsReleased();
     // Verify customer profile completeness before rental
     const tenantId = this.tenantContext.requireId;
     const user = await this.prisma.user.findUnique({

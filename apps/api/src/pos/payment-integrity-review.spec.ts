@@ -112,9 +112,9 @@ describe('cashiers without the permission get an explanation BEFORE taking money
       adminUserRole: { findMany: jest.fn(async () => [{ role: { permissions: [{ permission: { code: 'payments:confirm-manual' } }] } }]) },
     };
     const svc = new PosService(prisma, { requireId: T } as any);
-    expect(await svc.getCapabilities({ id: 'u1', role: 'STAFF', isAdmin: true, tenantId: T })).toEqual({ canConfirmManualPayments: true, canReversePayments: false });
+    expect(await svc.getCapabilities({ id: 'u1', role: 'STAFF', isAdmin: true, tenantId: T })).toEqual({ canConfirmManualPayments: true, canReversePayments: false, posRentalsReleased: false });
     prisma.adminUserRole.findMany.mockResolvedValue([]);
-    expect(await svc.getCapabilities({ id: 'u2', role: 'STAFF', isAdmin: true, tenantId: T })).toEqual({ canConfirmManualPayments: false, canReversePayments: false });
+    expect(await svc.getCapabilities({ id: 'u2', role: 'STAFF', isAdmin: true, tenantId: T })).toEqual({ canConfirmManualPayments: false, canReversePayments: false, posRentalsReleased: false });
   });
 
   const C = join(__dirname, '..', '..', '..', 'admin', 'app', 'dashboard', 'pos');

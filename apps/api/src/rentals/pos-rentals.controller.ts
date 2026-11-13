@@ -7,6 +7,7 @@ import { RequiresPermission } from '../auth/decorators/requires-permission.decor
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ReviewerTwoFactorGuard } from '../id-verification/reviewer-two-factor.guard';
+import { PosRentalsReleaseGuard } from './pos-rentals-release.guard';
 import {
   PosAddressDto,
   PosCreateRentalDto,
@@ -23,8 +24,12 @@ import {
  * Walk-in POS rentals (POS rental MVP, M3). Admin-only; every route has its
  * own permission. Separate from POS sales / layaways (/pos/*). Online only:
  * the admin app never queues these offline.
+ *
+ * NOT RELEASED until R5: PosRentalsReleaseGuard runs FIRST and answers 404
+ * POS_RENTALS_NOT_RELEASED to every caller (SUPER_ADMIN and platform admins
+ * included) while POS_RENTALS_RELEASED is false (pos-rental-release.ts).
  */
-@UseGuards(JwtAuthGuard, ModuleGuard, AdminGuard, PermissionGuard)
+@UseGuards(PosRentalsReleaseGuard, JwtAuthGuard, ModuleGuard, AdminGuard, PermissionGuard)
 @RequiresModule('rentals')
 @Controller('pos-rentals')
 export class PosRentalsController {
