@@ -586,6 +586,19 @@ export class ProductsService {
 
     await this.assertProductRefs(tenantId, { categoryId: dto.categoryId, sizeGuideId: dto.sizeGuideId });
 
+    // Security fix: the inventory settings (cost price, low-stock threshold,
+    // supplier) are gated by inventory:manage on PATCH /inventory/:id/settings;
+    // this route must not be a way round it. Values re-sent unchanged pass.
+    const num = (x: any) => (x === undefined || x === null || x === '' ? null : Number(x));
+    const str = (x: any) => (x === undefined || x === null ? '' : String(x));
+    const settingsChanged = (['purchasePrice', 'minimumStock', 'supplierName', 'supplierContact'] as const).filter((k) => {
+      const next: any = (dto as any)[k];
+      if (next === undefined) return false;
+      const cur: any = (product as any)[k];
+      return k === 'purchasePrice' || k === 'minimumStock' ? num(cur) !== num(next) : str(cur) !== str(next);
+    });
+    if (settingsChanged.length) await this.assertInventoryPermission(actor, `inventory settings (${settingsChanged.join(', ')})`);
+
     const data: any = {};
     if (dto.name !== undefined) {
       data.name = dto.name;
@@ -707,6 +720,12 @@ export class ProductsService {
     }
     if (variants.some((v) => !(v.id && existing.some((e) => e.id === v.id)) && Number(v.stock ?? 0) > 0)) {
       await this.assertInventoryPermission(this.currentActor, 'opening stock of a new size');
+    }
+    // Removing a size that still holds stock deletes (or takes out of sale)
+    // that stock with no ledger row — an inventory movement too.
+    const payloadIds = new Set(variants.map((v) => v.id).filter(Boolean));
+    if (existing.some((e) => !payloadIds.has(e.id) && e.stock > 0)) {
+      await this.assertInventoryPermission(this.currentActor, 'removal of a size that still has stock');
     }
     const existingById = new Map(existing.map((v) => [v.id, v]));
     const keep = new Set<string>();

@@ -48,8 +48,8 @@ export class RolesController {
 
   @Patch(':id/restore')
   @RequiresPermission('roles:manage')
-  restore(@Param('id') id: string) {
-    return this.rolesService.restore(id);
+  restore(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.rolesService.restore(id, user);
   }
 
   @Get(':id/permissions')
