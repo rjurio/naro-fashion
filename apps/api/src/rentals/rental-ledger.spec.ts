@@ -63,11 +63,13 @@ describe('RentalMoneyService (refund workflow)', () => {
         findMany: jest.fn(async () => opts.payments ?? [{ id: 'p1', ...pay(100000, 'RENTAL_FEE') }]),
         create: jest.fn(async ({ data }: any) => ({ id: 'refund1', ...data })),
         updateMany: jest.fn(async () => ({ count: 1 })),
+        findFirst: jest.fn(async () => null),
       },
       refundRequest: {
         findMany: jest.fn(async () => opts.requests ?? []),
         create: jest.fn(async ({ data }: any) => ({ id: 'q1', ...data })),
-        findFirst: jest.fn(async () => opts.request ?? null),
+        // a payoutReference lookup is the duplicate-reference check (none here)
+        findFirst: jest.fn(async (q: any) => (q?.where?.payoutReference ? null : opts.request ?? null)),
         updateMany: jest.fn(async () => ({ count: opts.cas ?? 1 })),
       },
       posSession: { findFirst: jest.fn(async () => opts.session ?? null) },
@@ -108,7 +110,7 @@ describe('RentalMoneyService (refund workflow)', () => {
   });
 
   it('pay: a NEW linked REFUNDED row (component, source payment, request), request PAID, settled flag; never edits the collection', async () => {
-    const req = { id: 'q1', rentalOrderId: 'r1', requestedById: 'a1', kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 100000, retainedAmount: 0, status: 'APPROVED' };
+    const req = { id: 'q1', rentalOrderId: 'r1', requestedById: 'a1', approvedById: 'a2', kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 100000, retainedAmount: 0, status: 'APPROVED' };
     const { svc, db } = make({ request: req, requests: [req] });
     await svc.pay('q1', { method: 'MOBILE_MONEY', reference: 'mp 12345' }, { id: 'fin' });
     const row = db.payment.create.mock.calls[0][0].data;
@@ -118,7 +120,7 @@ describe('RentalMoneyService (refund workflow)', () => {
   });
 
   it('pay guards: non-cash needs a reference; cash needs the payer\'s OPEN shift; only APPROVED; re-capped under the lock', async () => {
-    const req = { id: 'q1', rentalOrderId: 'r1', requestedById: 'a1', kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 100000, retainedAmount: 0, status: 'APPROVED' };
+    const req = { id: 'q1', rentalOrderId: 'r1', requestedById: 'a1', approvedById: 'a2', kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 100000, retainedAmount: 0, status: 'APPROVED' };
     await expect(make({ request: req }).svc.pay('q1', { method: 'BANK_TRANSFER' }, { id: 'fin' })).rejects.toThrow(/payout reference/);
     await expect(make({ request: req }).svc.pay('q1', { method: 'CASH' }, { id: 'fin' })).rejects.toThrow(/OPEN POS shift/);
     const cash = make({ request: req, requests: [req], session: { id: 's1' } });
@@ -136,7 +138,7 @@ describe('RentalMoneyService (refund workflow)', () => {
     await svc.fail('q1', { reason: 'Mobile money reversed' }, { id: 'fin' });
     expect(db.payment.updateMany).toHaveBeenCalledWith({ where: { tenantId: 't1', refundRequestId: 'q1', status: 'REFUNDED' }, data: { status: 'REVERSED' } });
     expect(db.rentalOrder.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { holdState: 'REFUND_DUE' } }));
-    expect(audit.log).toHaveBeenCalledWith('REFUND_FAILED', 'RefundRequest', 'q1', { reason: 'Mobile money reversed' });
+    expect(audit.log).toHaveBeenCalledWith('REFUND_FAILED', 'RefundRequest', 'q1', expect.objectContaining({ reason: 'Mobile money reversed', failedById: 'fin', amount: 100000 }));
   });
 });
 
