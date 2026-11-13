@@ -2,6 +2,7 @@ import { rentalBalances } from '../rentals/rental-ledger';
 import { Injectable, Logger } from '@nestjs/common';
 import { hasApprovedId } from '../id-verification/id-approval';
 import { freezeSnapshot } from '../rentals/checklist/checklist-core';
+import { requestCancellationRefunds, SYSTEM_REQUESTER } from '../rentals/cancellation';
 import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -370,6 +371,15 @@ export class PaymentSettlementService {
         },
         data: { holdState: 'REFUND_DUE', holdExpiresAt: null },
       });
+      // Round 25C F: money that arrived after the cancellation becomes a full
+      // refund REQUEST (only the not-yet-requested part; idempotent on replays).
+      try {
+        const created = await this.prisma.$transaction((tx: any) =>
+          requestCancellationRefunds(tx, tenantId, rentalOrderId, SYSTEM_REQUESTER.LATE_PAYMENT, (rental as any).cancellationReason ?? 'LATE_PAYMENT'));
+        if (created.length) this.logger.warn(`Rental ${rental.rentalNumber}: late payment on a cancelled booking -> refund request(s) ${created.map((c) => `${c.component} ${c.amount}`).join(', ')}`);
+      } catch (e: any) {
+        this.logger.error(`Rental ${rental.rentalNumber}: could not raise the late-payment refund request: ${e?.message ?? e}`);
+      }
       return;
     }
 

@@ -1,5 +1,6 @@
 import { lateDays, lateFeeFor, lateFeeSentence, lateFeeTerms, storedLateFeeTerms } from './late-fee';
 import { assertHandoverSafeguard } from './handover-safeguard';
+import { requestCancellationRefunds, UNSPECIFIED_REASON } from './cancellation';
 import {
   assertChecklistReleasable,
   assertInspectionComplete,
@@ -403,7 +404,7 @@ export class RentalsService {
     return rental;
   }
 
-  async updateStatus(id: string, status: string, expectedStatus?: string, user?: any, returnedAtRaw?: string) {
+  async updateStatus(id: string, status: string, expectedStatus?: string, user?: any, returnedAtRaw?: string, cancellation?: { reason?: string; note?: string }) {
     const rental = await this.prisma.rentalOrder.findFirst({
       where: { id, tenantId: this.tenantContext.requireId },
     });
@@ -452,16 +453,20 @@ export class RentalsService {
         decideHold({ idState: 'APPROVED', downPaymentAmount: Number(rental.downPaymentAmount), at: new Date() }),
       );
     }
+    let cancellationRefunds: Array<{ id: string; component: string; amount: number }> = [];
     if (status === 'CANCELLED') {
       // Money still held on a cancelled booking is flagged REFUND_DUE: an
       // outstanding liability, never forfeited and never treated as refunded.
-      // Recording the payout belongs to the rental refund ledger (proposed
-      // release after P0c), not to this flag.
       const held = await this.netPaid(rental.id);
       if (held > 0) {
         data.holdState = 'REFUND_DUE';
         data.holdExpiresAt = null;
       }
+      // Round 25C F: the cancellation records WHY (structured), by whom and when.
+      data.cancellationReason = cancellation?.reason ?? UNSPECIFIED_REASON;
+      data.cancellationNote = cancellation?.note?.trim() || null;
+      data.cancelledAt = new Date();
+      data.cancelledById = user?.id ?? null;
     }
     if (status === 'RETURNED') {
       // Offline replays carry the real return time (validated, ≤30 days old).
@@ -532,6 +537,12 @@ export class RentalsService {
           },
           data,
         });
+        if (c.count > 0 && status === 'CANCELLED') {
+          // Round 25C F: in the same transaction, the money actually received
+          // and still held becomes full CANCELLATION refund requests (one per
+          // component). Independent approval + payout follow; nothing moves here.
+          cancellationRefunds = await requestCancellationRefunds(tx, tenantIdForClaim, id, user?.id ?? 'SYSTEM:UNKNOWN', data.cancellationReason);
+        }
         if (c.count > 0 && usedExceptions.length) {
           await tx.rentalChecklistException.updateMany({
             where: { id: { in: usedExceptions }, tenantId: tenantIdForClaim, status: 'APPROVED' },
@@ -541,7 +552,7 @@ export class RentalsService {
         return c;
       };
       // Only the gated steps need the transaction (lock + check + write + trigger declaration).
-      claim = isRelease || status === 'CLOSED' ? await this.prisma.$transaction(write) : await write(this.prisma);
+      claim = isRelease || status === 'CLOSED' || status === 'CANCELLED' ? await this.prisma.$transaction(write) : await write(this.prisma);
     } catch (e: any) {
       const code = e?.getResponse?.()?.code;
       if (code === 'CHECKLIST_INCOMPLETE' || code === 'EXCEPTION_DECIDER_HANDING_OVER' || code === 'INSPECTION_INCOMPLETE' || code === 'DISCREPANCY_OPEN') {
@@ -566,7 +577,11 @@ export class RentalsService {
       to: status,
       ...(data.holdState !== undefined && { holdState: data.holdState, holdExpiresAt: data.holdExpiresAt }),
       ...(usedExceptions.length && { checklistExceptionsUsed: usedExceptions }),
+      ...(status === 'CANCELLED' && { cancellationReason: data.cancellationReason, cancellationNote: data.cancellationNote, refundRequests: cancellationRefunds }),
     });
+    for (const r of cancellationRefunds) {
+      await this.auditService.log('REFUND_REQUESTED', 'RefundRequest', r.id, { rentalOrderId: id, kind: 'CANCELLATION', component: r.component, amount: r.amount, source: 'CANCELLATION' });
+    }
     // R3: confirming the booking (by hand, e.g. at 0 % down payment) fixes its
     // checklist. Best effort: if it fails, the hand-over gate asks for a desk
     // snapshot, so nothing can leave unchecked.

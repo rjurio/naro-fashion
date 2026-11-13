@@ -224,7 +224,8 @@ describe('SchedulerService.handleExpiredRentalHolds (expiry job)', () => {
         findMany: jest.fn(async () => opts.inflight ?? []),
         aggregate: jest.fn(async ({ where }: any) => ({ _sum: { amount: where.status === 'COMPLETED' ? net : 0 } })),
       },
-      customerIDDocument: { findMany: jest.fn(async () => []) },
+      customerIDDocument: { findMany: jest.fn(async () => []), findFirst: jest.fn(async () => null) },
+      refundRequest: { findMany: jest.fn(async () => []), create: jest.fn(async ({ data }: any) => ({ id: 'rq1', ...data })) },
     };
     const prisma: any = {
       rentalOrder: {
@@ -588,7 +589,13 @@ describe('staff actions: extend a hold, cancel with money held (REFUND_DUE liabi
     const tx: any = {
       $executeRaw: jest.fn(),
       customerIDDocument: { findFirst: jest.fn(async () => (opts.approved === false ? null : { id: 'd1' })) },
-      rentalOrder: { updateMany: jest.fn(async () => ({ count: opts.cas ?? 1 })) },
+      // Round 25C F: cancelling runs in a transaction that also raises the refund requests.
+      rentalOrder: {
+        updateMany: jest.fn(async () => ({ count: opts.cas ?? 1 })),
+        findFirst: jest.fn(async () => ({ ...rental, status: 'CANCELLED', totalRentalPrice: 1000, damageDeposit: 0, downPaymentAmount: 250 })),
+      },
+      payment: { findMany: jest.fn(async () => (opts.net ? [{ amount: opts.net, status: 'COMPLETED', component: 'RENTAL_FEE' }] : [])) },
+      refundRequest: { findMany: jest.fn(async () => []), create: jest.fn(async ({ data }: any) => ({ id: 'rq1', ...data })) },
     };
     const prisma: any = {
       rentalOrder: { findFirst: jest.fn(async () => rental), updateMany: jest.fn(async () => ({ count: opts.cas ?? 1 })) },
@@ -621,14 +628,18 @@ describe('staff actions: extend a hold, cancel with money held (REFUND_DUE liabi
     await expect(make(base, { cas: 0 }).svc.extendHold('r1', { until: inDays(1), note: 'x' })).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('cancelling a booking that holds money flags it REFUND_DUE (audited); without money it is a plain cancel', async () => {
+  it('cancelling a booking that holds money flags it REFUND_DUE (audited) and raises a full refund REQUEST in the same transaction; without money it is a plain cancel', async () => {
     const withMoney = make({ ...base, status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT' }, { net: 50 });
-    await withMoney.svc.updateStatus('r1', 'CANCELLED');
-    expect(withMoney.prisma.rentalOrder.updateMany.mock.calls[0][0].data).toMatchObject({ status: 'CANCELLED', holdState: 'REFUND_DUE', holdExpiresAt: null });
-    expect(withMoney.audit.log).toHaveBeenCalledWith('UPDATE_STATUS', 'Rental', 'r1', expect.objectContaining({ to: 'CANCELLED', holdState: 'REFUND_DUE' }));
+    await withMoney.svc.updateStatus('r1', 'CANCELLED', undefined, { id: 'staff1' }, undefined, { reason: 'CUSTOMER_REQUEST', note: 'wedding postponed' });
+    expect(withMoney.tx.rentalOrder.updateMany.mock.calls[0][0].data).toMatchObject({
+      status: 'CANCELLED', holdState: 'REFUND_DUE', holdExpiresAt: null, cancellationReason: 'CUSTOMER_REQUEST', cancellationNote: 'wedding postponed', cancelledById: 'staff1',
+    });
+    expect(withMoney.tx.refundRequest.create.mock.calls[0][0].data).toMatchObject({ kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 50, retainedAmount: 0, requestedById: 'staff1' });
+    expect(withMoney.audit.log).toHaveBeenCalledWith('UPDATE_STATUS', 'Rental', 'r1', expect.objectContaining({ to: 'CANCELLED', holdState: 'REFUND_DUE', cancellationReason: 'CUSTOMER_REQUEST' }));
     const noMoney = make({ ...base, status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT' }, { net: 0 });
     await noMoney.svc.updateStatus('r1', 'CANCELLED');
-    expect(noMoney.prisma.rentalOrder.updateMany.mock.calls[0][0].data).toEqual({ status: 'CANCELLED' });
+    expect(noMoney.tx.rentalOrder.updateMany.mock.calls[0][0].data).toMatchObject({ status: 'CANCELLED', cancellationReason: 'UNSPECIFIED', cancelledById: null });
+    expect(noMoney.tx.refundRequest.create).not.toHaveBeenCalled();
   });
 
   it('routes: extend needs rentals:update-status', () => {

@@ -1,4 +1,5 @@
-import { IsString, IsIn, IsOptional, IsISO8601 } from 'class-validator';
+import { IsString, IsIn, IsOptional, IsISO8601, MaxLength } from 'class-validator';
+import { CANCELLATION_REASONS } from '../cancellation';
 
 export const RENTAL_STATUSES = [
   'PENDING_ID_VERIFICATION',
@@ -20,6 +21,17 @@ export class UpdateRentalStatusDto {
   @IsString()
   @IsIn(RENTAL_STATUSES)
   status: string;
+
+  /** CANCELLED only: why (structured). Older clients may omit it -> recorded as UNSPECIFIED. */
+  @IsOptional()
+  @IsIn(CANCELLATION_REASONS as unknown as string[])
+  cancellationReason?: string;
+
+  /** CANCELLED only: free-text detail. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  cancellationNote?: string;
 
   /**
    * Optimistic concurrency (admin offline mode): the status the client saw.

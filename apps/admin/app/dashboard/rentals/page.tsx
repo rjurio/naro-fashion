@@ -21,6 +21,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import RentalHoldBanner from '@/components/rental/RentalHoldBanner';
 import ChecklistPanel from '@/components/rental-checklist/ChecklistPanel';
+import CancelRentalDialog from '@/components/rental/CancelRentalDialog';
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -460,7 +461,9 @@ export default function RentalsPage() {
     fetchRentals();
   }, [fetchRentals, outboxVersion]);
 
-  const handleStatusUpdate = async (rental: Rental, newStatus: string) => {
+  const handleStatusUpdate = async (rental: Rental, newStatus: string, cancellation?: { reason: string; note: string }) => {
+    // Round 25C F: a cancellation always goes through the reason dialog.
+    if (newStatus === 'CANCELLED' && !cancellation) { setCancelTarget(rental); return; }
     const label = STATUS_META[newStatus]?.label || newStatus;
     try {
       // expectedStatus = the status on screen (concurrent change → 409 CONFLICT).
@@ -469,6 +472,7 @@ export default function RentalsPage() {
         newStatus,
         rental.status,
         `Rental #${rental.rentalNumber || rental.id.slice(-6)} → ${label}`,
+        cancellation ? { cancellationReason: cancellation.reason, cancellationNote: cancellation.note || undefined } : undefined,
       );
       const queued = isQueuedResult(result);
       setRentals((prev) =>
@@ -492,17 +496,15 @@ export default function RentalsPage() {
   };
 
   const [cancellingId, setCancellingId] = useState<string | null>(null);
-  const handleCancelRental = async (rental: Rental) => {
-    const ok = await confirm({
-      title: 'Cancel rental',
-      message: `Cancel rental ${rental.rentalNumber || rental.id} for ${rental.customer}? The dates are released for other bookings. This can't be undone.`,
-      confirmLabel: 'Cancel rental',
-      variant: 'danger',
-    });
-    if (!ok) return;
+  const [cancelTarget, setCancelTarget] = useState<Rental | null>(null);
+  const handleCancelRental = (rental: Rental) => setCancelTarget(rental);
+  const submitCancellation = async (reason: string, note: string) => {
+    const rental = cancelTarget;
+    if (!rental) return;
     setCancellingId(rental.id);
     try {
-      await handleStatusUpdate(rental, 'CANCELLED');
+      await handleStatusUpdate(rental, 'CANCELLED', { reason, note });
+      setCancelTarget(null);
     } finally {
       setCancellingId(null);
     }
@@ -543,6 +545,13 @@ export default function RentalsPage() {
 
   return (
     <div className="space-y-6">
+      {cancelTarget && (
+        <CancelRentalDialog
+          rentalLabel={cancelTarget.rentalNumber || cancelTarget.id}
+          onCancel={submitCancellation}
+          onClose={() => setCancelTarget(null)}
+        />
+      )}
       <div>
         <h1 className="text-2xl font-bold text-[hsl(var(--foreground))]">Rentals</h1>
         <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">

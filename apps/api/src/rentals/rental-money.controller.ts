@@ -34,6 +34,13 @@ export class RentalMoneyController {
     return this.money.ledger(id);
   }
 
+  // Round 25C F: re-raise missing full cancellation refund requests (idempotent).
+  @Post('rentals/:id/cancellation-refunds')
+  @RequiresPermission('rentals:refund-request')
+  cancellationRefunds(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.money.requestMissingCancellationRefunds(id, user);
+  }
+
   // LF-2026-11 late-fee waivers: request (rentals:update-status), approve / reject (rentals:waive-late-fee, ≠ requester).
   @Post('rentals/:id/late-fee-waivers')
   @RequiresPermission('rentals:update-status')

@@ -1005,8 +1005,10 @@ class AdminApiClient {
    * RETURNED carries `returnedAt` (now, on this device) so a return recorded offline keeps its real
    * time — the late fee is computed from it, not from when the change synced.
    */
-  updateRentalStatus(id: string, status: string, expectedStatus?: string, offlineLabel?: string) {
+  updateRentalStatus(id: string, status: string, expectedStatus?: string, offlineLabel?: string, extra?: { cancellationReason?: string; cancellationNote?: string }) {
     const body: Record<string, string> = { status };
+    if (extra?.cancellationReason) body.cancellationReason = extra.cancellationReason;
+    if (extra?.cancellationNote) body.cancellationNote = extra.cancellationNote;
     if (expectedStatus) body.expectedStatus = expectedStatus;
     if (status === 'RETURNED') body.returnedAt = new Date().toISOString();
     return this.patch<any>(`/rentals/${id}/status`, body, offlineLabel ? { offlineLabel } : undefined);
