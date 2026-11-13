@@ -1,6 +1,7 @@
 import { lockRentalMoney, netHeld } from './refund-due';
 import { lateDays, lateFeeFor, lateFeeSentence, lateFeeTerms, storedLateFeeTerms } from './late-fee';
 import { assertHandoverSafeguard } from './handover-safeguard';
+import { requestCancellationRefunds, UNSPECIFIED_REASON } from './cancellation';
 import {
   assertChecklistReleasable,
   assertInspectionComplete,
@@ -409,7 +410,7 @@ export class RentalsService {
     return rental;
   }
 
-  async updateStatus(id: string, status: string, expectedStatus?: string, user?: any, returnedAtRaw?: string) {
+  async updateStatus(id: string, status: string, expectedStatus?: string, user?: any, returnedAtRaw?: string, cancellation?: { reason?: string; note?: string }) {
     const rental = await this.prisma.rentalOrder.findFirst({
       where: { id, tenantId: this.tenantContext.requireId },
     });
@@ -463,6 +464,14 @@ export class RentalsService {
     // decided inside the status-write transaction, under the booking's money
     // locks, so a payment confirmed concurrently can't slip between the
     // money check and the write (see rentals/refund-due.ts).
+    let cancellationRefunds: Array<{ id: string; component: string; amount: number }> = [];
+    if (status === 'CANCELLED') {
+      // Round 25C F: the cancellation records WHY (structured), by whom and when.
+      data.cancellationReason = cancellation?.reason ?? UNSPECIFIED_REASON;
+      data.cancellationNote = cancellation?.note?.trim() || null;
+      data.cancelledAt = new Date();
+      data.cancelledById = user?.id ?? null;
+    }
     if (status === 'RETURNED') {
       // Offline replays carry the real return time (validated, ≤30 days old).
       const resolved = resolveReturnedAt(returnedAtRaw, new Date());
@@ -541,6 +550,12 @@ export class RentalsService {
           },
           data,
         });
+        if (c.count > 0 && status === 'CANCELLED') {
+          // Round 25C F: in the same transaction, the money actually received
+          // and still held becomes full CANCELLATION refund requests (one per
+          // component). Independent approval + payout follow; nothing moves here.
+          cancellationRefunds = await requestCancellationRefunds(tx, tenantIdForClaim, id, user?.id ?? 'SYSTEM:UNKNOWN', data.cancellationReason);
+        }
         if (c.count > 0 && usedExceptions.length) {
           await tx.rentalChecklistException.updateMany({
             where: { id: { in: usedExceptions }, tenantId: tenantIdForClaim, status: 'APPROVED' },
@@ -575,7 +590,11 @@ export class RentalsService {
       to: status,
       ...(data.holdState !== undefined && { holdState: data.holdState, holdExpiresAt: data.holdExpiresAt }),
       ...(usedExceptions.length && { checklistExceptionsUsed: usedExceptions }),
+      ...(status === 'CANCELLED' && { cancellationReason: data.cancellationReason, cancellationNote: data.cancellationNote, refundRequests: cancellationRefunds }),
     });
+    for (const r of cancellationRefunds) {
+      await this.auditService.log('REFUND_REQUESTED', 'RefundRequest', r.id, { rentalOrderId: id, kind: 'CANCELLATION', component: r.component, amount: r.amount, source: 'CANCELLATION' });
+    }
     // R3: confirming the booking (by hand, e.g. at 0 % down payment) fixes its
     // checklist. Best effort: if it fails, the hand-over gate asks for a desk
     // snapshot, so nothing can leave unchecked.
