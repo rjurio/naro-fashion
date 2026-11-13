@@ -245,6 +245,44 @@ EOF
 #    `db push --accept-data-loss` is GONE: the schema only changes through
 #    committed migrations in prisma/migrations/ (docs/OPS/MIGRATIONS.md).
 
+# 5-. Database role separation (scripts/ops/db-roles/; release kit DB_ROLE_SEPARATION.md).
+#     Optional until enabled: when /etc/naro-db-owner.env (root, 600) exists it
+#     holds MIGRATION_DATABASE_URL (the OWNER role) and NARO_APP_DB_ROLE (the
+#     runtime role, default naro_app). The app .env files then hold ONLY the
+#     runtime role. The owner URL is kept in a NON-exported shell variable and
+#     passed to each prisma / psql command of this step alone, so it can never
+#     reach `pm2 reload --update-env` (which copies this shell's environment
+#     into the apps). It is never printed.
+DB_OWNER_ENV=/etc/naro-db-owner.env
+MIGRATE_URL=""
+APP_DB_ROLE=""
+OWNER_DB_ROLE=""
+url_role() { sed -E 's#^postgres(ql)?://([^:@/]+).*#\2#'; }
+env_value() { sed -n "s/^$1=//p" "$2" | head -1 | sed -e 's/^"//' -e 's/"$//'; }
+if [ -f "$DB_OWNER_ENV" ]; then
+  [ "$(stat -c '%a %U' "$DB_OWNER_ENV")" = "600 root" ] || die "${DB_OWNER_ENV} must be owned by root with mode 600"
+  MIGRATE_URL="$(env_value MIGRATION_DATABASE_URL "$DB_OWNER_ENV")"
+  APP_DB_ROLE="$(env_value NARO_APP_DB_ROLE "$DB_OWNER_ENV")"
+  APP_DB_ROLE="${APP_DB_ROLE:-naro_app}"
+  [ -n "$MIGRATE_URL" ] || die "${DB_OWNER_ENV} has no MIGRATION_DATABASE_URL"
+  OWNER_DB_ROLE="$(printf '%s' "$MIGRATE_URL" | url_role)"
+  # Fail closed if any runtime .env still connects as the owner role.
+  for envf in "$APP_DIR/.env" "$APP_DIR/apps/api/.env" "$APP_DIR/packages/database/.env"; do
+    [ -f "$envf" ] || continue
+    RUNTIME_ROLE="$(env_value DATABASE_URL "$envf" | url_role)"
+    if [ -n "$RUNTIME_ROLE" ] && [ "$RUNTIME_ROLE" = "$OWNER_DB_ROLE" ]; then
+      die "role separation: ${envf} still connects as the owner role ${OWNER_DB_ROLE}; the app must use ${APP_DB_ROLE}"
+    fi
+  done
+  log "🔐 Role separation ON: migrations as ${OWNER_DB_ROLE}, runtime as ${APP_DB_ROLE}"
+else
+  log "ℹ Role separation not configured (${DB_OWNER_ENV} absent): migrations use the app's DATABASE_URL"
+fi
+# prisma with the owner URL when role separation is on (per command, never exported).
+prisma_db() {
+  if [ -n "$MIGRATE_URL" ]; then DATABASE_URL="$MIGRATE_URL" pnpm exec prisma "$@"; else pnpm exec prisma "$@"; fi
+}
+
 # 5a. One-time baseline. A DB that was managed by `db push` has no
 #     _prisma_migrations table; `migrate deploy` would try to run 0_init
 #     against existing tables and fail. If (and only if) the live schema is
@@ -278,7 +316,7 @@ if [ "$HAS_MIGRATIONS_TABLE" = "f" ]; then
   log "Baseline = prisma/migrations/0_init replayed into shadow DB ${SHADOW_DB}"
   echo "------------------------------------------------------------------------"
   set +e
-  pnpm exec prisma migrate diff \
+  prisma_db migrate diff \
     --from-migrations "$BASELINE_DIR/migrations" \
     --to-schema-datasource prisma/schema.prisma \
     --shadow-database-url "$SHADOW_URL" \
@@ -291,7 +329,7 @@ if [ "$HAS_MIGRATIONS_TABLE" = "f" ]; then
   case "$DRIFT_RC" in
     0)
       log "✔ Live schema matches 0_init exactly — marking 0_init as applied (no SQL is executed)"
-      pnpm exec prisma migrate resolve --applied 0_init
+      prisma_db migrate resolve --applied 0_init
       ;;
     2)
       die "DRIFT: the live database differs from the 0_init baseline (SQL above = what it would take to make the DB match). NOT baselining and NOT auto-pushing. Reconcile by hand — see docs/OPS/MIGRATIONS.md 'First deploy / drift' — then re-run deploy.sh."
@@ -306,16 +344,16 @@ fi
 
 # 5b. Apply pending committed migrations (forward-only).
 log "🔍 Migration status before deploy:"
-pnpm exec prisma migrate status || true   # non-zero just means "pending"
+prisma_db migrate status || true   # non-zero just means "pending"
 log "🗄  prisma migrate deploy..."
-pnpm exec prisma migrate deploy
+prisma_db migrate deploy
 
 # 5c. Drift guard: after migrating, the DB must match schema.prisma. A
 #     non-empty diff means someone changed schema.prisma without running
 #     `prisma migrate dev` — the new code would then hit missing columns.
 #     Abort BEFORE building/swapping so the old (compatible) code stays live.
 set +e
-pnpm exec prisma migrate diff \
+prisma_db migrate diff \
   --from-schema-datasource prisma/schema.prisma \
   --to-schema-datamodel prisma/schema.prisma \
   --script --exit-code
@@ -326,6 +364,19 @@ case "$POST_DRIFT_RC" in
   2) die "schema.prisma has changes with NO migration (SQL above). Run 'pnpm prisma migrate dev --name <x>' locally, commit the migration, redeploy. Old build is still live." ;;
   *) die "prisma migrate diff errored (exit ${POST_DRIFT_RC}) during the post-migrate drift check." ;;
 esac
+
+# 5d. Role separation: re-apply the runtime role's privileges (new tables of
+#     this release) and verify them, plus the R3 triggers / functions once R3
+#     is installed. A failed check aborts BEFORE the build: the old build stays
+#     live on the same database.
+if [ -n "$MIGRATE_URL" ]; then
+  psql "$MIGRATE_URL" -X -q -v ON_ERROR_STOP=1 -v app="$APP_DB_ROLE" -v schema=public \
+    -f "$APP_DIR/scripts/ops/db-roles/02-grants.sql" >/dev/null \
+    || die "role separation: 02-grants.sql failed; the runtime role's privileges were not applied"
+  psql "$MIGRATE_URL" -X -q -v ON_ERROR_STOP=1 -v app="$APP_DB_ROLE" -v owner="$OWNER_DB_ROLE" -v schema=public \
+    -f "$APP_DIR/scripts/ops/db-roles/03-verify.sql" \
+    || die "role separation: 03-verify.sql failed (output above); refusing to deploy"
+fi
 cd "$APP_DIR"
 
 # ---------------------------------------------------------------------------
