@@ -1017,6 +1017,10 @@ model RentalOrder {
   lateFeeTerms   Json?
   lateFeeWaived  Decimal @default(0) @db.Decimal(12, 2)
   lateFeeWaivers RentalLateFeeWaiver[]
+  checklistSnapshot   RentalChecklistSnapshot?
+  checklistRecords    RentalChecklistRecord[]
+  checklistExceptions RentalChecklistException[]
+  discrepancies       RentalDiscrepancy[]
 }
 
 /// One physical item that can be rented (POS rental MVP, M2): a gown, a
@@ -1105,6 +1109,14 @@ model RentalChecklistTemplate {
   items RentalChecklistTemplateItem[]
 
   @@index([tenantId])
+  // R3: which items this list applies to — the most specific wins
+  // (product → category → shop default). version bumps on every item change;
+  // a booking's snapshot never changes with it.
+  productId   String?
+  categoryId  String?
+  version     Int      @default(1)
+  @@index([productId])
+  @@index([categoryId])
 }
 
 model RentalChecklistTemplateItem {
@@ -1118,6 +1130,13 @@ model RentalChecklistTemplateItem {
   template RentalChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([templateId])
+  // R3: how many, whether it must be there, whether its condition is
+  // recorded, and what to look for. DISPATCH items are checked at hand-over
+  // AND return; RETURN items only on return.
+  quantity          Int     @default(1)
+  isMandatory       Boolean @default(true)
+  requiresCondition Boolean @default(true)
+  instructions      String?
 }
 
 model RentalChecklistEntry {
@@ -2092,4 +2111,131 @@ model RentalLateFeeWaiver {
 
   @@index([tenantId])
   @@index([rentalOrderId])
+}
+
+// ============================================================================
+// R3 mandatory rental checklist. Evidence is APPEND-ONLY: nothing here is
+// updated in place or deleted except status fields on exceptions /
+// discrepancies (decisions), each with who + when. NOTE: the table name
+// "RentalChecklistSnapshot" is the R1 rollback marker (handover-safeguard.ts):
+// its existence makes older builds refuse every hand-over. Never rename it.
+// ============================================================================
+
+/// The checklist of ONE booking, frozen at confirmation (or at the desk for
+/// a legacy booking). Template edits never change it.
+model RentalChecklistSnapshot {
+  id              String    @id @default(cuid())
+  tenantId        String?
+  rentalOrderId   String    @unique
+  templateId      String?
+  templateVersion Int?
+  source          String    // PRODUCT | CATEGORY | SHOP_DEFAULT | NONE | LEGACY_DESK
+  rentalUnitId    String?   // the physical gown at freeze time
+  unitCode        String?
+  frozenAt        DateTime  @default(now())
+  frozenById      String?   // null = frozen automatically at confirmation
+
+  rentalOrder RentalOrder                   @relation(fields: [rentalOrderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  items       RentalChecklistSnapshotItem[]
+
+  @@index([tenantId])
+}
+
+model RentalChecklistSnapshotItem {
+  id                String  @id @default(cuid())
+  tenantId          String?
+  snapshotId        String
+  label             String
+  labelSwahili      String?
+  stage             String  // BOTH (hand-over + return) | RETURN (return only)
+  quantity          Int
+  isMandatory       Boolean
+  requiresCondition Boolean
+  instructions      String?
+  sortOrder         Int     @default(0)
+  templateItemId    String?
+
+  snapshot RentalChecklistSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  records  RentalChecklistRecord[]
+
+  @@index([tenantId])
+  @@index([snapshotId])
+}
+
+/// One staff observation of one item at hand-over or return. Append-only:
+/// a correction is a NEW row that points at the row it replaces
+/// (supersedesId, unique → two people can never replace the same row).
+model RentalChecklistRecord {
+  id             String   @id @default(cuid())
+  tenantId       String?
+  rentalOrderId  String
+  snapshotItemId String
+  stage          String   // HANDOVER | RETURN
+  quantity       Int
+  condition      String?  // GOOD | MINOR_WEAR | DAMAGED | MISSING | ALTERED
+  note           String?
+  recordedById   String
+  recordedAt     DateTime @default(now())
+  supersedesId   String?  @unique
+  // The gown this observation was made on: hand-over evidence counts only
+  // for the gown the booking holds at hand-over (a swap needs new evidence).
+  rentalUnitId   String?
+
+  rentalOrder  RentalOrder                 @relation(fields: [rentalOrderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  snapshotItem RentalChecklistSnapshotItem @relation(fields: [snapshotItemId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@index([rentalOrderId, stage])
+  @@index([snapshotItemId, stage])
+}
+
+/// A missing or substituted item (or a booking without a checklist) at
+/// hand-over: requested by one person, decided by a different person, used
+/// once by a third (never the decider).
+model RentalChecklistException {
+  id              String    @id @default(cuid())
+  tenantId        String?
+  rentalOrderId   String
+  kind            String    // MISSING | SUBSTITUTED | NO_SNAPSHOT
+  snapshotItemIds String[]
+  substituteNote  String?
+  reason          String
+  status          String    @default("REQUESTED") // REQUESTED | APPROVED | REJECTED | USED
+  requestedById   String
+  decidedById     String?
+  decidedAt       DateTime?
+  decisionNote    String?
+  usedById        String?
+  usedAt          DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  rentalOrder RentalOrder @relation(fields: [rentalOrderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@index([rentalOrderId])
+}
+
+/// Something missing, damaged or altered on return, per item. Facts only:
+/// no amount is ever computed here (a deduction is a refund request with a
+/// kept amount, approved by a second person).
+model RentalDiscrepancy {
+  id             String    @id @default(cuid())
+  tenantId       String?
+  rentalOrderId  String
+  snapshotItemId String
+  recordId       String
+  kind           String    // MISSING | DAMAGED | ALTERED
+  quantity       Int
+  note           String?
+  status         String    @default("OPEN") // OPEN | RESOLVED_NO_CHARGE | RESOLVED_DEDUCTED | RESOLVED_WAIVED | SUPERSEDED
+  resolutionNote String?
+  resolvedById   String?
+  resolvedAt     DateTime?
+  openedAt       DateTime  @default(now())
+
+  rentalOrder RentalOrder @relation(fields: [rentalOrderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@index([rentalOrderId, status])
 }

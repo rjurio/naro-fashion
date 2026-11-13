@@ -7,6 +7,7 @@ import {
   IsInt,
   IsIn,
   Min,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { TemplateItemDto } from './create-template.dto';
@@ -27,6 +28,16 @@ export class UpdateTemplateDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  productId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  categoryId?: string | null;
 
   @IsOptional()
   @IsArray()
