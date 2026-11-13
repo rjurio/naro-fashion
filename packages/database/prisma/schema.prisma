@@ -1021,6 +1021,7 @@ model RentalOrder {
   checklistRecords    RentalChecklistRecord[]
   checklistExceptions RentalChecklistException[]
   discrepancies       RentalDiscrepancy[]
+  gateOverrides       RentalGateOverride[]
 }
 
 /// One physical item that can be rented (POS rental MVP, M2): a gown, a
@@ -2238,4 +2239,28 @@ model RentalDiscrepancy {
 
   @@index([tenantId])
   @@index([rentalOrderId, status])
+}
+
+/// Owner-authorised, single-use recovery past an R3 database gate (round 25C).
+/// Inserted by an operator under GATE_RECOVERY_PROCEDURE.md, never by the
+/// application. Validated, stamped and protected by database triggers
+/// (migration 20261116090000): expires within 60 minutes, consumed once by the
+/// gate it names, never changed or removed.
+model RentalGateOverride {
+  id            String    @id @default(cuid())
+  tenantId      String?
+  rentalOrderId String
+  step          String    // handover | close | deposit
+  reason        String
+  authorizedBy  String
+  dbUser        String?   // set by the database (session_user)
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  usedAt        DateTime?
+  usedTxid      String?
+
+  rentalOrder RentalOrder @relation(fields: [rentalOrderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@index([rentalOrderId, step])
 }

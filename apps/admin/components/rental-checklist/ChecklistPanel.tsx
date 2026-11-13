@@ -22,6 +22,9 @@ type Item = {
   id: string; label: string; labelSwahili?: string | null; stage: 'BOTH' | 'RETURN'; quantity: number;
   isMandatory: boolean; requiresCondition: boolean; instructions?: string | null;
   handover?: Rec | null; return?: Rec | null;
+  /** What physically went out (null = not recorded) and therefore what must come back (round 25C B). */
+  issuedQuantity?: number | null; expectedReturn?: number;
+  exception?: { id: string; kind: string; substituteNote?: string | null } | null;
 };
 type Rec = { id: string; quantity: number; condition?: string | null; note?: string | null; recordedById: string; recordedAt: string };
 type Exc = { id: string; kind: string; snapshotItemIds: string[]; substituteNote?: string | null; reason: string; status: string; requestedById: string; decidedById?: string | null; decisionNote?: string | null; usedById?: string | null };
@@ -195,8 +198,16 @@ export default function ChecklistPanel({ rentalId, online = true, onChanged, com
                       {i.stage === 'RETURN' && <span className="ml-1 text-xs rounded bg-purple-100 dark:bg-purple-900/40 px-1">return only</span>}
                       {i.instructions && <p className="text-xs text-[hsl(var(--muted-foreground))]">{i.instructions}</p>}
                     </td>
-                    <td className="py-2 pr-2">{i.stage === 'BOTH' ? rec(i.handover) : <span className="text-xs text-[hsl(var(--muted-foreground))]">n/a</span>}</td>
-                    <td className="py-2 pr-2">{rec(i.return)}</td>
+                    <td className="py-2 pr-2" data-testid={`issued-${i.label}`}>
+                      {i.stage !== 'BOTH' ? <span className="text-xs text-[hsl(var(--muted-foreground))]">n/a</span>
+                        : !i.handover && i.exception?.kind === 'MISSING' ? <span className="text-xs text-amber-700">Not issued — approved exception</span>
+                        : rec(i.handover)}
+                      {i.exception?.kind === 'SUBSTITUTED' && <p className="text-xs text-amber-700">Substituted: {i.exception.substituteNote}</p>}
+                    </td>
+                    <td className="py-2 pr-2" data-testid={`returned-${i.label}`}>
+                      {rec(i.return)}
+                      {s.inspection.stageOpen && <p className="text-xs text-[hsl(var(--muted-foreground))]">{i.expectedReturn === 0 ? 'Nothing to return (never issued)' : `Expected back: ${i.expectedReturn}`}</p>}
+                    </td>
                     {stage && (
                       <td className="py-2">
                         {editable ? (

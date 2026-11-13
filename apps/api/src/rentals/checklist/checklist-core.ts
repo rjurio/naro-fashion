@@ -33,13 +33,18 @@ export async function lockChecklist(tx: any, rentalOrderId: string) {
 
 /**
  * Declare, inside the current transaction, that the R3 gate passed for this
- * rental (the database trigger from migration 20261115090000 refuses the
- * hand-over / closure / deposit-return write otherwise). Transaction-local.
+ * rental. The value is bound to the booking, to THIS transaction's id and to
+ * the acting staff member ("<rentalId>:<txid>:<actorId>"), so it can't leak
+ * to another booking, be replayed in a later transaction or survive on a
+ * pooled connection. The database triggers (migrations 20261115090000 +
+ * 20261116090000) additionally re-check the checklist facts themselves, so the
+ * declaration alone never authorises anything.
  */
 export type R3Step = 'handover' | 'close' | 'deposit';
-export async function declareGatePassed(tx: any, step: R3Step, rentalOrderId: string) {
+export async function declareGatePassed(tx: any, step: R3Step, rentalOrderId: string, actorId?: string | null) {
   const key = `naro.r3_${step}`;
-  await tx.$executeRaw`SELECT set_config(${key}, ${rentalOrderId}, true)`;
+  const actor = actorId ?? '';
+  await tx.$executeRaw`SELECT set_config(${key}, ${rentalOrderId} || ':' || txid_current()::text || ':' || ${actor}, true)`;
 }
 
 /** The most specific ACTIVE template for a product (product → category → shop default). */
@@ -48,9 +53,14 @@ export async function resolveTemplate(db: any, tenantId: string, product: { id: 
   const include = { items: { orderBy: { sortOrder: 'asc' } } };
   const byProduct = await db.rentalChecklistTemplate.findFirst({ where: { ...base, productId: product.id }, include, orderBy: { updatedAt: 'desc' } });
   if (byProduct) return { template: byProduct, source: 'PRODUCT' };
-  if (product.categoryId) {
-    const byCat = await db.rentalChecklistTemplate.findFirst({ where: { ...base, productId: null, categoryId: product.categoryId }, include, orderBy: { updatedAt: 'desc' } });
+  // The product's category, then its parent categories (a "Wedding Dresses"
+  // list covers the gowns filed under "Wedding Dresses > Ball Gown").
+  let categoryId = product.categoryId ?? null;
+  for (let depth = 0; categoryId && depth < 6; depth++) {
+    const byCat = await db.rentalChecklistTemplate.findFirst({ where: { ...base, productId: null, categoryId }, include, orderBy: { updatedAt: 'desc' } });
     if (byCat) return { template: byCat, source: 'CATEGORY' };
+    const cat = db.category?.findFirst ? await db.category.findFirst({ where: { id: categoryId, tenantId }, select: { parentId: true } }) : null;
+    categoryId = cat?.parentId ?? null;
   }
   const dflt = await db.rentalChecklistTemplate.findFirst({ where: { ...base, productId: null, categoryId: null, isDefault: true }, include, orderBy: { updatedAt: 'desc' } });
   if (dflt) return { template: dflt, source: 'SHOP_DEFAULT' };
@@ -113,7 +123,26 @@ export async function checklistState(db: any, tenantId: string, rentalOrderId: s
       .filter((r: any) => r.snapshotItemId === itemId && r.stage === stage && !superseded.has(r.id))
       .filter((r: any) => stage !== 'HANDOVER' || unitId === undefined || (r.rentalUnitId ?? null) === (unitId ?? null))
       .pop() ?? null;
-  const items = (snapshot?.items ?? []).map((i: any) => ({ ...i, handover: effective(i.id, 'HANDOVER'), return: effective(i.id, 'RETURN') }));
+  const usedOrApproved = exceptions.filter((e: any) => e.status === 'APPROVED' || e.status === 'USED');
+  const items = (snapshot?.items ?? []).map((i: any) => {
+    const handover = effective(i.id, 'HANDOVER');
+    const exc = usedOrApproved.filter((e: any) => e.snapshotItemIds.includes(i.id));
+    const missingExc = exc.find((e: any) => e.kind === 'MISSING') ?? null;
+    const substitutedExc = exc.find((e: any) => e.kind === 'SUBSTITUTED') ?? null;
+    return {
+      ...i,
+      handover,
+      return: effective(i.id, 'RETURN'),
+      // What physically went out, and therefore what the customer must bring back:
+      //  - recorded at hand-over -> that quantity;
+      //  - not recorded but covered by a MISSING exception -> nothing went out;
+      //  - SUBSTITUTED -> the substitute went out (its description is on the exception);
+      //  - otherwise (legacy desk list, return-only checks) -> the listed quantity.
+      issuedQuantity: i.stage === 'RETURN' ? null : handover ? handover.quantity : missingExc ? 0 : null,
+      expectedReturn: i.stage === 'RETURN' ? i.quantity : handover ? handover.quantity : missingExc ? 0 : i.quantity,
+      exception: missingExc || substitutedExc ? { id: (missingExc ?? substitutedExc).id, kind: (missingExc ?? substitutedExc).kind, substituteNote: substitutedExc?.substituteNote ?? null } : null,
+    };
+  });
   return { snapshot, items, records, exceptions, discrepancies, effective };
 }
 
@@ -173,7 +202,8 @@ export async function assertChecklistReleasable(db: any, tenantId: string, renta
 
 /** Return inspection complete = every snapshot item has an effective RETURN record. */
 export function inspectionGaps(state: Awaited<ReturnType<typeof checklistState>>) {
-  const notInspected = state.items.filter((i: any) => !i.return).map((i: any) => i.label);
+  // Nothing to inspect for an item that never went out (an approved MISSING exception).
+  const notInspected = state.items.filter((i: any) => i.expectedReturn > 0 && !i.return).map((i: any) => i.label);
   const open = state.discrepancies.filter((d: any) => d.status === 'OPEN');
   return { notInspected, open };
 }
@@ -214,9 +244,11 @@ export async function assertDepositSettleable(db: any, tenantId: string, rentalO
 }
 
 /** Discrepancies a RETURN observation opens against what went out. */
-export function discrepanciesFor(item: { quantity: number; stage: string }, handover: { quantity: number; condition?: string | null } | null, ret: { quantity: number; condition?: string | null }) {
+export function discrepanciesFor(item: { quantity: number; stage: string; expectedReturn?: number }, handover: { quantity: number; condition?: string | null } | null, ret: { quantity: number; condition?: string | null }) {
   const out: Array<{ kind: 'MISSING' | 'DAMAGED' | 'ALTERED'; quantity: number }> = [];
-  const expected = item.stage === 'BOTH' ? (handover?.quantity ?? item.quantity) : item.quantity;
+  // The customer owes back only what was actually issued (see checklistState.expectedReturn).
+  const expected = item.expectedReturn ?? (item.stage === 'BOTH' ? (handover?.quantity ?? item.quantity) : item.quantity);
+  if (expected === 0) return out;
   if (ret.quantity < expected || ret.condition === 'MISSING') out.push({ kind: 'MISSING', quantity: Math.max(1, expected - (ret.condition === 'MISSING' ? 0 : ret.quantity)) });
   const before = CONDITION_RANK[handover?.condition ?? 'GOOD'] ?? 0;
   const after = CONDITION_RANK[ret.condition ?? 'GOOD'] ?? 0;
