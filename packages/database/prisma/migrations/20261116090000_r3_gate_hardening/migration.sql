@@ -66,10 +66,10 @@ CREATE OR REPLACE FUNCTION naro_r3_use_override(p_step text, p_rental text) RETU
 DECLARE o_id text;
 BEGIN
   SELECT id INTO o_id FROM "RentalGateOverride"
-   WHERE "rentalOrderId" = p_rental AND step = p_step AND "usedAt" IS NULL AND "expiresAt" > now()
+   WHERE "rentalOrderId" = p_rental AND step = p_step AND "usedAt" IS NULL AND "expiresAt" > (now() AT TIME ZONE 'UTC')
    ORDER BY "createdAt" LIMIT 1 FOR UPDATE;
   IF o_id IS NULL THEN RETURN false; END IF;
-  UPDATE "RentalGateOverride" SET "usedAt" = now(), "usedTxid" = txid_current()::text WHERE id = o_id;
+  UPDATE "RentalGateOverride" SET "usedAt" = (now() AT TIME ZONE 'UTC'), "usedTxid" = txid_current()::text WHERE id = o_id;
   RETURN true;
 END $$;
 
@@ -244,12 +244,13 @@ BEGIN
     IF NEW.step NOT IN ('handover', 'close', 'deposit') THEN RAISE EXCEPTION 'R3_OVERRIDE_INVALID: step must be handover, close or deposit'; END IF;
     IF length(btrim(NEW.reason)) < 20 THEN RAISE EXCEPTION 'R3_OVERRIDE_INVALID: a reason of at least 20 characters is required'; END IF;
     IF length(btrim(NEW."authorizedBy")) < 3 THEN RAISE EXCEPTION 'R3_OVERRIDE_INVALID: name the owner who authorised it'; END IF;
-    IF NEW."expiresAt" > now() + interval '60 minutes' OR NEW."expiresAt" <= now() THEN
+    -- Timestamps are UTC (as the application stores them), whatever the session time zone.
+    IF NEW."expiresAt" > (now() AT TIME ZONE 'UTC') + interval '60 minutes' OR NEW."expiresAt" <= (now() AT TIME ZONE 'UTC') THEN
       RAISE EXCEPTION 'R3_OVERRIDE_INVALID: an override must expire within 60 minutes';
     END IF;
     IF NEW."usedAt" IS NOT NULL OR NEW."usedTxid" IS NOT NULL THEN RAISE EXCEPTION 'R3_OVERRIDE_INVALID: a new override is unused'; END IF;
     NEW."dbUser" := session_user;
-    NEW."createdAt" := now();
+    NEW."createdAt" := (now() AT TIME ZONE 'UTC');
     RETURN NEW;
   END IF;
   IF (NEW.id, NEW."tenantId", NEW."rentalOrderId", NEW.step, NEW.reason, NEW."authorizedBy", NEW."dbUser", NEW."createdAt", NEW."expiresAt")
