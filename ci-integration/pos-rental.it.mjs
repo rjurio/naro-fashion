@@ -54,6 +54,16 @@ const CX = process.env.IT_CANCELLATION === '1';
 if (R3) {
   const t = await call('POST', '/rental-checklists/templates', { token: tok.super, body: { name: 'Shop default', isDefault: true, items: [{ label: 'Item', itemType: 'DISPATCH' }] } });
   if (t.status !== 201) throw new Error(`R3 default template ${t.status}`);
+  // Round 25F D builds (IT_TEMPLATE_APPROVAL=1, default off): used only after a DIFFERENT
+  // person (the seeded independent approver, not the SUPER_ADMIN who prepared it) approves it.
+  if (process.env.IT_TEMPLATE_APPROVAL === '1') {
+    const d = t.data;
+    if (d?.approvalStatus === undefined || !tok.tplApprover) throw new Error(`template approval set-up: ${JSON.stringify(d).slice(0, 120)}`);
+    const a = await call('POST', `/rental-checklists/templates/${d.id}/approve`, { token: tok.tplApprover, body: {
+      version: d.version, hash: d.contentHash, scope: { productId: d.productId ?? null, categoryId: d.categoryId ?? null },
+      confirmedItems: d.items.map((i) => ({ itemId: i.id, quantity: i.quantity })) } });
+    if (a.status !== 201) throw new Error(`approve template ${a.status} ${JSON.stringify(a.data).slice(0, 160)}`);
+  }
 }
 async function r3Record(id, stage, condition = 'GOOD', note) {
   if (!R3) return null;
@@ -326,9 +336,11 @@ await check('late fee paid as its own component', async () => {
 });
 if (R3) {
   // R3: the inspection records the stain; a reviewer (not the inspector) resolves it as deducted.
+  // Round 25F: the checklist reviewer decides the deduction, so the SUPER_ADMIN who later approves
+  // the deposit refund is independent of it (refund separation of duties, G3).
   const ins = await r3Record(b1.id, 'RETURN', 'DAMAGED', 'Hem stain');
   const d = ins.discrepancies.find((x) => x.kind === 'DAMAGED');
-  const res = await call('PATCH', `/rental-checklist/discrepancies/${d.id}/resolve`, { token: tok.super, body: { resolution: 'RESOLVED_DEDUCTED', note: 'cleaning + repair' } });
+  const res = await call('PATCH', `/rental-checklist/discrepancies/${d.id}/resolve`, { token: tok.checker ?? tok.super, body: { resolution: 'RESOLVED_DEDUCTED', note: 'cleaning + repair' } });
   if (res.status !== 200) throw new Error(`R3 resolve ${res.status}`);
 }
 let depReq;

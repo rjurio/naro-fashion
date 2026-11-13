@@ -1,12 +1,12 @@
-// Seeds the ISOLATED schema it_pos (local dev Postgres) for the walk-in POS
+// Seeds the ISOLATED schema it_pos (or it_r1i, for r1-integration) (local dev Postgres) for the walk-in POS
 // rental MVP integration test. Never production. Run AFTER the local API
 // booted once on it_pos (permission catalogue + system roles).
 //   DATABASE_URL=...?schema=it_pos node pos-rental-seed.js <worktree> <out.json>
 const path = require('path');
 const fs = require('fs');
 const [, , wt, out] = process.argv;
-if (!/schema=it_pos\b/.test(process.env.DATABASE_URL || '') || !/@localhost[:/]/.test(process.env.DATABASE_URL)) {
-  throw new Error('refusing: DATABASE_URL must be the local it_pos schema');
+if (!/schema=it_(pos|r1i|tpl)\b/.test(process.env.DATABASE_URL || '') || !/@localhost[:/]/.test(process.env.DATABASE_URL)) {
+  throw new Error('refusing: DATABASE_URL must be the local it_pos / it_r1i / it_tpl schema');
 }
 const { PrismaClient } = require(path.join(wt, 'packages', 'database', 'node_modules', '@prisma', 'client'));
 const bcrypt = require(path.join(wt, 'apps', 'api', 'node_modules', 'bcryptjs'));
@@ -81,6 +81,10 @@ async function admin(tenantId, tag, roleString, roleId, twoFA = false) {
   const approverRole = await role(t.id, 'IT Refund Approver', ['rentals:view', 'refunds:approve', ...(hasTrackingReview ? ['rentals:approve-unit-tracking'] : [])]);
   const financeRole = await role(t.id, 'IT Finance', ['rentals:view', 'payments:manage', 'reports:view']);
   const staffRole = await db.role.findFirst({ where: { name: 'STAFF', isSystem: true, tenantId: null } });
+  // Template-approval builds (round 25F D) seed rentals:checklist-approve: an independent
+  // approver who never prepares templates (suites use it when IT_TEMPLATE_APPROVAL=1).
+  const hasTemplateApproval = !!(await db.permission.findFirst({ where: { code: 'rentals:checklist-approve' } }));
+  const tplApproverRole = hasTemplateApproval ? await role(t.id, 'IT Template Approver', ['rentals:view', 'rentals:checklist-approve']) : null;
 
   const ids = {
     tenantId: t.id,
@@ -97,6 +101,7 @@ async function admin(tenantId, tag, roleString, roleId, twoFA = false) {
       finance: await admin(t.id, 'finance', 'STAFF', financeRole.id),
       staff: await admin(t.id, 'staff', 'STAFF', staffRole?.id),
       ...(checkerRole ? { checker: await admin(t.id, 'checker', 'STAFF', checkerRole.id) } : {}),
+      ...(tplApproverRole ? { tplApprover: await admin(t.id, 'tpl-approver', 'STAFF', tplApproverRole.id) } : {}),
     },
   };
   // Open shifts for the cashiers and finance (cash in / cash out of the drawer).

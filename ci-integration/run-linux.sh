@@ -84,7 +84,16 @@ for g in $SUITE_GROUPS; do
     cancellation) fresh it_pos 4130 pos-rental-seed.js /tmp/ids-can.json \
         && suite cancellation env IT_JOB_DATABASE_URL="$(RUNTIME_URL it_pos)" node cancellation.it.mjs "$WT" /tmp/ids-can.json \
         && suite cancellation-e node cancellation-e.it.mjs "$WT" /tmp/ids-can.json || missing cancellation ;;
-    r1-accounting) fresh it_pos 4130 pos-rental-seed.js /tmp/ids-r1.json && suite r1-refund-accounting node r1-refund-accounting.it.mjs /tmp/ids-r1.json || missing r1-refund-accounting ;;
+    # Round 25F E (PR #52): stock write-off / decrease and payment-reversal approvals.
+    # On approval builds also export IT_APPROVALS=1 so inventory-sec expects the approval path.
+    approvals) fresh it_e 4195 approvals-seed.js /tmp/ids-appr.json \
+        && suite approvals env IT_API=http://localhost:4195/api/v1 IT_SCHEMA=it_e node approvals.it.mjs /tmp/ids-appr.json || missing approvals ;;
+    inventory-sec) fresh it_inv 4135 inventory-sec-seed.js /tmp/ids-inv.json && suite inventory-sec env IT_API=http://localhost:4135/api/v1 node inventory-sec.it.mjs /tmp/ids-inv.json || missing inventory-sec ;;
+    escalation) fresh it_esc 4136 escalation-seed.js /tmp/ids-esc.json && suite escalation env IT_API=http://localhost:4136/api/v1 IT_SCHEMA=it_esc node escalation.it.mjs /tmp/ids-esc.json || missing escalation ;;
+    sod) fresh it_pos 4130 pos-rental-seed.js /tmp/ids-sod.json && suite sod env ${SOD_FLAGS:-} node sod.it.mjs /tmp/ids-sod.json || missing sod ;;
+    r1-accounting) fresh it_pos 4130 pos-rental-seed.js /tmp/ids-r1.json && suite r1-refund-accounting env ${R1_FLAGS:-} node r1-refund-accounting.it.mjs /tmp/ids-r1.json || missing r1-refund-accounting ;;
+    # Round 25F: integrated R1 refund accounting (#37 under #36) under concurrency.
+    r1-integration) fresh it_pos 4130 pos-rental-seed.js /tmp/ids-r1i.json && suite r1-integration node r1-integration.it.mjs "$WT" /tmp/ids-r1i.json || missing r1-integration ;;
     shift-reconciliation) fresh it_r4 4170 shift-reconciliation-seed.js /tmp/ids-r4.json \
         && suite shift-reconciliation env IT_API=http://localhost:4170/api/v1 IT_SCHEMA=it_r4 node shift-reconciliation.it.mjs /tmp/ids-r4.json || missing shift-reconciliation ;;
     r3-checklist-rollback)
@@ -101,6 +110,16 @@ for g in $SUITE_GROUPS; do
     refunds) reset_schema it_ref && start_api "$WT" it_ref 4150 head \
         && DATABASE_URL="$(OWNER_URL it_ref)" node refunds-seed.js "$WT" /tmp/ids-ref.json | tail -1 \
         && suite refunds env ${REFUND_FLAGS:-IT_R3=1} IT_API=http://localhost:4150/api/v1 node refunds.it.mjs /tmp/ids-ref.json || missing refunds ;;
+    # Round 25F D (two-person checklist template approval). On template-approval
+    # builds also export IT_TEMPLATE_APPROVAL=1 so the other R3 suites approve
+    # their templates in set-up (by the seeded tplApprover, never the author).
+    template-approval) fresh it_pos 4130 pos-rental-seed.js /tmp/ids-tpl.json \
+        && suite template-approval env IT_API=http://localhost:4130/api/v1 IT_SCHEMA=it_pos node template-approval.it.mjs /tmp/ids-tpl.json || missing template-approval ;;
+    # refunds:payout (payout-only permission) + the three-person refund workflow.
+    # Port 4177: fetch() refuses 4190 (a "bad port").
+    refund-payout) reset_schema it_payout && start_api "$WT" it_payout 4177 head \
+        && DATABASE_URL="$(OWNER_URL it_payout)" node refund-payout-seed.js "$WT" /tmp/ids-payout.json | tail -1 \
+        && suite refund-payout env IT_API=http://localhost:4177/api/v1 IT_SCHEMA=it_payout node refund-payout.it.mjs /tmp/ids-payout.json || missing refund-payout ;;
     *) echo "unknown group $g"; missing "$g" ;;
   esac
   stop_api

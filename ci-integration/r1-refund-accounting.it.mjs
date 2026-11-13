@@ -128,9 +128,17 @@ await check('overpayment refunded (approved + paid) → the surplus is 0, the fe
   eq([l.held.RENTAL_FEE, l.held.DEPOSIT, l.overpaid], [400000, 200000, 0], 'ledger after payout');
   eq((await cancel(id)).status, 200, 'cancelled');
   eq(state(id), 'CANCELLED|REFUND_DUE', 'liability');
-  const fee = await request(id, { kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 400000, reason: 'full refund before collection (fee)' });
-  const dep = await request(id, { kind: 'CANCELLATION', component: 'DEPOSIT', amount: 200000, reason: 'full refund before collection (deposit)' });
-  eq([fee.status, dep.status], [201, 201], `full fee + deposit (${JSON.stringify(fee.data).slice(0, 120)})`);
+  let fee, dep;
+  if (process.env.IT_CANCELLATION === '1') {
+    // cancellation workflow (#36): the cancellation itself raised the full requests
+    const rows = sql(`SELECT component || ':' || amount::int || ':' || id FROM "RentalRefundRequest" WHERE "rentalOrderId" = '${id}' AND kind = 'CANCELLATION' ORDER BY component DESC`).split(String.fromCharCode(10)).map((x) => x.trim()).filter(Boolean);
+    eq(rows.map((r) => r.split(':').slice(0, 2).join(':')), ['RENTAL_FEE:400000', 'DEPOSIT:200000'], 'automatic full requests');
+    fee = { data: { id: rows[0].split(':')[2] } }; dep = { data: { id: rows[1].split(':')[2] } };
+  } else {
+    fee = await request(id, { kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 400000, reason: 'full refund before collection (fee)' });
+    dep = await request(id, { kind: 'CANCELLATION', component: 'DEPOSIT', amount: 200000, reason: 'full refund before collection (deposit)' });
+    eq([fee.status, dep.status], [201, 201], `full fee + deposit (${JSON.stringify(fee.data).slice(0, 120)})`);
+  }
   eq((await request(id, { kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 1, reason: 'one shilling too many' })).status, 400, 'no over-request');
   eq((await request(id, { kind: 'OVERPAYMENT', component: 'RENTAL_FEE', amount: 1, reason: 'the surplus was already paid back' })).status, 400, 'no second overpayment');
   for (const r of [fee.data.id, dep.data.id]) { eq((await approve(r)).status, 200, 'approve'); eq((await payOut(r)).status, 200, 'pay'); }
@@ -141,7 +149,8 @@ await check('overpayment APPROVED but unpaid → it does not reduce the fee room
   const { id, overpayment } = await overpaid(50);
   eq((await request(id, { kind: 'OVERPAYMENT', component: 'RENTAL_FEE', amount: 100000, reason: 'second claim on the same surplus' })).status, 400, 'double surplus claim');
   eq((await cancel(id)).status, 200, 'cancelled');
-  eq((await request(id, { kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 400000, reason: 'full refund before collection (fee)' })).status, 201, 'full fee room');
+  if (process.env.IT_CANCELLATION === '1') eq(sql(`SELECT COALESCE(sum(amount), 0)::int FROM "RentalRefundRequest" WHERE "rentalOrderId" = '${id}' AND kind = 'CANCELLATION' AND component = 'RENTAL_FEE'`), '400000', 'full fee requested automatically');
+  else eq((await request(id, { kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 400000, reason: 'full refund before collection (fee)' })).status, 201, 'full fee room');
   eq((await payOut(overpayment)).status, 200, 'overpayment paid later');
   eq((await ledger(id)).overpaid, 0, 'surplus returned');
 });
