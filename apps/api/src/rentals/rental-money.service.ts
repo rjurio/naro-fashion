@@ -12,6 +12,7 @@ import { AuditService } from '../audit/audit.service';
 import { claimsOverpayment, overpaymentRefundableNow, refundableNow, rentalBalances, RENTAL_COMPONENTS } from './rental-ledger';
 import { normalizeReference } from '../pos/payment-verification';
 import { assertDepositSettleable, declareGatePassed, lockChecklist } from './checklist/checklist-core';
+import { requestCancellationRefunds } from './cancellation';
 
 /** After these statuses the deposit is settled only on a complete return inspection (R3). */
 const AFTER_HANDOVER = ['ITEM_DISPATCHED', 'ACTIVE', 'RETURNED', 'INSPECTION', 'CLOSED'];
@@ -172,6 +173,24 @@ export class RentalMoneyService {
       rentalOrderId, kind: dto.kind, component: dto.component, amount, retainedAmount: retained,
     });
     return created;
+  }
+
+  /**
+   * Round 25C F: raise the full CANCELLATION refund requests a cancelled
+   * booking is still missing (e.g. after a payout FAILED or a late payment).
+   * Idempotent: nothing is created when every received amount is already
+   * claimed by an open request or refunded.
+   */
+  async requestMissingCancellationRefunds(rentalOrderId: string, actor: { id: string }) {
+    const tenantId = this.tenantContext.requireId;
+    const rental = await this.prisma.rentalOrder.findFirst({ where: { id: rentalOrderId, tenantId }, select: { status: true, cancellationReason: true } });
+    if (!rental) throw new NotFoundException('Rental order not found');
+    if (rental.status !== 'CANCELLED') throw new BadRequestException('Only a CANCELLED booking gets cancellation refunds.');
+    const created = await this.prisma.$transaction((tx: any) => requestCancellationRefunds(tx, tenantId, rentalOrderId, actor.id, rental.cancellationReason ?? 'UNSPECIFIED'));
+    for (const r of created) {
+      await this.audit.log('REFUND_REQUESTED', 'RefundRequest', r.id, { rentalOrderId, kind: 'CANCELLATION', component: r.component, amount: r.amount, source: 'RE_RAISED' });
+    }
+    return { created };
   }
 
   private async loadRequest(id: string) {

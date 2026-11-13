@@ -26,7 +26,8 @@ import {
   REMINDER_MIN_LEAD_HOURS,
   rentalHoldTtlHours,
 } from '../rentals/rental-hold';
-import { customerIdState, lockCustomerIdState } from '../id-verification/id-approval';
+import { customerIdState, hasApprovedId, lockCustomerIdState } from '../id-verification/id-approval';
+import { holdExpiryCancellationReason, requestCancellationRefunds, SYSTEM_REQUESTER } from '../rentals/cancellation';
 
 /** Mapping from admin-friendly interval keys to cron expressions */
 export const INSTAGRAM_SYNC_INTERVALS: Record<string, string> = {
@@ -678,10 +679,15 @@ export class SchedulerService implements OnModuleInit {
       // flag the money for refund. Never forfeited automatically.
       if (cur.holdState === 'PAYMENT_REVIEW') {
         if (!cur.holdExpiresAt || cur.holdExpiresAt.getTime() > now.getTime()) return { kind: 'none' as const };
+        // Round 25C F: why it was released (the ID decides), recorded on the booking.
+        const reviewReason = r.tenantId && (await hasApprovedId(tx, r.tenantId, r.userId)) ? 'PAYMENT_EXPIRED' : 'ID_FAILED';
         const res = await tx.rentalOrder.updateMany({
           where: { id: r.id, tenantId: r.tenantId, status: cur.status, holdState: 'PAYMENT_REVIEW', holdExpiresAt: cur.holdExpiresAt },
           data: {
             status: 'CANCELLED',
+            cancellationReason: reviewReason,
+            cancelledAt: now,
+            cancelledById: null,
             holdState: net > 0 ? 'REFUND_DUE' : 'PAYMENT_REVIEW',
             notes: withNote(
               `[Auto-released ${iso}] The staff review window ended without a resolution. ${net} TZS received is due for refund (REFUND_DUE).`,
@@ -689,6 +695,9 @@ export class SchedulerService implements OnModuleInit {
           },
         });
         if (res.count === 0) return { kind: 'none' as const };
+        // The money received becomes full refund REQUESTS in the same transaction
+        // (never forfeited; approval + payout by people follow).
+        if (r.tenantId) await requestCancellationRefunds(tx, r.tenantId, r.id, SYSTEM_REQUESTER.HOLD_EXPIRY, reviewReason);
         return { kind: 'released' as const, net, message: holdExpiryMessage('HOLD_DEADLINE', 'PAYMENT_REVIEW') };
       }
 
@@ -744,7 +753,7 @@ export class SchedulerService implements OnModuleInit {
           pickupDate: cur.pickupDate,
           payments: { none: { status: 'COMPLETED' } },
         },
-        data: { status: 'CANCELLED', notes: withNote(note) },
+        data: { status: 'CANCELLED', notes: withNote(note), cancellationReason: holdExpiryCancellationReason(cur.holdState), cancelledAt: now, cancelledById: null },
       });
       if (res.count === 0) return { kind: 'none' as const };
       return {
