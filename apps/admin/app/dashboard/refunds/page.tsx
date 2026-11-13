@@ -114,10 +114,10 @@ export default function RefundsPage() {
 
                 {r.status === 'REQUESTED' && (
                   <div className="flex flex-wrap gap-2">
-                    <input value={v.note} onChange={(e) => setF(r.id, { note: e.target.value })} placeholder="Note (required to reject)" className={`${inputCls} flex-1`} />
+                    <input value={v.note} onChange={(e) => setF(r.id, { note: e.target.value })} data-testid={`refund-note-${r.id}`} placeholder="Note (required to reject)" className={`${inputCls} flex-1`} />
                     <button data-testid={`refund-approve-${r.id}`} disabled={!!busy} onClick={() => run(`a-${r.id}`, () => adminApi.decideRefundRequest(r.id, 'approve', { note: v.note || undefined }), 'Approved: it can now be paid out')}
                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-brand-gold text-white disabled:opacity-50">{busy === `a-${r.id}` && <Loader2 className="w-4 h-4 animate-spin" />}Approve</button>
-                    <button disabled={!!busy || !v.note.trim()} onClick={() => run(`r-${r.id}`, () => adminApi.decideRefundRequest(r.id, 'reject', { reason: v.note }), 'Rejected')}
+                    <button data-testid={`refund-reject-${r.id}`} disabled={!!busy || !v.note.trim()} onClick={() => run(`r-${r.id}`, () => adminApi.decideRefundRequest(r.id, 'reject', { reason: v.note }), 'Rejected')}
                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-[hsl(var(--border))] disabled:opacity-50">{busy === `r-${r.id}` && <Loader2 className="w-4 h-4 animate-spin" />}Reject</button>
                   </div>
                 )}
