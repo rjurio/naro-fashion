@@ -47,6 +47,7 @@ const PERMISSIONS = [
   { code: 'rentals:checklist-verify', name: 'Record Rental Checklist Evidence', module: 'rentals', action: 'checklist-verify' },
   { code: 'rentals:checklist-exception', name: 'Decide Checklist Exceptions and Discrepancies (second person)', module: 'rentals', action: 'checklist-exception' },
   { code: 'rentals:checklist-templates', name: 'Edit Rental Checklist Templates', module: 'rentals', action: 'checklist-templates' },
+  { code: 'rentals:checklist-approve', name: 'Approve Rental Checklist Templates', module: 'rentals', action: 'checklist-approve' },
   // customers
   { code: 'customers:view', name: 'View Customers', module: 'customers', action: 'view' },
   { code: 'customers:suspend', name: 'Suspend Customers', module: 'customers', action: 'suspend' },

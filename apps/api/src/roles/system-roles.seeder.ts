@@ -34,6 +34,7 @@ export const MANAGER_EXCLUDED = [
   'rentals:checklist-verify',
   'rentals:checklist-exception',
   'rentals:checklist-templates',
+  'rentals:checklist-approve', // round 25F D: template approval (second person), never auto-granted
 ];
 
 export const STAFF_CODES = [

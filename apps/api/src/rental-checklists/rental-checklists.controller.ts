@@ -15,6 +15,7 @@ import { CreateTemplateDto } from './dto/create-template.dto';
 import { UpdateTemplateDto } from './dto/update-template.dto';
 import { AssignChecklistDto } from './dto/assign-checklist.dto';
 import { CheckItemDto } from './dto/check-item.dto';
+import { ApproveTemplateDto, WithdrawTemplateDto } from './dto/approve-template.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
@@ -52,8 +53,8 @@ export class RentalChecklistsController {
 
   @Post('templates')
   @RequiresPermission('rentals:checklist-templates')
-  createTemplate(@Body() dto: CreateTemplateDto) {
-    return this.rentalChecklistsService.createTemplate(dto);
+  createTemplate(@Body() dto: CreateTemplateDto, @CurrentUser('id') actorId: string) {
+    return this.rentalChecklistsService.createTemplate(dto, actorId);
   }
 
   @Get('templates/active')
@@ -70,8 +71,22 @@ export class RentalChecklistsController {
 
   @Put('templates/:id')
   @RequiresPermission('rentals:checklist-templates')
-  updateTemplate(@Param('id') id: string, @Body() dto: UpdateTemplateDto) {
-    return this.rentalChecklistsService.updateTemplate(id, dto);
+  updateTemplate(@Param('id') id: string, @Body() dto: UpdateTemplateDto, @CurrentUser('id') actorId: string) {
+    return this.rentalChecklistsService.updateTemplate(id, dto, actorId);
+  }
+
+  /** Round 25F D: a DIFFERENT person approves the exact version (hash) after verifying every item + quantity. */
+  @Post('templates/:id/approve')
+  @RequiresPermission('rentals:checklist-approve')
+  approveTemplate(@Param('id') id: string, @Body() dto: ApproveTemplateDto, @CurrentUser('id') actorId: string) {
+    return this.rentalChecklistsService.approveTemplate(id, dto, { id: actorId });
+  }
+
+  /** Round 25F D: stop using a template for new bookings (audited; existing snapshots untouched). */
+  @Post('templates/:id/withdraw')
+  @RequiresPermission('rentals:checklist-approve', 'rentals:checklist-templates')
+  withdrawTemplate(@Param('id') id: string, @Body() dto: WithdrawTemplateDto, @CurrentUser('id') actorId: string) {
+    return this.rentalChecklistsService.withdrawTemplate(id, dto, { id: actorId });
   }
 
   @Delete('templates/:id')

@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
-import { Plus, ClipboardList, CheckCircle2, Edit2, Trash2, Loader2, X, GripVertical, Power } from 'lucide-react';
+import { Plus, ClipboardList, CheckCircle2, Edit2, Trash2, Loader2, X, GripVertical, Power, ShieldCheck, Ban } from 'lucide-react';
+import TemplateApprovalDialog from '@/components/rental-checklist/TemplateApprovalDialog';
 import Button from '@/components/ui/Button';
 import { adminApi } from '@/lib/api';
 
@@ -29,6 +30,10 @@ interface ChecklistTemplate {
   productId?: string | null;
   categoryId?: string | null;
   version?: number;
+  /** Round 25F D: DRAFT | APPROVED | WITHDRAWN; only APPROVED (this version) is used for bookings. */
+  approvalStatus?: string;
+  approvedVersion?: number | null;
+  contentHash?: string;
   createdAt: string;
   usageCount?: number;
 }
@@ -80,6 +85,7 @@ export default function ChecklistsPage() {
   const [form, setForm] = useState<TemplateForm>({ ...emptyForm, items: [newItem()] });
   const [saving, setSaving] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [approval, setApproval] = useState<{ template: ChecklistTemplate; mode: 'approve' | 'withdraw' } | null>(null);
   const [products, setProducts] = useState<{ id: string; name: string }[]>([]);
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
 
@@ -316,6 +322,14 @@ export default function ChecklistsPage() {
                             Default
                           </span>
                         )}
+                        {(() => {
+                          const st = checklist.approvalStatus ?? 'DRAFT';
+                          const cls = st === 'APPROVED' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                            : st === 'WITHDRAWN' ? 'bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+                            : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400';
+                          const label = st === 'APPROVED' ? 'Approved' : st === 'WITHDRAWN' ? 'Withdrawn' : 'Draft — needs a second person';
+                          return <span data-testid="template-status" className={`ml-2 text-xs px-2 py-0.5 rounded-full ${cls}`}>{label} · v{checklist.version ?? 1}</span>;
+                        })()}
                         {!checklist.isActive && (
                           <span className="ml-2 text-xs bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 px-2 py-0.5 rounded-full">
                             Inactive
@@ -342,6 +356,26 @@ export default function ChecklistsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {checklist.approvalStatus !== 'APPROVED' && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setApproval({ template: checklist, mode: 'approve' }); }}
+                        title="Approve (second person)"
+                        aria-label={`Approve ${checklist.name}`}
+                        className="p-2 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400"
+                      >
+                        <ShieldCheck className="w-4 h-4" />
+                      </button>
+                    )}
+                    {checklist.approvalStatus !== 'WITHDRAWN' && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setApproval({ template: checklist, mode: 'withdraw' }); }}
+                        title="Withdraw (stop using for new bookings)"
+                        aria-label={`Withdraw ${checklist.name}`}
+                        className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-[hsl(var(--muted-foreground))]"
+                      >
+                        <Ban className="w-4 h-4" />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => { e.stopPropagation(); handleToggleActive(checklist.id); }}
                       disabled={togglingId === checklist.id}
@@ -616,6 +650,19 @@ export default function ChecklistsPage() {
             </div>
           </div>
         </div>
+      )}
+      {approval && (
+        <TemplateApprovalDialog
+          template={approval.template as any}
+          mode={approval.mode}
+          scopeLabel={approval.template.productId ? `product ${products.find((p) => p.id === approval.template.productId)?.name ?? approval.template.productId}` : approval.template.categoryId ? `category ${categories.find((c) => c.id === approval.template.categoryId)?.name ?? approval.template.categoryId}` : approval.template.isDefault ? 'shop default (every rental item)' : 'not assigned'}
+          onClose={() => setApproval(null)}
+          onDone={(updated) => {
+            setChecklists((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+            setApproval(null);
+            toast.success(approval.mode === 'approve' ? 'Checklist approved' : 'Checklist withdrawn');
+          }}
+        />
       )}
     </div>
   );

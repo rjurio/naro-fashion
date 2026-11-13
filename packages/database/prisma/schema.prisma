@@ -1118,6 +1118,19 @@ model RentalChecklistTemplate {
   version     Int      @default(1)
   @@index([productId])
   @@index([categoryId])
+  // Round 25F D: two-person activation. A template is used for bookings only
+  // when APPROVED for its CURRENT version and content hash, by someone who
+  // did not prepare this version (draftAuthorIds). Any edit returns it to
+  // DRAFT; WITHDRAWN stops new snapshots. Existing snapshots never change.
+  approvalStatus   String    @default("DRAFT") // DRAFT | APPROVED | WITHDRAWN
+  approvedVersion  Int?
+  approvedHash     String?
+  approvedById     String?
+  approvedAt       DateTime?
+  draftAuthorIds   String[]  @default([])
+  withdrawnById    String?
+  withdrawnAt      DateTime?
+  withdrawalReason String?
 }
 
 model RentalChecklistTemplateItem {
@@ -2130,6 +2143,7 @@ model RentalChecklistSnapshot {
   rentalOrderId   String    @unique
   templateId      String?
   templateVersion Int?
+  templateHash    String?   // round 25F D: the approved content hash the snapshot was taken from
   source          String    // PRODUCT | CATEGORY | SHOP_DEFAULT | NONE | LEGACY_DESK
   rentalUnitId    String?   // the physical gown at freeze time
   unitCode        String?
