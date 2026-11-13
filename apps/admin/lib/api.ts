@@ -1735,6 +1735,10 @@ class AdminApiClient {
   posGetSessionSummary(id: string) {
     return this.get<any>(`/pos/sessions/${id}/summary`);
   }
+  /** R4 shift reconciliation (read-only; needs reports:view). */
+  posGetSessionReconciliation(id: string) {
+    return this.get<any>(`/pos/sessions/${id}/reconciliation`);
+  }
 
   // ===== POS - Product & Customer Search =====
   posSearchProducts(q: string) {
