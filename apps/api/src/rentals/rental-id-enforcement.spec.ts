@@ -77,7 +77,10 @@ function rentalsFixture(rental: any, opts: { approved: boolean; claim?: number }
     rentalPolicy: { findFirst: jest.fn(async () => null) },
     // cancelling checks whether money is held (REFUND_DUE); none in these scenarios
     payment: { aggregate: jest.fn(async () => ({ _sum: { amount: 0 } })) },
+    $executeRaw: jest.fn(),
   };
+  // round 25D E: the cancellation's money check + write run in one transaction under the money locks
+  prisma.$transaction = jest.fn(async (cb: any) => cb(prisma));
   return { svc: new RentalsService(prisma, tenant, audit as any), prisma, audit };
 }
 
@@ -427,6 +430,8 @@ describe('API-level access control', () => {
       // POS rental MVP M3: writes handover / return details only; every status
       // change goes through RentalsService.updateStatus (ID + handover gates).
       'rentals/pos-rentals.service.ts',
+      // Round 25D E: flags REFUND_DUE on an already-CANCELLED booking under the money locks; never a status.
+      'rentals/refund-due.ts',
       // POS rental MVP M1: writes holdState REFUND_SETTLED / REFUND_DUE only, never a status.
       'rentals/rental-money.service.ts',
       'rentals/rentals.service.ts',

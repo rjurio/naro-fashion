@@ -4,6 +4,7 @@ import { hasApprovedId } from '../id-verification/id-approval';
 import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { flagRefundDueIfHeld } from '../rentals/refund-due';
 
 /**
  * Single source of truth for applying a gateway-reported payment outcome
@@ -335,6 +336,20 @@ export class PaymentSettlementService {
    * the customer paid before verification, the payment is recorded and an
    * admin advances the rental after approving the ID.
    */
+  /** True when the booking is CANCELLED (decided under the money locks); flags REFUND_DUE if money is held. */
+  private async flagLateMoneyOnCancelled(rental: any, tenantId: string): Promise<boolean> {
+    try {
+      const out = await this.prisma.$transaction((tx: any) => flagRefundDueIfHeld(tx, tenantId, rental.id));
+      if (out.cancelled && out.held > 0) {
+        this.logger.warn(`REVIEW: rental ${rental.rentalNumber} is CANCELLED but holds ${out.held} TZS of payments — refund review (REFUND_DUE).`);
+      }
+      return out.cancelled;
+    } catch (e: any) {
+      this.logger.error(`Rental ${rental.rentalNumber}: could not check the cancelled booking's money: ${e?.message ?? e}`);
+      return rental.status === 'CANCELLED';
+    }
+  }
+
   async updateRentalPaymentStatus(rentalOrderId: string, tenantId: string) {
     const rental = await this.prisma.rentalOrder.findFirst({
       where: { id: rentalOrderId, tenantId },
@@ -353,24 +368,11 @@ export class PaymentSettlementService {
     const ledger = rentalBalances(rental, rows);
     const feePaid = ledger.collected.RENTAL_FEE;
 
-    if (rental.status === 'CANCELLED' && totalPaid > 0) {
-      // e.g. a gateway payment that completed after the booking was released
-      // by the hold expiry job. Never re-opened automatically: refund review.
-      this.logger.warn(
-        `REVIEW: rental ${rental.rentalNumber} is CANCELLED but has ${totalPaid} TZS of COMPLETED payments — refund review.`,
-      );
-      // Flag it for finance (REFUND_DUE): money that arrived on a released booking.
-      await this.prisma.rentalOrder.updateMany({
-        where: {
-          id: rentalOrderId,
-          tenantId,
-          status: 'CANCELLED',
-          OR: [{ holdState: null }, { holdState: { not: 'REFUND_DUE' } }],
-        },
-        data: { holdState: 'REFUND_DUE', holdExpiresAt: null },
-      });
-      return;
-    }
+    // A booking that is (now) CANCELLED is never re-opened or advanced: money
+    // on it is a REFUND_DUE liability (refund review). Round 25D E: the
+    // status read above may be stale while a cancellation commits, so the
+    // decision is taken under the booking's money locks with a fresh read.
+    if (await this.flagLateMoneyOnCancelled(rental, tenantId)) return;
 
     const confirmable = ['ID_VERIFIED', 'DOWN_PAYMENT_PAID'].includes(rental.status);
     if (confirmable && ledger.downPaymentCovered) {

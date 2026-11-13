@@ -9,7 +9,7 @@ import { IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min }
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
-import { refundableNow, rentalBalances, RENTAL_COMPONENTS } from './rental-ledger';
+import { claimsOverpayment, overpaymentRefundableNow, refundableNow, rentalBalances, RENTAL_COMPONENTS } from './rental-ledger';
 import { normalizeReference } from '../pos/payment-verification';
 
 export const REFUND_KINDS = ['CANCELLATION', 'DEPOSIT_RETURN', 'OVERPAYMENT'] as const;
@@ -128,7 +128,7 @@ export class RentalMoneyService {
       if (dto.kind === 'DEPOSIT_RETURN' && !['RETURNED', 'INSPECTION', 'CLOSED', 'CANCELLED'].includes(rental.status)) {
         throw new BadRequestException('The deposit is settled after the item is returned (RETURNED / INSPECTION / CLOSED).');
       }
-      const room = dto.kind === 'OVERPAYMENT' ? balances.overpaid : refundableNow(balances, dto.component, requests);
+      const room = dto.kind === 'OVERPAYMENT' ? overpaymentRefundableNow(balances, requests) : refundableNow(balances, dto.component, requests);
       if (amount + retained > room + 0.001) {
         throw new BadRequestException(
           `The request (${amount + retained} TZS) is more than the ${room} TZS of ${dto.component} still held and not already claimed on ${rental.rentalNumber}.`,
@@ -224,7 +224,7 @@ export class RentalMoneyService {
         const { rental, payments, requests, balances } = await this.state(tx, req.rentalOrderId);
         const others = requests.filter((r: any) => r.id !== id);
         const room =
-          fresh.kind === 'OVERPAYMENT' ? balances.overpaid : refundableNow(balances, fresh.component as any, others);
+          claimsOverpayment(fresh) ? overpaymentRefundableNow(balances, others) : refundableNow(balances, fresh.component as any, others);
         const total = Number(fresh.amount) + Number(fresh.retainedAmount);
         if (total > room + 0.001) {
           throw new ConflictException(`Only ${room} TZS of ${fresh.component} is still held on ${rental.rentalNumber}; nothing paid.`);
@@ -232,8 +232,12 @@ export class RentalMoneyService {
         let row: any = null;
         if (Number(fresh.amount) > 0) {
           // Pay back the most recent collection of this component (or an unallocated one).
+          // An overpayment refund pays back surplus (unallocated) money: the
+          // payout row carries no component, so the ledger takes it off the
+          // overpaid amount first, never off the fee / deposit held.
+          const surplus = claimsOverpayment(fresh);
           const source = [...payments].reverse().find(
-            (p: any) => p.status === 'COMPLETED' && (p.component === fresh.component || p.component == null),
+            (p: any) => p.status === 'COMPLETED' && (surplus ? p.component == null : p.component === fresh.component || p.component == null),
           );
           row = await tx.payment.create({
             data: {
@@ -242,7 +246,7 @@ export class RentalMoneyService {
               amount: Number(fresh.amount),
               method: dto.method,
               status: 'REFUNDED',
-              component: fresh.component,
+              component: surplus ? null : fresh.component,
               refundOfPaymentId: source?.id ?? null,
               refundRequestId: id,
               transactionRef: reference,
