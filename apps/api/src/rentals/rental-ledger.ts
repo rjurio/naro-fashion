@@ -161,13 +161,34 @@ export function collectable(b: RentalBalances, component: RentalComponent): numb
  * The money a refund request may pay back + retain for a component:
  * what is held minus what open (REQUESTED / APPROVED) requests already claim.
  */
+type OpenClaim = { kind?: string | null; component: string | null; amount: unknown; retainedAmount?: unknown; status: string };
+const isOpen = (r: OpenClaim) => r.status === 'REQUESTED' || r.status === 'APPROVED';
+/**
+ * A refund of OVERPAID money (kind OVERPAYMENT, or any request without a
+ * component) is a claim on the surplus, never on a component: it must not
+ * reduce what is refundable of the fee, the deposit or the late fee (round
+ * 25D E: an overpayment request used to be counted against the rental fee,
+ * so a later cancellation under-requested the fee by the overpaid amount).
+ */
+export function claimsOverpayment(r: { kind?: string | null; component?: string | null }): boolean {
+  return r.kind === 'OVERPAYMENT' || r.component == null;
+}
+
 export function refundableNow(
   b: RentalBalances,
   component: RentalComponent,
-  openRequests: Array<{ component: string; amount: unknown; retainedAmount?: unknown; status: string }>,
+  openRequests: OpenClaim[],
 ): number {
   const claimed = openRequests
-    .filter((r) => r.component === component && (r.status === 'REQUESTED' || r.status === 'APPROVED'))
+    .filter((r) => !claimsOverpayment(r) && r.component === component && isOpen(r))
     .reduce((s, r) => s + c(r.amount) + c(r.retainedAmount), 0);
   return Math.max(0, c(b.held[component]) - claimed) / 100;
+}
+
+/** Overpaid money still refundable: the surplus minus open overpayment claims. */
+export function overpaymentRefundableNow(b: RentalBalances, openRequests: OpenClaim[]): number {
+  const claimed = openRequests
+    .filter((r) => claimsOverpayment(r) && isOpen(r))
+    .reduce((s, r) => s + c(r.amount) + c(r.retainedAmount), 0);
+  return Math.max(0, c(b.overpaid) - claimed) / 100;
 }

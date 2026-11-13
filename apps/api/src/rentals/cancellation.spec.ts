@@ -57,6 +57,22 @@ describe('requestCancellationRefunds', () => {
     expect((await requestCancellationRefunds(tx, 't1', 'r1', 'staff1', 'X')).map((r) => [r.component, r.amount])).toEqual([['DEPOSIT', 50000]]);
   });
 
+  it('round 25D E: an overpayment refund (open or paid) never reduces the fee requested; unclaimed overpaid money is requested once, without a component', async () => {
+    // fee 400,000 + deposit 200,000 due; 700,000 received (100,000 at the till + 600,000 unallocated by M-Pesa): 100,000 overpaid.
+    const payments = [paid('RENTAL_FEE', 100000), { component: null, amount: 600000, status: 'COMPLETED' }];
+    const open = fakeTx({ payments, requests: [{ kind: 'OVERPAYMENT', component: 'RENTAL_FEE', amount: 100000, retainedAmount: 0, status: 'APPROVED' }] });
+    expect((await requestCancellationRefunds(open.tx, 't1', 'r1', 'staff1', 'X')).map((r) => [r.component, r.amount])).toEqual([['RENTAL_FEE', 400000], ['DEPOSIT', 200000]]);
+    // the overpayment was already paid out (payout row without a component, request PAID)
+    const paidOut = fakeTx({ payments: [...payments, { component: null, amount: 100000, status: 'REFUNDED' }], requests: [{ kind: 'OVERPAYMENT', component: 'RENTAL_FEE', amount: 100000, retainedAmount: 0, status: 'PAID' }] });
+    expect((await requestCancellationRefunds(paidOut.tx, 't1', 'r1', 'staff1', 'X')).map((r) => [r.component, r.amount])).toEqual([['RENTAL_FEE', 400000], ['DEPOSIT', 200000]]);
+    // nobody asked for the overpaid money yet: the cancellation requests it too, once
+    const none = fakeTx({ payments });
+    const out = await requestCancellationRefunds(none.tx, 't1', 'r1', 'staff1', 'X');
+    expect(out.map((r) => [r.component, r.amount])).toEqual([['RENTAL_FEE', 400000], ['DEPOSIT', 200000], ['OVERPAID', 100000]]);
+    expect(none.tx.refundRequest.create.mock.calls[2][0].data).toMatchObject({ kind: 'CANCELLATION', component: null, amount: 100000 });
+    expect(await requestCancellationRefunds(none.tx, 't1', 'r1', 'staff1', 'X')).toEqual([]);
+  });
+
   it('a FAILED payout makes the money owed again: re-raising requests it (REJECTED / FAILED are not open)', async () => {
     const { tx } = fakeTx({ payments: [paid('RENTAL_FEE', 100000)], requests: [{ component: 'RENTAL_FEE', amount: 100000, retainedAmount: 0, status: 'FAILED' }] });
     expect((await requestCancellationRefunds(tx, 't1', 'r1', 'staff2', 'X')).map((r) => r.amount)).toEqual([100000]);
