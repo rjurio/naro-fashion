@@ -358,7 +358,7 @@ export default function ChecklistsPage() {
                   <div className="flex items-center gap-2">
                     {checklist.approvalStatus !== 'APPROVED' && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); setApproval({ template: checklist, mode: 'approve' }); }}
+                        onClick={(e) => { e.stopPropagation(); void loadScopeOptions(); setApproval({ template: checklist, mode: 'approve' }); }}
                         title="Approve (second person)"
                         aria-label={`Approve ${checklist.name}`}
                         className="p-2 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400"
