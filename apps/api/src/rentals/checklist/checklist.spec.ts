@@ -7,6 +7,7 @@ import {
   discrepanciesFor,
   freezeSnapshot,
   resolveTemplate,
+  templateContentHash,
 } from './checklist-core';
 import { RentalChecklistV2Service } from './checklist.service';
 import { MANAGER_EXCLUDED } from '../../roles/system-roles.seeder';
@@ -87,7 +88,9 @@ function fakeDb(seed: Partial<Record<string, any[]>> = {}) {
 }
 
 const T = 't1';
-const gownTemplate = (over: any = {}) => ({
+// Round 25F D: only an APPROVED template (current version + content hash) is used.
+const approved = (t: any) => ({ ...t, version: t.version ?? 1, approvalStatus: 'APPROVED', approvedVersion: t.version ?? 1, approvedHash: templateContentHash(t) });
+const gownTemplate = (over: any = {}) => approved({
   id: 'tplG', tenantId: T, isActive: true, deletedAt: null, productId: 'p1', categoryId: null, isDefault: false, version: 3,
   items: [
     { id: 'ti1', label: 'Gown', itemType: 'DISPATCH', quantity: 1, isMandatory: true, requiresCondition: true, sortOrder: 0 },
@@ -114,9 +117,9 @@ describe('templates: product → category → shop default (E1)', () => {
   it('picks the most specific active template', async () => {
     const db = fakeDb({
       template: [
-        { id: 'dflt', tenantId: T, isActive: true, deletedAt: null, productId: null, categoryId: null, isDefault: true, items: [] },
-        { id: 'cat', tenantId: T, isActive: true, deletedAt: null, productId: null, categoryId: 'c1', items: [] },
-        { id: 'prod', tenantId: T, isActive: true, deletedAt: null, productId: 'p1', categoryId: null, items: [] },
+        approved({ id: 'dflt', tenantId: T, isActive: true, deletedAt: null, productId: null, categoryId: null, isDefault: true, items: [] }),
+        approved({ id: 'cat', tenantId: T, isActive: true, deletedAt: null, productId: null, categoryId: 'c1', items: [] }),
+        approved({ id: 'prod', tenantId: T, isActive: true, deletedAt: null, productId: 'p1', categoryId: null, items: [] }),
       ],
     });
     expect((await resolveTemplate(db, T, { id: 'p1', categoryId: 'c1' })).source).toBe('PRODUCT');
@@ -343,7 +346,7 @@ describe('round 25C B: what was physically issued is what must come back', () =>
   const audit = { log: jest.fn() };
   it('a category list is found through the parent categories (Wedding Dresses > Ball Gown)', async () => {
     const db = fakeDb({
-      template: [{ id: 'wd', tenantId: T, isActive: true, deletedAt: null, productId: null, categoryId: 'wedding', items: [] }],
+      template: [approved({ id: 'wd', tenantId: T, isActive: true, deletedAt: null, productId: null, categoryId: 'wedding', items: [] })],
       category: [{ id: 'ballgown', parentId: 'wedding' }, { id: 'wedding', parentId: null }],
     } as any);
     expect(await resolveTemplate(db, T, { id: 'p9', categoryId: 'ballgown' })).toMatchObject({ source: 'CATEGORY', template: { id: 'wd' } });
@@ -388,3 +391,119 @@ describe('round 25C B: what was physically issued is what must come back', () =>
     expect(hits).toBe('');
   });
 });
+
+describe('round 25F D: two-person template activation', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { RentalChecklistsService } = require('../../rental-checklists/rental-checklists.service');
+  const draft = (over: any = {}) => ({ ...gownTemplate(), approvalStatus: 'DRAFT', approvedVersion: null, approvedHash: null, draftAuthorIds: ['editor'], ...over });
+  const tplSvc = (row: any) => {
+    const audit = { log: jest.fn(async () => undefined) };
+    const prisma: any = {
+      rentalChecklistTemplate: {
+        findFirst: jest.fn(async () => row),
+        updateMany: jest.fn(async ({ data }: any) => { Object.assign(row, data); return { count: 1 }; }),
+      },
+    };
+    return { svc: new RentalChecklistsService(prisma, { requireId: T } as any, audit as any), prisma, audit };
+  };
+  const confirmAll = (t: any) => ({
+    version: t.version, hash: templateContentHash(t), scope: { productId: t.productId, categoryId: t.categoryId },
+    confirmedItems: t.items.map((i: any) => ({ itemId: i.id, quantity: i.quantity })),
+  });
+
+  it('a DRAFT (or WITHDRAWN) most-specific template is never snapshotted and never falls back to a less specific list', async () => {
+    for (const status of ['DRAFT', 'WITHDRAWN']) {
+      const db = fakeDb({
+        template: [approved({ id: 'dflt', tenantId: T, isActive: true, deletedAt: null, productId: null, categoryId: null, isDefault: true, items: [{ id: 'x', label: 'Bag', itemType: 'DISPATCH', quantity: 1, sortOrder: 0 }] }),
+          draft({ approvalStatus: status })],
+        rental: [rental()],
+      });
+      expect(await resolveTemplate(db, T, { id: 'p1' })).toMatchObject({ template: null, source: 'UNAPPROVED', pending: { id: 'tplG', status } });
+      const res = await freezeSnapshot(db, T, 'r1', null);
+      expect([res.created, res.snapshot, db.t.snapshot.length]).toEqual([false, null, 0]);
+      expect((await code(assertChecklistReleasable(db, T, { id: 'r1', rentalUnitId: 'u1' }, 'clerk')))?.missing).toContain('CHECKLIST_SNAPSHOT');
+    }
+  });
+  it('an approved template whose content changed since approval (hash mismatch) is treated as unapproved', async () => {
+    const t = gownTemplate();
+    t.items[1].quantity = 2; // edited behind the approval
+    const db = fakeDb({ template: [t], rental: [rental()] });
+    expect((await resolveTemplate(db, T, { id: 'p1' })).source).toBe('UNAPPROVED');
+  });
+  it('the snapshot records the approved version + hash; later edits never change it', async () => {
+    const { db, snap } = await frozen();
+    expect([snap.templateVersion, snap.templateHash]).toEqual([3, db.t.template[0].approvedHash]);
+    db.t.template[0].items[1].quantity = 9; db.t.template[0].approvalStatus = 'DRAFT';
+    expect(snap.items[1]).toMatchObject({ label: 'Veil', quantity: 1 });
+  });
+  it('approval by a person who prepared this version → 403 SELF_APPROVAL (SUPER_ADMIN included: no role bypass), audited', async () => {
+    const { svc, audit, prisma } = tplSvc(draft({ draftAuthorIds: ['editor', 'owner-super'] }));
+    for (const who of ['editor', 'owner-super']) {
+      const e: any = await svc.approveTemplate('tplG', confirmAll(draft()), { id: who }).catch((x: any) => x);
+      expect(e?.getResponse?.().code).toBe('SELF_APPROVAL');
+    }
+    expect(prisma.rentalChecklistTemplate.updateMany).not.toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith('TEMPLATE_APPROVAL_DENIED', 'RentalChecklistTemplate', 'tplG', expect.objectContaining({ reason: 'SELF_APPROVAL' }));
+  });
+  it('approval must name the CURRENT version and hash (409 TEMPLATE_CHANGED) and confirm EVERY item quantity and the scope (400)', async () => {
+    const t = draft();
+    const { svc, prisma } = tplSvc(t);
+    const stale: any = await svc.approveTemplate('tplG', { ...confirmAll(t), hash: '0'.repeat(64) }, { id: 'reviewer' }).catch((x: any) => x);
+    expect(stale?.getResponse?.().code).toBe('TEMPLATE_CHANGED');
+    const oldVersion: any = await svc.approveTemplate('tplG', { ...confirmAll(t), version: 2 }, { id: 'reviewer' }).catch((x: any) => x);
+    expect(oldVersion?.getResponse?.().code).toBe('TEMPLATE_CHANGED');
+    const wrongQty: any = await svc.approveTemplate('tplG', { ...confirmAll(t), confirmedItems: confirmAll(t).confirmedItems.map((c: any, n: number) => (n === 1 ? { ...c, quantity: 2 } : c)) }, { id: 'reviewer' }).catch((x: any) => x);
+    expect([wrongQty?.getResponse?.().code, wrongQty?.getResponse?.().problems]).toEqual(['ITEMS_NOT_CONFIRMED', ['Veil × 1']]);
+    const missing: any = await svc.approveTemplate('tplG', { ...confirmAll(t), confirmedItems: confirmAll(t).confirmedItems.slice(1) }, { id: 'reviewer' }).catch((x: any) => x);
+    expect(missing?.getResponse?.().problems).toEqual(['Gown × 1']);
+    const scope: any = await svc.approveTemplate('tplG', { ...confirmAll(t), scope: { productId: 'p2', categoryId: null } }, { id: 'reviewer' }).catch((x: any) => x);
+    expect(scope?.getResponse?.().code).toBe('ITEMS_NOT_CONFIRMED');
+    expect(prisma.rentalChecklistTemplate.updateMany).not.toHaveBeenCalled();
+  });
+  it('a different person who confirms everything approves the exact version + hash (audited with the items)', async () => {
+    const t = draft();
+    const { svc, prisma, audit } = tplSvc(t);
+    await svc.approveTemplate('tplG', confirmAll(t), { id: 'reviewer' });
+    expect(prisma.rentalChecklistTemplate.updateMany.mock.calls[0][0]).toMatchObject({
+      where: { id: 'tplG', tenantId: T, version: 3, approvalStatus: 'DRAFT' },
+      data: { approvalStatus: 'APPROVED', approvedVersion: 3, approvedHash: templateContentHash(t), approvedById: 'reviewer' },
+    });
+    expect(audit.log).toHaveBeenCalledWith('TEMPLATE_APPROVED', 'RentalChecklistTemplate', 'tplG', expect.objectContaining({ version: 3, hash: templateContentHash(t) }));
+    expect(t.approvalStatus).toBe('APPROVED');
+  });
+  it('withdrawal (audited) stops new snapshots', async () => {
+    const t = gownTemplate();
+    const { svc, audit } = tplSvc(t);
+    await svc.withdrawTemplate('tplG', { reason: 'veil no longer lent with this gown' }, { id: 'reviewer' });
+    expect(t.approvalStatus).toBe('WITHDRAWN');
+    expect(audit.log).toHaveBeenCalledWith('TEMPLATE_WITHDRAWN', 'RentalChecklistTemplate', 'tplG', expect.objectContaining({ previousStatus: 'APPROVED' }));
+    const db = fakeDb({ template: [t], rental: [rental()] });
+    expect((await freezeSnapshot(db, T, 'r1', null)).created).toBe(false);
+  });
+  it('an edit of an APPROVED template returns it to DRAFT with the editor as author, audited TEMPLATE_CORRECTED', async () => {
+    const t: any = { ...gownTemplate(), draftAuthorIds: ['editor'] };
+    const audit = { log: jest.fn(async () => undefined) };
+    const tx: any = {
+      rentalChecklistTemplateItem: { deleteMany: jest.fn() },
+      rentalChecklistTemplate: { update: jest.fn(async ({ data }: any) => ({ ...t, ...data, version: t.version + 1, items: t.items })) },
+    };
+    const prisma: any = { rentalChecklistTemplate: { findFirst: jest.fn(async () => t) }, $transaction: async (fn: any) => fn(tx) };
+    const svc = new RentalChecklistsService(prisma, { requireId: T } as any, audit as any);
+    await svc.updateTemplate('tplG', { name: 'Gown set v4' }, 'editor2');
+    expect(tx.rentalChecklistTemplate.update.mock.calls[0][0].data).toMatchObject({ approvalStatus: 'DRAFT', draftAuthorIds: ['editor2'] });
+    expect(audit.log).toHaveBeenCalledWith('TEMPLATE_CORRECTED', 'RentalChecklistTemplate', 'tplG', expect.objectContaining({ fromApprovedVersion: 3, status: 'DRAFT' }));
+  });
+  it('the hash is the one the database computes (same canonical form as naro_r3_template_hash)', () => {
+    const m = readFileSync(join(__dirname, '../../../../../packages/database/prisma/migrations/20261118090000_checklist_template_approval/migration.sql'), 'utf8');
+    expect(m).toMatch(/'scope:' \|\| coalesce\(p_product, ''\)/);
+    expect(m).toMatch(/ORDER BY i\."sortOrder", i\.id COLLATE "C"/);
+    expect(m).toMatch(/SECURITY DEFINER SET search_path/);
+    expect(templateContentHash({ productId: 'p1', categoryId: null, isDefault: false, items: [] })).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it('rentals:checklist-approve exists, is needed to approve, and is never auto-granted (MANAGER_EXCLUDED)', () => {
+    expect(MANAGER_EXCLUDED).toContain('rentals:checklist-approve');
+    const c = readFileSync(join(__dirname, '../../rental-checklists/rental-checklists.controller.ts'), 'utf8');
+    expect(c).toMatch(/@Post\('templates\/:id\/approve'\)\s*\n\s*@RequiresPermission\('rentals:checklist-approve'\)/);
+  });
+});
+

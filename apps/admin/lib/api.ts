@@ -1143,6 +1143,13 @@ class AdminApiClient {
   toggleChecklistTemplate(id: string) {
     return this.patch<any>(`/rental-checklists/templates/${id}/toggle-active`, {});
   }
+  /** Round 25F D: a second person approves the exact version (hash) after confirming every item. */
+  approveChecklistTemplate(id: string, data: { version: number; hash: string; scope: { productId: string | null; categoryId: string | null }; confirmedItems: Array<{ itemId: string; quantity: number }> }) {
+    return this.post<any>(`/rental-checklists/templates/${id}/approve`, data);
+  }
+  withdrawChecklistTemplate(id: string, data: { reason: string }) {
+    return this.post<any>(`/rental-checklists/templates/${id}/withdraw`, data);
+  }
   getActiveChecklistTemplates() {
     return this.get<any[]>('/rental-checklists/templates/active');
   }

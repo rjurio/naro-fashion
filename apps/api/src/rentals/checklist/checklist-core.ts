@@ -1,4 +1,5 @@
 import { ConflictException, ForbiddenException, UnprocessableEntityException } from '@nestjs/common';
+import { createHash } from 'crypto';
 
 /**
  * R3 mandatory rental checklist — the rules, as plain Prisma functions (no
@@ -47,23 +48,51 @@ export async function declareGatePassed(tx: any, step: R3Step, rentalOrderId: st
   await tx.$executeRaw`SELECT set_config(${key}, ${rentalOrderId} || ':' || txid_current()::text || ':' || ${actor}, true)`;
 }
 
-/** The most specific ACTIVE template for a product (product → category → shop default). */
+/**
+ * Round 25F D — the exact content a template approval covers: its scope and
+ * every item's label, quantity, stage, mandatory flag, condition flag and
+ * order. MUST match the database function naro_r3_template_hash
+ * (migration 20261118090000), which re-checks it at every snapshot.
+ */
+export function templateContentHash(t: { productId?: string | null; categoryId?: string | null; isDefault?: boolean | null; items?: any[] }): string {
+  const items = [...(t.items ?? [])].sort((a: any, b: any) =>
+    (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0));
+  const scope = `scope:${t.productId ?? ''}|${t.categoryId ?? ''}|${String(Boolean(t.isDefault))}`;
+  const lines = items.map((i: any) => `${i.label}|${Number(i.quantity ?? 1)}|${i.itemType}|${String(i.isMandatory !== false)}|${String(i.requiresCondition !== false)}|${Number(i.sortOrder ?? 0)}`);
+  return createHash('sha256').update(`${scope}\n${lines.join('\n')}`, 'utf8').digest('hex');
+}
+
+/** Approved for its CURRENT version, and its content still hashes to the approved hash. */
+export function isTemplateApproved(t: any): boolean {
+  return !!t && t.approvalStatus === 'APPROVED' && t.approvedVersion === t.version && !!t.approvedHash
+    && t.approvedHash === templateContentHash(t);
+}
+
+/**
+ * The most specific ACTIVE template for a product (product → category → shop
+ * default). Round 25F D: only an APPROVED template is usable. If the most
+ * specific one exists but is not approved (DRAFT / WITHDRAWN / edited), the
+ * result is UNAPPROVED — never a silent fall-back to a less specific list,
+ * which could omit the product's own pieces.
+ */
 export async function resolveTemplate(db: any, tenantId: string, product: { id: string; categoryId?: string | null }) {
   const base = { tenantId, isActive: true, deletedAt: null };
   const include = { items: { orderBy: { sortOrder: 'asc' } } };
+  const pick = (template: any, source: string) =>
+    isTemplateApproved(template) ? { template, source } : { template: null, source: 'UNAPPROVED', pending: { id: template.id, scope: source, status: template.approvalStatus ?? 'DRAFT', version: template.version } };
   const byProduct = await db.rentalChecklistTemplate.findFirst({ where: { ...base, productId: product.id }, include, orderBy: { updatedAt: 'desc' } });
-  if (byProduct) return { template: byProduct, source: 'PRODUCT' };
+  if (byProduct) return pick(byProduct, 'PRODUCT');
   // The product's category, then its parent categories (a "Wedding Dresses"
   // list covers the gowns filed under "Wedding Dresses > Ball Gown").
   let categoryId = product.categoryId ?? null;
   for (let depth = 0; categoryId && depth < 6; depth++) {
     const byCat = await db.rentalChecklistTemplate.findFirst({ where: { ...base, productId: null, categoryId }, include, orderBy: { updatedAt: 'desc' } });
-    if (byCat) return { template: byCat, source: 'CATEGORY' };
+    if (byCat) return pick(byCat, 'CATEGORY');
     const cat = db.category?.findFirst ? await db.category.findFirst({ where: { id: categoryId, tenantId }, select: { parentId: true } }) : null;
     categoryId = cat?.parentId ?? null;
   }
   const dflt = await db.rentalChecklistTemplate.findFirst({ where: { ...base, productId: null, categoryId: null, isDefault: true }, include, orderBy: { updatedAt: 'desc' } });
-  if (dflt) return { template: dflt, source: 'SHOP_DEFAULT' };
+  if (dflt) return pick(dflt, 'SHOP_DEFAULT');
   return { template: null, source: 'NONE' };
 }
 
@@ -79,11 +108,15 @@ export async function freezeSnapshot(db: any, tenantId: string, rentalOrderId: s
     select: { id: true, productId: true, rentalUnitId: true, product: { select: { id: true, categoryId: true } }, rentalUnit: { select: { code: true } } },
   });
   if (!rental) return { snapshot: null, created: false };
-  const { template, source } = await resolveTemplate(db, tenantId, rental.product);
+  const { template, source, pending } = (await resolveTemplate(db, tenantId, rental.product)) as any;
+  // Round 25F D: the list that applies is not approved yet → no snapshot (the
+  // hand-over gate refuses a booking without one). Once it is approved, the
+  // desk freeze (POST /rental-checklist/rentals/:id/snapshot) takes it.
+  if (source === 'UNAPPROVED') return { snapshot: null, created: false, source, pending };
   try {
     const snapshot = await db.rentalChecklistSnapshot.create({
       data: {
-        tenantId, rentalOrderId, templateId: template?.id ?? null, templateVersion: template?.version ?? null,
+        tenantId, rentalOrderId, templateId: template?.id ?? null, templateVersion: template?.version ?? null, templateHash: template ? template.approvedHash : null,
         source: legacyDesk ? 'LEGACY_DESK' : source, rentalUnitId: rental.rentalUnitId ?? null, unitCode: rental.rentalUnit?.code ?? null,
         frozenById: actorId,
         items: {

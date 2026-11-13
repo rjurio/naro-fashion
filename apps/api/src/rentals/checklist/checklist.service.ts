@@ -181,6 +181,13 @@ export class RentalChecklistV2Service {
       await lockChecklist(tx, rentalOrderId);
       return freezeSnapshot(tx, this.tenantId, rentalOrderId, actor.id, true);
     });
+    if ((res as any).source === 'UNAPPROVED') {
+      // Round 25F D: the list that applies to this item is not approved by a second person yet.
+      throw new ConflictException({
+        statusCode: 409, code: 'TEMPLATE_NOT_APPROVED', pending: (res as any).pending,
+        message: 'The checklist for this item is not approved yet. A second authorised person must approve it before it can be used.',
+      });
+    }
     if (!res.created) throw new ConflictException({ statusCode: 409, code: 'SNAPSHOT_EXISTS', message: 'This booking already has its checklist.' });
     await this.audit.log('CHECKLIST_SNAPSHOT_FROZEN', 'Rental', rentalOrderId, { source: 'LEGACY_DESK', snapshotId: res.snapshot?.id, templateId: res.snapshot?.templateId ?? null });
     return this.state(rentalOrderId);
