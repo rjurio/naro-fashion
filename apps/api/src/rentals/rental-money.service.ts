@@ -147,7 +147,7 @@ export class RentalMoneyService {
         // to the database trigger, which refuses the request otherwise.
         await lockChecklist(tx, rentalOrderId);
         await assertDepositSettleable(tx, tenantId, rentalOrderId, retained);
-        await declareGatePassed(tx, 'deposit', rentalOrderId);
+        await declareGatePassed(tx, 'deposit', rentalOrderId, actor.id);
       }
       const room = dto.kind === 'OVERPAYMENT' ? balances.overpaid : refundableNow(balances, dto.component, requests);
       if (amount + retained > room + 0.001) {

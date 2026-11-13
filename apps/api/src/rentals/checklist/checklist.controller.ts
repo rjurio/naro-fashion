@@ -75,6 +75,13 @@ export class RentalChecklistV2Controller {
     return this.svc.resolveDiscrepancy(id, dto, this.actor(user));
   }
 
+  /** Owner-authorised database gate overrides (read-only; they are created only by the recovery procedure). */
+  @Get('gate-overrides')
+  @RequiresPermission('rentals:handover-safeguard', 'audit:view')
+  gateOverrides() {
+    return this.svc.gateOverrides();
+  }
+
   @Post('backfill')
   @RequiresPermission('rentals:checklist-templates')
   backfill(@Query('dryRun') dryRun: string | undefined, @CurrentUser() user: any) {
