@@ -70,6 +70,9 @@ export default function PosPage() {
   // (GET /pos/capabilities → posRentalsReleased; false until R5). Never
   // cached, never assumed: unknown / offline / an older API = not shown.
   const [posRentalsReleased, setPosRentalsReleased] = useState(false);
+  // Before R5: "open an existing (online) booking" only — payments, hand-over,
+  // return. Same rule: only when the server says so.
+  const [posRentalServicing, setPosRentalServicing] = useState(false);
   useEffect(() => {
     if (!online || !capsKey) return;
     let cancelled = false;
@@ -78,6 +81,7 @@ export default function PosPage() {
       .then((caps) => {
         if (cancelled) return;
         setPosRentalsReleased(caps?.posRentalsReleased === true);
+        setPosRentalServicing(caps?.posRentalServicing === true);
         const v = !!caps?.canConfirmManualPayments;
         setCanConfirmManual(v);
         try { window.localStorage.setItem(capsKey, String(v)); } catch { /* storage blocked */ }
@@ -117,7 +121,8 @@ export default function PosPage() {
   // POS rental MVP: Sale (default, unchanged) or walk-in Rental mode.
   const [mode, setMode] = useState<'SALE' | 'RENTAL'>('SALE');
   // Not released → always Sale (also if the server stops reporting it).
-  const rentalMode = posRentalsReleased && mode === 'RENTAL';
+  const rentalTab = posRentalsReleased || posRentalServicing;
+  const rentalMode = rentalTab && mode === 'RENTAL';
 
   // Load session on mount
   useEffect(() => {
@@ -401,7 +406,7 @@ export default function PosPage() {
           {/* Online / offline + sync status (POS has no TopBar) */}
           <SyncStatusBadge compact />
 
-          {posRentalsReleased && (
+          {rentalTab && (
           <div className="flex rounded-lg border border-[hsl(var(--border))] overflow-hidden text-xs" role="tablist">
             {(['SALE', 'RENTAL'] as const).map((m) => (
               <button
@@ -412,7 +417,7 @@ export default function PosPage() {
                 onClick={() => setMode(m)}
                 className={`px-3 py-1.5 ${mode === m ? 'bg-brand-gold text-white' : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]'}`}
               >
-                {m === 'SALE' ? 'Sale' : 'Rental'}
+                {m === 'SALE' ? 'Sale' : posRentalsReleased ? 'Rental' : 'Rental bookings'}
               </button>
             ))}
           </div>
@@ -478,7 +483,7 @@ export default function PosPage() {
         </div>
       </div>
 
-      {rentalMode && <PosRentalMode sessionId={session.id} online={online} />}
+      {rentalMode && <PosRentalMode sessionId={session.id} online={online} servicingOnly={!posRentalsReleased} />}
 
       {/* Main Content - Two Panels (sale mode; kept mounted so the cart survives a mode switch) */}
       <div className={`flex-1 flex overflow-hidden ${rentalMode ? 'hidden' : ''}`}>

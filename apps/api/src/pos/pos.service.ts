@@ -341,7 +341,9 @@ export class PosService {
     ]);
     // posRentalsReleased: the POS page shows the walk-in Rental mode only when
     // the SERVER says it is released (pos-rental-release.ts; false until R5).
-    return { canConfirmManualPayments: confirm, canReversePayments: reverse, posRentalsReleased: posRentalsEnabled() };
+    // posRentalServicing: before R5 the POS offers only "open an existing
+    // (online) booking" — payments, hand-over, return (pos-rental-release.ts).
+    return { canConfirmManualPayments: confirm, canReversePayments: reverse, posRentalsReleased: posRentalsEnabled(), posRentalServicing: true };
   }
 
   /**

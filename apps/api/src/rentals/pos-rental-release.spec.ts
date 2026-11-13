@@ -10,7 +10,10 @@ import {
   posRentalsEnabled,
   assertPosRentalsReleased,
 } from './pos-rental-release';
+import { Reflector } from '@nestjs/core';
 import { PosRentalsReleaseGuard } from './pos-rentals-release.guard';
+import { POS_RENTAL_SERVICING_ROUTE } from './pos-rental-release';
+import { PosRentalsService } from './pos-rentals.service';
 import { PosRentalsController } from './pos-rentals.controller';
 import { RentalsService } from './rentals.service';
 import { PosService } from '../pos/pos.service';
@@ -62,34 +65,62 @@ describe('release flag', () => {
   });
 });
 
-describe('every /pos-rentals route is refused first, for every caller', () => {
+describe('every walk-in /pos-rentals route is refused first, for every caller', () => {
   const routes = Object.getOwnPropertyNames(PosRentalsController.prototype).filter((k) => k !== 'constructor');
+  const proto: any = PosRentalsController.prototype;
+  const servicing = routes.filter((k) => Reflect.getMetadata(POS_RENTAL_SERVICING_ROUTE, proto[k]) === true);
+  // Existing-booking servicing (online bookings before R5): open, pay, receipt, hand over, return.
+  const SERVICING = ['detail', 'handover', 'lookup', 'pay', 'receipt', 'recordReturn'];
+  // Walk-in only: everything that creates or serves a walk-in booking.
+  const WALK_IN = ['addAddress', 'agreement', 'catalog', 'create', 'createCustomer', 'customers', 'idInPerson', 'quote'];
 
   it('the release guard is the FIRST class-level guard (before JWT, module, admin and permission guards)', () => {
     const guards: any[] = Reflect.getMetadata(GUARDS_METADATA, PosRentalsController) ?? [];
     expect(guards[0]).toBe(PosRentalsReleaseGuard);
     expect(guards.length).toBeGreaterThan(1);
-    expect(routes.length).toBeGreaterThanOrEqual(14); // catalog … return: the whole walk-in surface
+    expect(routes.length).toBe(14); // catalog … return: the whole walk-in surface
   });
 
-  it('no route is exempt (no @Public, no method-level override of the class guards)', () => {
+  it('exactly the six existing-booking routes are servicing routes; every create / walk-in route is not', () => {
+    expect(servicing.sort()).toEqual(SERVICING);
+    expect(routes.filter((k) => !servicing.includes(k)).sort()).toEqual(WALK_IN);
+  });
+
+  it('no route is exempt from the normal guards (no @Public, no method-level override)', () => {
     const src = readFileSync(join(__dirname, 'pos-rentals.controller.ts'), 'utf8');
     expect(src).not.toMatch(/@Public\(\)/);
     expect(src.match(/@UseGuards\(/g)?.length).toBe(2); // class + the 2FA guard ADDED on id-in-person
     expect(src).toMatch(/@UseGuards\(PosRentalsReleaseGuard, JwtAuthGuard, ModuleGuard, AdminGuard, PermissionGuard\)\s*\n@RequiresModule\('rentals'\)\s*\n@Controller\('pos-rentals'\)/);
   });
 
-  it.each([
+  const guard = new PosRentalsReleaseGuard(new Reflector());
+  const ctx = (handler: string, user: any): any => ({
+    getHandler: () => proto[handler],
+    getClass: () => PosRentalsController,
+    switchToHttp: () => ({ getRequest: () => ({ user }) }),
+  });
+  const callers: [string, any][] = [
     ['SUPER_ADMIN', { id: 'a1', isAdmin: true, role: 'SUPER_ADMIN', tenantId: 't1' }],
     ['platform admin', { id: 'p1', isPlatformAdmin: true }],
     ['anonymous', undefined],
-  ])('%s → 404 POS_RENTALS_NOT_RELEASED (the guard reads no user)', (_n, user) => {
-    const ctx: any = { switchToHttp: () => ({ getRequest: () => ({ user }) }) };
-    const g = new PosRentalsReleaseGuard();
-    let err: any;
-    try { (g.canActivate as any)(ctx); } catch (e) { err = e; }
+  ];
+  for (const [who, user] of callers) {
+    it.each(WALK_IN)(`${who} → %s → 404 POS_RENTALS_NOT_RELEASED (the guard reads no user)`, (route) => {
+      let err: any;
+      try { guard.canActivate(ctx(route, user)); } catch (e) { err = e; }
+      expect(notReleased(err)).toBe(true);
+      expect(err.getStatus()).toBe(404);
+    });
+  }
+  it.each(SERVICING)('%s continues to the normal JWT / admin / permission guards', (route) => {
+    expect(guard.canActivate(ctx(route, undefined))).toBe(true);
+  });
+
+  it('a servicing route refuses any booking that is not ONLINE (no walk-in booking is ever served)', async () => {
+    const prisma: any = { rentalOrder: { findFirst: jest.fn(async () => ({ id: 'r1', channel: 'POS', payments: [], refundRequests: [] })) } };
+    const svc: any = new (PosRentalsService as any)(prisma, { requireId: 't1' }, {}, {}, {}, {});
+    const err = await svc.detail('r1').catch((e: any) => e);
     expect(notReleased(err)).toBe(true);
-    expect(err.getStatus()).toBe(404);
   });
 });
 
@@ -149,20 +180,22 @@ describe('defence in depth: the shared booking path refuses a POS booking', () =
 });
 
 describe('the admin POS screen follows the SERVER', () => {
-  it('GET /pos/capabilities reports posRentalsReleased: false (SUPER_ADMIN too)', async () => {
+  it('GET /pos/capabilities: posRentalsReleased false, posRentalServicing true (SUPER_ADMIN too)', async () => {
     const prisma: any = { adminUserRole: { findMany: jest.fn(async () => []) } };
     const svc = new PosService(prisma, { requireId: 't1' } as any);
-    expect(await svc.getCapabilities({ id: 'a1', role: 'SUPER_ADMIN', isAdmin: true, tenantId: 't1' } as any)).toMatchObject({ posRentalsReleased: false });
-    expect(await svc.getCapabilities({ id: 'p1', isPlatformAdmin: true } as any)).toMatchObject({ posRentalsReleased: false });
+    expect(await svc.getCapabilities({ id: 'a1', role: 'SUPER_ADMIN', isAdmin: true, tenantId: 't1' } as any)).toMatchObject({ posRentalsReleased: false, posRentalServicing: true });
+    expect(await svc.getCapabilities({ id: 'p1', isPlatformAdmin: true } as any)).toMatchObject({ posRentalsReleased: false, posRentalServicing: true });
   });
 
   const page = readFileSync(join(__dirname, '..', '..', '..', 'admin', 'app', 'dashboard', 'pos', 'page.tsx'), 'utf8');
-  it('the Rental toggle renders only when the server says released; the walk-in screen is never statically imported', () => {
+  it('the Rental tab renders only when the server says so; before R5 it is servicing-only; never statically imported', () => {
     expect(page).toMatch(/setPosRentalsReleased\(caps\?\.posRentalsReleased === true\)/);
     expect(page).toMatch(/useState\(false\);\s*\n\s*useEffect/); // default: not released
-    expect(page).toMatch(/\{posRentalsReleased && \(\s*\n\s*<div[^>]*role="tablist"/);
-    expect(page).toMatch(/const rentalMode = posRentalsReleased && mode === 'RENTAL';/);
-    expect(page).toMatch(/\{rentalMode && <PosRentalMode /);
+    expect(page).toMatch(/setPosRentalServicing\(caps\?\.posRentalServicing === true\)/);
+    expect(page).toMatch(/const rentalTab = posRentalsReleased \|\| posRentalServicing;/);
+    expect(page).toMatch(/\{rentalTab && \(\s*\n\s*<div[^>]*role="tablist"/);
+    expect(page).toMatch(/const rentalMode = rentalTab && mode === 'RENTAL';/);
+    expect(page).toMatch(/\{rentalMode && <PosRentalMode sessionId=\{session\.id\} online=\{online\} servicingOnly=\{!posRentalsReleased\} \/>\}/);
     expect(page).not.toMatch(/^import PosRentalMode/m);
     expect(page).toMatch(/dynamic\(\(\) => import\('@\/components\/pos-rental\/PosRentalMode'\)/);
     // never read from the offline cache
@@ -185,5 +218,15 @@ describe('offline replay cannot reach walk-in rentals', () => {
     ]) {
       expect(patterns.some((re) => re.test(p))).toBe(false);
     }
+  });
+});
+
+describe('servicing-only POS screen (before R5)', () => {
+  const comp = readFileSync(join(__dirname, '..', '..', '..', 'admin', 'components', 'pos-rental', 'PosRentalMode.tsx'), 'utf8');
+  it('hides the new-booking column, in-person ID, address and agreement print', () => {
+    expect(comp).toMatch(/\{!servicingOnly && \(\s*\n\s*<div className="space-y-3">/);
+    expect(comp).toMatch(/\{!servicingOnly && !rental\.idApproved && \(/);
+    expect(comp).toMatch(/\{!servicingOnly && !rental\.user\?\.addresses\?\.length && \(/);
+    expect(comp).toMatch(/\{!servicingOnly && <Btn data-testid="rental-agreement"/);
   });
 });

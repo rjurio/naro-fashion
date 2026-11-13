@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { posRentalsEnabled, posRentalsNotReleased } from './pos-rental-release';
 import {
   ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsEmail, IsIn, IsNumber, IsOptional, IsString,
   Matches, Max, MaxLength, Min, ValidateNested,
@@ -275,6 +276,8 @@ export class PosRentalsService {
       },
     });
     if (!r) throw new NotFoundException('Rental not found');
+    // Before R5 only ONLINE bookings are serviced here (walk-in creation is refused).
+    if (!posRentalsEnabled() && r.channel !== 'ONLINE') throw posRentalsNotReleased();
     return r;
   }
 

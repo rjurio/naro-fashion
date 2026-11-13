@@ -36,7 +36,13 @@ function Btn({ busy, children, ...p }: React.ButtonHTMLAttributes<HTMLButtonElem
 const inputCls = 'px-2 py-1.5 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))] text-xs';
 const card = 'rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 space-y-2';
 
-export default function PosRentalMode({ sessionId, online }: { sessionId: string; online: boolean }) {
+/**
+ * servicingOnly (R1–R4, walk-in POS rentals not released): only the "open an
+ * existing booking" card — take payments, hand over, record the return,
+ * request a deposit return. No new walk-in booking, no customer registration,
+ * no in-person ID, no agreement print (those are R5 and the server refuses them).
+ */
+export default function PosRentalMode({ sessionId, online, servicingOnly = false }: { sessionId: string; online: boolean; servicingOnly?: boolean }) {
   const { toast } = useToast();
   const [busy, setBusy] = useState<string | null>(null);
   const run = async (tag: string, fn: () => Promise<void>) => {
@@ -92,7 +98,8 @@ export default function PosRentalMode({ sessionId, online }: { sessionId: string
 
   return (
     <div data-testid="rental-mode" className="flex-1 overflow-auto p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {/* -------- left: new booking */}
+      {/* -------- left: new booking (walk-in, R5) */}
+      {!servicingOnly && (
       <div className="space-y-3">
         <div className={card}>
           <div className="text-sm font-semibold">1. Item, size and dates</div>
@@ -227,22 +234,23 @@ export default function PosRentalMode({ sessionId, online }: { sessionId: string
           </Btn>
         </div>
       </div>
+      )}
 
       {/* -------- right: the booking */}
       <div className="space-y-3">
         <div className={card}>
           <div className="flex gap-2">
-            <input data-testid="rental-ref" value={ref} onChange={(e) => setRef(e.target.value)} placeholder="Resume a booking: RNT-…" className={`${inputCls} flex-1`} />
+            <input data-testid="rental-ref" value={ref} onChange={(e) => setRef(e.target.value)} placeholder={servicingOnly ? 'Open a booking: RNT-…' : 'Resume a booking: RNT-…'} className={`${inputCls} flex-1`} />
             <Btn data-testid="rental-open" busy={busy === 'lookup'}disabled={!ref.trim()} onClick={() => run('lookup', async () => setRental(await adminApi.posRentalLookup(ref.trim())))}>Open</Btn>
           </div>
         </div>
-        {rental && <BookingCard rental={rental} sessionId={sessionId} busy={busy} run={run} refresh={refresh} />}
+        {rental && <BookingCard rental={rental} sessionId={sessionId} busy={busy} run={run} refresh={refresh} servicingOnly={servicingOnly} />}
       </div>
     </div>
   );
 }
 
-function BookingCard({ rental, sessionId, busy, run, refresh }: { rental: any; sessionId: string; busy: string | null; run: (t: string, fn: () => Promise<void>) => Promise<void>; refresh: (id?: string) => Promise<void> }) {
+function BookingCard({ rental, sessionId, busy, run, refresh, servicingOnly = false }: { rental: any; sessionId: string; busy: string | null; run: (t: string, fn: () => Promise<void>) => Promise<void>; refresh: (id?: string) => Promise<void>; servicingOnly?: boolean }) {
   const { toast } = useToast();
   const l = rental.ledger;
   const [idNumber, setIdNumber] = useState('');
@@ -297,7 +305,7 @@ function BookingCard({ rental, sessionId, busy, run, refresh }: { rental: any; s
       </table>
       <div className="text-xs">National ID: <b data-testid="rental-id-state">{rental.idApproved ? 'approved' : 'not approved yet'}</b> · Address: {rental.user?.addresses?.length ? 'on file' : 'missing'}</div>
 
-      {!rental.idApproved && (
+      {!servicingOnly && !rental.idApproved && (
         <div className="flex gap-2 text-xs">
           <input data-testid="rental-id-number" value={idNumber} onChange={(e) => setIdNumber(e.target.value)} placeholder="NIDA number (seen in person)" className={`${inputCls} flex-1`} />
           <Btn data-testid="rental-id-verify" busy={busy === 'id'} disabled={idNumber.length < 5} onClick={() => run('id', async () => { await adminApi.posRentalIdInPerson(rental.id, { idType: 'NATIONAL_ID', idNumber }); await refresh(); toast('ID verified in person', 'success'); })}>Verify ID in person</Btn>
@@ -341,7 +349,7 @@ function BookingCard({ rental, sessionId, busy, run, refresh }: { rental: any; s
         </div>
       )}
 
-      {!rental.user?.addresses?.length && (
+      {!servicingOnly && !rental.user?.addresses?.length && (
         <div className="grid grid-cols-4 gap-2 text-xs">
           {(['street', 'city', 'region'] as const).map((k) => (
             <input key={k} data-testid={`rental-addr-${k}`} value={addr[k]} onChange={(e) => setAddr({ ...addr, [k]: e.target.value })} placeholder={k} className={inputCls} />
@@ -351,7 +359,7 @@ function BookingCard({ rental, sessionId, busy, run, refresh }: { rental: any; s
       )}
 
       <div className="flex flex-wrap gap-2 text-xs items-center">
-        <Btn data-testid="rental-agreement" busy={busy === 'agreement'} onClick={printAgreement}>Print agreement</Btn>
+        {!servicingOnly && <Btn data-testid="rental-agreement" busy={busy === 'agreement'} onClick={printAgreement}>Print agreement</Btn>}
         {['DOWN_PAYMENT_PAID', 'FULLY_PAID', 'READY_FOR_PICKUP'].includes(rental.status) && (
           <>
             <input data-testid="rental-unit-code" value={unitCode} onChange={(e) => setUnitCode(e.target.value)} placeholder={rental.rentalUnit ? 'Scan the unit tag' : 'Unit tag (if any)'} className={inputCls} />

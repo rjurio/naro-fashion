@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, SetMetadata } from '@nestjs/common';
 
 /**
  * Walk-in POS rentals — compile-time RELEASE FLAG.
@@ -48,6 +48,20 @@ export function posRentalsNotReleased(): NotFoundException {
     message: 'Walk-in POS rentals are not available in this release.',
   });
 }
+
+/**
+ * Servicing routes (R1–R4): the /pos-rentals routes that act on an EXISTING
+ * booking — open it, take a payment, print a receipt, hand the item over,
+ * record the return. Before R5 every booking is an ONLINE booking (walk-in
+ * creation is refused), and these routes are the only staff screen for
+ * taking in-person money on it, which the R1 hand-over gate requires (full
+ * fee + deposit as ledger payments). They stay behind their own permission
+ * codes (none granted by default). Everything that creates or serves a
+ * WALK-IN booking — catalog, quote, customer search / registration,
+ * address, booking, in-person ID, the walk-in agreement — stays refused.
+ */
+export const POS_RENTAL_SERVICING_ROUTE = 'naro:pos-rental-servicing';
+export const PosRentalServicingRoute = () => SetMetadata(POS_RENTAL_SERVICING_ROUTE, true);
 
 /** Throws 404 POS_RENTALS_NOT_RELEASED unless walk-in POS rentals are released. */
 export function assertPosRentalsReleased(env: NodeJS.ProcessEnv = process.env): void {
