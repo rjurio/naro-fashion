@@ -788,7 +788,8 @@ describe('round 25D E (R1): REFUND_DUE is decided under the money locks, from a 
     jest.spyOn(svc, 'sumCompleted').mockResolvedValue(50);
     jest.spyOn((svc as any).logger, 'warn').mockImplementation(() => undefined);
     await svc.updateRentalPaymentStatus('r1', 't1');
-    expect(prisma.$executeRaw).toHaveBeenCalledTimes(2);
+    // payment:rental + refund:rental (R1), + the request helper's re-entrant refund lock (cancellation workflow)
+    expect(prisma.$executeRaw.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(prisma.rentalOrder.updateMany).toHaveBeenCalledTimes(1);
     expect(prisma.rentalOrder.updateMany.mock.calls[0][0].data).toEqual({ holdState: 'REFUND_DUE', holdExpiresAt: null });
   });
@@ -830,8 +831,12 @@ describe('a payment completing on a booking the expiry job already released', ()
     let reads = 0;
     const prisma: any = {
       // 1st read (outside the lock): still DOWN_PAYMENT_PAID; afterwards (under the lock): CANCELLED.
-      rentalOrder: { findFirst: jest.fn(async () => ({ ...base, status: reads++ === 0 ? 'DOWN_PAYMENT_PAID' : 'CANCELLED' })), updateMany: jest.fn() },
-      payment: { findMany: jest.fn(async () => [{ amount: 100, status: 'COMPLETED', component: 'RENTAL_FEE' }, { amount: 50, status: 'COMPLETED', component: null }]) },
+      rentalOrder: { findFirst: jest.fn(async () => ({ ...base, status: reads++ === 0 ? 'DOWN_PAYMENT_PAID' : 'CANCELLED' })), updateMany: jest.fn(async () => ({ count: 1 })) },
+      payment: {
+        findMany: jest.fn(async () => [{ amount: 100, status: 'COMPLETED', component: 'RENTAL_FEE' }, { amount: 50, status: 'COMPLETED', component: null }]),
+        // R1 (#37): the money held is read under the locks
+        aggregate: jest.fn(async ({ where }: any) => ({ _sum: { amount: where?.status === 'REFUNDED' ? 0 : 150 } })),
+      },
       customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'd1' })) },
       // The cancellation already requested the 100 it counted; the 50 arrived after its count.
       refundRequest: { findMany: jest.fn(async () => [{ component: 'RENTAL_FEE', amount: 100, retainedAmount: 0, status: 'REQUESTED' }]), create: jest.fn(async ({ data }: any) => ({ id: 'q2', ...data })) },
