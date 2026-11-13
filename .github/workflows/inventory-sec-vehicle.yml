@@ -1,6 +1,6 @@
-# CI VEHICLE — never merged (round 25F B, inventory authorization on the production baseline). Runs, on Linux, the R3 real-database
-# acceptance / gate-security / rollback suites and the POS, late-fee and refund
-# regressions against a throwaway Postgres 16 (production's major version),
+# CI VEHICLE — never merged (round 25F, PR #42 inventory authorization + permission-escalation
+# fixes on the production baseline). Runs, on Linux, the inventory-sec and escalation
+# real-database suites against a throwaway Postgres 16 (production's major version),
 # plus production builds. Pull requests only; no secrets; no deploy job.
 name: Inventory-security vehicle — real-database suite + production builds (CI only)
 
@@ -66,7 +66,7 @@ jobs:
           test -f apps/api/dist/main.js
 
       - name: Run the suites
-        run: WT="$GITHUB_WORKSPACE" SUITES="$GITHUB_WORKSPACE/ci-integration" LOGS="$RUNNER_TEMP/it-logs" SUITE_GROUPS="inventory-sec" bash ci-integration/run-linux.sh
+        run: WT="$GITHUB_WORKSPACE" SUITES="$GITHUB_WORKSPACE/ci-integration" LOGS="$RUNNER_TEMP/it-logs" SUITE_GROUPS="inventory-sec escalation" bash ci-integration/run-linux.sh
 
       - name: Keep the logs
         if: always()

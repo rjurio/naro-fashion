@@ -85,6 +85,7 @@ for g in $SUITE_GROUPS; do
         && suite cancellation env IT_JOB_DATABASE_URL="$(RUNTIME_URL it_pos)" node cancellation.it.mjs "$WT" /tmp/ids-can.json \
         && suite cancellation-e node cancellation-e.it.mjs "$WT" /tmp/ids-can.json || missing cancellation ;;
     inventory-sec) fresh it_inv 4135 inventory-sec-seed.js /tmp/ids-inv.json && suite inventory-sec env IT_API=http://localhost:4135/api/v1 node inventory-sec.it.mjs /tmp/ids-inv.json || missing inventory-sec ;;
+    escalation) fresh it_esc 4136 escalation-seed.js /tmp/ids-esc.json && suite escalation env IT_API=http://localhost:4136/api/v1 IT_SCHEMA=it_esc node escalation.it.mjs /tmp/ids-esc.json || missing escalation ;;
     r1-accounting) fresh it_pos 4130 pos-rental-seed.js /tmp/ids-r1.json && suite r1-refund-accounting node r1-refund-accounting.it.mjs /tmp/ids-r1.json || missing r1-refund-accounting ;;
     shift-reconciliation) fresh it_r4 4170 shift-reconciliation-seed.js /tmp/ids-r4.json \
         && suite shift-reconciliation env IT_API=http://localhost:4170/api/v1 IT_SCHEMA=it_r4 node shift-reconciliation.it.mjs /tmp/ids-r4.json || missing shift-reconciliation ;;
