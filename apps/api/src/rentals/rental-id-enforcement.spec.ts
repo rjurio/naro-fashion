@@ -78,8 +78,7 @@ function rentalsFixture(rental: any, opts: { approved: boolean; claim?: number }
     rentalPolicy: { findFirst: jest.fn(async () => null) },
     // cancelling checks whether money is held (REFUND_DUE); none in these scenarios
     payment: { aggregate: jest.fn(async () => ({ _sum: { amount: 0 } })) },
-    $executeRaw: jest.fn(),
-    // R3: closing needs a complete return inspection (tested in checklist specs).
+    // R3: closing needs a complete return inspection (tested in checklist specs); also provides $executeRaw.
     ...completeChecklistMocks(() => prisma),
   };
   // round 25D E: the cancellation's money check + write run in one transaction under the money locks
