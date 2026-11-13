@@ -41,6 +41,12 @@ const PERMISSIONS = [
   // LF-2026-11: the independent approver of late-fee waivers (never auto-granted).
   { code: 'rentals:waive-late-fee', name: 'Approve Late-Fee Waivers (second person)', module: 'rentals', action: 'waive-late-fee' },
   { code: 'rentals:approve-unit-tracking', name: 'Approve Gown Counts (second person)', module: 'rentals', action: 'approve-unit-tracking' },
+  // R3 mandatory checklist (never auto-granted): record hand-over / return
+  // evidence; decide exceptions + discrepancies (a different person); edit
+  // the templates future bookings get.
+  { code: 'rentals:checklist-verify', name: 'Record Rental Checklist Evidence', module: 'rentals', action: 'checklist-verify' },
+  { code: 'rentals:checklist-exception', name: 'Decide Checklist Exceptions and Discrepancies (second person)', module: 'rentals', action: 'checklist-exception' },
+  { code: 'rentals:checklist-templates', name: 'Edit Rental Checklist Templates', module: 'rentals', action: 'checklist-templates' },
   // customers
   { code: 'customers:view', name: 'View Customers', module: 'customers', action: 'view' },
   { code: 'customers:suspend', name: 'Suspend Customers', module: 'customers', action: 'suspend' },

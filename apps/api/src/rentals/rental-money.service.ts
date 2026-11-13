@@ -11,6 +11,10 @@ import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 import { claimsOverpayment, overpaymentRefundableNow, refundableNow, rentalBalances, RENTAL_COMPONENTS } from './rental-ledger';
 import { normalizeReference } from '../pos/payment-verification';
+import { assertDepositSettleable, declareGatePassed, lockChecklist } from './checklist/checklist-core';
+
+/** After these statuses the deposit is settled only on a complete return inspection (R3). */
+const AFTER_HANDOVER = ['ITEM_DISPATCHED', 'ACTIVE', 'RETURNED', 'INSPECTION', 'CLOSED'];
 
 export const REFUND_KINDS = ['CANCELLATION', 'DEPOSIT_RETURN', 'OVERPAYMENT'] as const;
 export const REFUND_PAYOUT_METHODS = ['CASH', 'MOBILE_MONEY', 'BANK_TRANSFER'] as const;
@@ -137,6 +141,14 @@ export class RentalMoneyService {
       if (dto.kind === 'DEPOSIT_RETURN' && !['RETURNED', 'INSPECTION', 'CLOSED', 'CANCELLED'].includes(rental.status)) {
         throw new BadRequestException('The deposit is settled after the item is returned (RETURNED / INSPECTION / CLOSED).');
       }
+      if (dto.kind === 'DEPOSIT_RETURN' && AFTER_HANDOVER.includes(rental.status)) {
+        // R3: complete inspection, no open discrepancy, and any amount kept
+        // backed by a discrepancy a reviewer resolved as deducted. Declared
+        // to the database trigger, which refuses the request otherwise.
+        await lockChecklist(tx, rentalOrderId);
+        await assertDepositSettleable(tx, tenantId, rentalOrderId, retained);
+        await declareGatePassed(tx, 'deposit', rentalOrderId);
+      }
       const room = dto.kind === 'OVERPAYMENT' ? overpaymentRefundableNow(balances, requests) : refundableNow(balances, dto.component, requests);
       if (amount + retained > room + 0.001) {
         throw new BadRequestException(
@@ -176,6 +188,13 @@ export class RentalMoneyService {
     if (r.requestedById === actor.id) {
       await this.audit.log('REFUND_APPROVAL_DENIED', 'RefundRequest', id, { reason: 'SELF_APPROVAL' });
       throw new ForbiddenException({ statusCode: 403, code: 'SELF_APPROVAL', message: 'A refund must be approved by a different person than the one who requested it.' });
+    }
+    if (r.kind === 'DEPOSIT_RETURN') {
+      // R3: re-checked at approval (a later return correction can reopen a discrepancy).
+      const rental = await this.prisma.rentalOrder.findFirst({ where: { id: r.rentalOrderId, tenantId: this.tenantContext.requireId }, select: { status: true } });
+      if (rental && AFTER_HANDOVER.includes(rental.status)) {
+        await assertDepositSettleable(this.prisma, this.tenantContext.requireId, r.rentalOrderId, Number(r.retainedAmount ?? 0));
+      }
     }
     const res = await this.prisma.refundRequest.updateMany({
       where: { id, tenantId: this.tenantContext.requireId, status: 'REQUESTED' },
