@@ -1,3 +1,4 @@
+import { effectivePermissionCodes } from '../auth/util/permission-check';
 import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
@@ -117,13 +118,31 @@ export class RolesService {
     });
   }
 
-  async addPermissions(id: string, permissionIds: string[]) {
+  async addPermissions(id: string, permissionIds: string[], actor?: any) {
     // Mirror removePermission's guard. Without this, a tenant admin could
     // grant arbitrary permissions to a SHARED system role (tenantId=null,
     // SUPER_ADMIN/MANAGER/STAFF) and escalate privileges platform-wide, or
     // mutate another tenant's custom role by id.
     const role = await this.resolveVisibleRole(id);
     if (role.isSystem) throw new ForbiddenException('Cannot modify permissions on system roles');
+    // Security fix (no self-granted bypass): below SUPER_ADMIN, nobody adds
+    // permissions to a role they hold themselves, nor grants a permission
+    // they don't hold.
+    if (!(actor?.isPlatformAdmin || actor?.role === 'SUPER_ADMIN')) {
+      if (!actor?.id) throw new ForbiddenException('Unknown actor.');
+      const holds = await this.prisma.adminUserRole.findFirst({ where: { adminUserId: actor.id, roleId: id } });
+      if (holds) {
+        await this.auditService.log('ADD_PERMISSIONS_DENIED', 'Role', id, { reason: 'OWN_ROLE' });
+        throw new ForbiddenException({ statusCode: 403, code: 'OWN_ROLE', message: 'You cannot add permissions to a role you hold yourself.' });
+      }
+      const wanted = await this.prisma.permission.findMany({ where: { id: { in: permissionIds } }, select: { code: true } });
+      const mine = await effectivePermissionCodes(this.prisma as any, actor.id, actor.tenantId ?? null);
+      const beyond = wanted.map((w) => w.code).filter((c) => !mine.has(c));
+      if (beyond.length) {
+        await this.auditService.log('ADD_PERMISSIONS_DENIED', 'Role', id, { reason: 'BEYOND_OWN', codes: beyond });
+        throw new ForbiddenException({ statusCode: 403, code: 'BEYOND_OWN_PERMISSIONS', codes: beyond, message: `You can only grant permissions you hold yourself (${beyond.join(', ')}).` });
+      }
+    }
     await this.prisma.rolePermission.createMany({
       data: permissionIds.map(pid => ({ roleId: id, permissionId: pid })),
       skipDuplicates: true,
