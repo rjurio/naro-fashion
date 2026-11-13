@@ -808,9 +808,10 @@ describe('a payment completing on a booking the expiry job already released', ()
         findMany: jest.fn(async () => [{ amount: 250 }]),
       },
       customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'd1' })) },
+      refundRequest: { findMany: jest.fn(async () => []), create: jest.fn() },
       $executeRaw: jest.fn(),
     };
-    prisma.$transaction = jest.fn(async (cb: any) => cb(prisma));
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     const svc = new PaymentSettlementService(prisma);
     jest.spyOn(svc, 'sumCompleted').mockResolvedValue(250);
     const warn = jest.spyOn((svc as any).logger, 'warn').mockImplementation(() => undefined);
@@ -820,5 +821,32 @@ describe('a payment completing on a booking the expiry job already released', ()
     expect(u.where).toMatchObject({ id: 'r1', tenantId: 't1', status: 'CANCELLED' });
     expect(u.data).toEqual({ holdState: 'REFUND_DUE', holdExpiresAt: null }); // status stays CANCELLED
     expect(warn.mock.calls[0][0]).toMatch(/REVIEW: rental RNT-1 is CANCELLED .*refund review/);
+  });
+
+  it('round 25D E: a cancellation committing concurrently (status read BEFORE the lock is stale) — the check re-reads under the refund lock, requests the new money and never advances the booking', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { PaymentSettlementService } = require('../payments/payment-settlement.service');
+    const base = { id: 'r1', rentalNumber: 'RNT-2', downPaymentAmount: 100, totalRentalPrice: 400, damageDeposit: 200, lateFee: 0, userId: 'u1', tenantId: 't1' };
+    let reads = 0;
+    const prisma: any = {
+      // 1st read (outside the lock): still DOWN_PAYMENT_PAID; afterwards (under the lock): CANCELLED.
+      rentalOrder: { findFirst: jest.fn(async () => ({ ...base, status: reads++ === 0 ? 'DOWN_PAYMENT_PAID' : 'CANCELLED' })), updateMany: jest.fn() },
+      payment: { findMany: jest.fn(async () => [{ amount: 100, status: 'COMPLETED', component: 'RENTAL_FEE' }, { amount: 50, status: 'COMPLETED', component: null }]) },
+      customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'd1' })) },
+      // The cancellation already requested the 100 it counted; the 50 arrived after its count.
+      refundRequest: { findMany: jest.fn(async () => [{ component: 'RENTAL_FEE', amount: 100, retainedAmount: 0, status: 'REQUESTED' }]), create: jest.fn(async ({ data }: any) => ({ id: 'q2', ...data })) },
+      $executeRaw: jest.fn(),
+    };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
+    const svc = new PaymentSettlementService(prisma);
+    jest.spyOn(svc, 'sumCompleted').mockResolvedValue(150);
+    jest.spyOn((svc as any).logger, 'warn').mockImplementation(() => undefined);
+    await svc.updateRentalPaymentStatus('r1', 't1');
+    expect(prisma.$executeRaw).toHaveBeenCalled(); // the booking's refund lock
+    expect(prisma.refundRequest.create).toHaveBeenCalledTimes(1);
+    expect(prisma.refundRequest.create.mock.calls[0][0].data).toMatchObject({ kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 50, requestedById: 'SYSTEM:LATE_PAYMENT' });
+    // only the REFUND_DUE flag is written — the booking is never advanced
+    expect(prisma.rentalOrder.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.rentalOrder.updateMany.mock.calls[0][0].data).toEqual({ holdState: 'REFUND_DUE', holdExpiresAt: null });
   });
 });

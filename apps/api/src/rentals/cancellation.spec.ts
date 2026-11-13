@@ -81,7 +81,7 @@ describe('structured reasons and where they are set', () => {
     expect(svc).toMatch(/status === 'CANCELLED'\) \{\s*\/\/[^\n]*\n[^\n]*\n[^\n]*\n\s*cancellationRefunds = await requestCancellationRefunds\(tx,/);
     expect(svc).toMatch(/status === 'CANCELLED' \? await this\.prisma\.\$transaction\(write\)/);
     expect(read('../scheduler/scheduler.service.ts')).toMatch(/requestCancellationRefunds\(tx, r\.tenantId, r\.id, SYSTEM_REQUESTER\.HOLD_EXPIRY/);
-    expect(read('../payments/payment-settlement.service.ts')).toMatch(/requestCancellationRefunds\(tx, tenantId, rentalOrderId, SYSTEM_REQUESTER\.LATE_PAYMENT/);
+    expect(read('../payments/payment-settlement.service.ts')).toMatch(/requestCancellationRefunds\(\s*tx, tenantId, rental\.id, SYSTEM_REQUESTER\.LATE_PAYMENT/);
     const core = read('cancellation.ts');
     expect(core).not.toMatch(/payment\.create|status: 'PAID'|REFUNDED'/);
     expect(core).toMatch(/retainedAmount: 0/);
