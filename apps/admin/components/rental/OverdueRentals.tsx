@@ -32,7 +32,10 @@ function mapRentalToOverdue(rental: any): OverdueItem {
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   returnDate.setHours(0, 0, 0, 0);
-  const daysOverdue = Math.max(0, Math.ceil((now.getTime() - returnDate.getTime()) / (1000 * 60 * 60 * 24)));
+  // LF-2026-11: the server's count (whole Tanzanian calendar days, as the late fee) — never the browser's clock / time zone.
+  const daysOverdue = rental.daysLate != null
+    ? Number(rental.daysLate)
+    : Math.max(0, Math.ceil((now.getTime() - returnDate.getTime()) / (1000 * 60 * 60 * 24)));
 
   const user = rental.user || {};
   const product = rental.product || {};
