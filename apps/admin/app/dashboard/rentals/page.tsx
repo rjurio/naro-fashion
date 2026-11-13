@@ -20,6 +20,7 @@ import { useStaleRecordDialog } from '@/components/offline/StaleRecordDialog';
 import { useToast } from '@/contexts/ToastContext';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import RentalHoldBanner from '@/components/rental/RentalHoldBanner';
+import ChecklistPanel from '@/components/rental-checklist/ChecklistPanel';
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1').replace('/api/v1', '');
 
@@ -50,31 +51,15 @@ interface Rental {
   [key: string]: unknown;
 }
 
-interface ChecklistEntry {
-  id: string;
-  label: string;
-  itemType: string;
-  isChecked: boolean;
-  checkedAt: string | null;
-  checkedBy: { id: string; firstName: string; lastName: string } | null;
-  notes: string | null;
-  sortOrder: number;
-}
-
-interface Template {
-  id: string;
-  name: string;
-  isActive: boolean;
-  items: { itemType: string }[];
-}
-
-type TabKey = 'active' | 'requests' | 'overdue' | 'cancelled';
+type TabKey = 'active' | 'requests' | 'overdue' | 'returns' | 'cancelled';
 
 
 const tabs: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: 'active', label: 'Active Rentals', icon: CalendarClock },
   { key: 'requests', label: 'Requests', icon: ClipboardCheck },
   { key: 'overdue', label: 'Overdue', icon: AlertTriangle },
+  // R3: returned items wait here for the return inspection and discrepancy decisions before closing.
+  { key: 'returns', label: 'Returns & Inspection', icon: RotateCcw },
   { key: 'cancelled', label: 'Cancelled', icon: Ban },
 ];
 
@@ -86,161 +71,6 @@ const REGIONS = [
   'Rukwa', 'Ruvuma', 'Shinyanga', 'Simiyu', 'Singida', 'Songwe', 'Tabora',
   'Tanga', 'Unguja North', 'Unguja South', 'Zanzibar Central/South',
 ];
-
-function ChecklistSection({ rentalId, online }: { rentalId: string; online: boolean }) {
-  const [entries, setEntries] = useState<ChecklistEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [showAssign, setShowAssign] = useState(false);
-  const [assigning, setAssigning] = useState(false);
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await adminApi.getRentalChecklist(rentalId);
-        setEntries(Array.isArray(data) ? data : []);
-      } catch {
-        setEntries([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  }, [rentalId]);
-
-  const loadTemplates = async () => {
-    if (templates.length > 0) { setShowAssign(true); return; }
-    try {
-      const data = await adminApi.getActiveChecklistTemplates();
-      setTemplates(Array.isArray(data) ? data : []);
-      setShowAssign(true);
-    } catch { setTemplates([]); setShowAssign(true); }
-  };
-
-  const handleAssign = async (templateId: string) => {
-    setAssigning(true);
-    try {
-      const newEntries = await adminApi.assignChecklist(rentalId, templateId);
-      setEntries(Array.isArray(newEntries) ? newEntries : []);
-      setShowAssign(false);
-    } catch (err) {
-      console.error('Failed to assign checklist:', err);
-    } finally { setAssigning(false); }
-  };
-
-  const handleToggleItem = async (entry: ChecklistEntry) => {
-    try {
-      const updated = entry.isChecked
-        ? await adminApi.uncheckItem(entry.id)
-        : await adminApi.checkItem(entry.id);
-      setEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, ...updated } : e)));
-    } catch (err) { console.error('Failed to toggle item:', err); }
-  };
-
-  if (loading) {
-    return <div className="flex items-center justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-brand-gold" /></div>;
-  }
-
-  const dispatchItems = entries.filter((e) => e.itemType === 'DISPATCH');
-  const returnItems = entries.filter((e) => e.itemType === 'RETURN');
-
-  const renderGroup = (title: string, items: ChecklistEntry[], color: string) => {
-    if (items.length === 0) return null;
-    const checked = items.filter((i) => i.isChecked).length;
-    return (
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h4 className={`text-sm font-semibold ${color}`}>{title}</h4>
-          <span className="text-xs text-[hsl(var(--muted-foreground))]">{checked}/{items.length} completed</span>
-        </div>
-        <div className="w-full bg-[hsl(var(--muted))] rounded-full h-1.5">
-          <div className={`h-1.5 rounded-full transition-all ${title === 'Dispatch' ? 'bg-blue-500' : 'bg-purple-500'}`}
-            style={{ width: `${items.length > 0 ? (checked / items.length) * 100 : 0}%` }} />
-        </div>
-        <ul className="space-y-1.5">
-          {items.map((entry) => (
-            <li key={entry.id} className="flex items-start gap-3 group">
-              <button
-                onClick={() => handleToggleItem(entry)}
-                disabled={!online}
-                title={needsInternetTitle(online, entry.isChecked ? 'Uncheck' : 'Check')}
-                className="mt-0.5 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {entry.isChecked
-                  ? <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-                  : <Circle className="w-5 h-5 text-[hsl(var(--muted-foreground))] group-hover:text-brand-gold transition-colors" />}
-              </button>
-              <div className="flex-1 min-w-0">
-                <span className={`text-sm ${entry.isChecked ? 'line-through text-[hsl(var(--muted-foreground))]' : 'text-[hsl(var(--foreground))]'}`}>{entry.label}</span>
-                {entry.isChecked && entry.checkedBy && (
-                  <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                    by {entry.checkedBy.firstName} {entry.checkedBy.lastName}
-                    {entry.checkedAt && ` · ${new Date(entry.checkedAt).toLocaleString()}`}
-                  </p>
-                )}
-                {entry.notes && <p className="text-xs text-[hsl(var(--muted-foreground))] italic">{entry.notes}</p>}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  };
-
-  return (
-    <div className="space-y-4">
-      {entries.length === 0 ? (
-        <div className="text-center py-4">
-          <ClipboardList className="w-8 h-8 mx-auto text-[hsl(var(--muted-foreground))] mb-2" />
-          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-3">No checklist assigned yet</p>
-          <Button onClick={loadTemplates} disabled={!online} title={needsInternetTitle(online)} className="text-sm"><Plus className="w-4 h-4" /> Assign Checklist Template</Button>
-        </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {renderGroup('Dispatch', dispatchItems, 'text-blue-600 dark:text-blue-400')}
-            {renderGroup('Return', returnItems, 'text-purple-600 dark:text-purple-400')}
-          </div>
-          <div className="pt-2 border-t border-[hsl(var(--border))]">
-            <button onClick={loadTemplates} disabled={!online} title={needsInternetTitle(online)} className="text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] underline disabled:opacity-50 disabled:cursor-not-allowed">
-              Assign additional checklist template
-            </button>
-          </div>
-        </>
-      )}
-      {showAssign && (
-        <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold text-[hsl(var(--foreground))]">Select Active Template</h4>
-            <button onClick={() => setShowAssign(false)} className="text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">Cancel</button>
-          </div>
-          {templates.length === 0 ? (
-            <p className="text-sm text-[hsl(var(--muted-foreground))]">No active templates available.</p>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {templates.map((t) => {
-                const dc = (t.items || []).filter((i) => i.itemType === 'DISPATCH').length;
-                const rc = (t.items || []).filter((i) => i.itemType === 'RETURN').length;
-                return (
-                  <button key={t.id} onClick={() => handleAssign(t.id)} disabled={assigning || !online}
-                    className="flex items-center gap-3 p-3 rounded-lg border border-[hsl(var(--border))] hover:border-brand-gold hover:bg-brand-gold/5 transition-colors text-left">
-                    <ClipboardList className="w-5 h-5 text-brand-gold flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-[hsl(var(--foreground))] truncate">{t.name}</p>
-                      <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                        {dc > 0 && `${dc} dispatch`}{dc > 0 && rc > 0 && ' · '}{rc > 0 && `${rc} return`}{dc === 0 && rc === 0 && 'No items'}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function RentalDetailsSection({ rental, onUpdate, online }: { rental: Rental; onUpdate: (updated: Partial<Rental>) => void; online: boolean }) {
   const [editing, setEditing] = useState(false);
@@ -697,6 +527,7 @@ export default function RentalsPage() {
     if (activeTab === 'active') return matchesSearch && ACTIVE_STATUSES.includes(r.status) && !OVERDUE_CHECK(r);
     if (activeTab === 'requests') return matchesSearch && REQUEST_STATUSES.includes(r.status);
     if (activeTab === 'overdue') return matchesSearch && OVERDUE_CHECK(r);
+    if (activeTab === 'returns') return matchesSearch && ['RETURNED', 'INSPECTION'].includes(r.status);
     if (activeTab === 'cancelled') return matchesSearch && r.status === 'CANCELLED';
     return matchesSearch;
   });
@@ -705,6 +536,7 @@ export default function RentalsPage() {
     active: rentals.filter((r) => ACTIVE_STATUSES.includes(r.status) && !OVERDUE_CHECK(r)).length,
     requests: rentals.filter((r) => REQUEST_STATUSES.includes(r.status)).length,
     overdue: rentals.filter((r) => OVERDUE_CHECK(r)).length,
+    returns: rentals.filter((r) => ['RETURNED', 'INSPECTION'].includes(r.status)).length,
     cancelled: rentals.filter((r) => r.status === 'CANCELLED').length,
   };
 
@@ -816,9 +648,9 @@ export default function RentalsPage() {
                     <div>
                       <div className="flex items-center gap-2 mb-4">
                         <ClipboardList className="w-4 h-4 text-brand-gold" />
-                        <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Dispatch & Return Checklist</h3>
+                        <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Hand-over & Return Checklist</h3>
                       </div>
-                      <ChecklistSection rentalId={rental.id} online={online} />
+                      <ChecklistPanel rentalId={rental.id} online={online} onChanged={() => fetchRentals()} />
                     </div>
                   </div>
                 )}
