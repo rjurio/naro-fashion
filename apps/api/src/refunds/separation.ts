@@ -33,7 +33,7 @@ export async function assertPayerIndependent(r: SeparationRequest, actorId: stri
     throw new ForbiddenException({
       statusCode: 403,
       code: 'PAYOUT_BY_APPROVER',
-      message: 'The person who approved a refund cannot also pay it out. Ask another member of staff with payments:manage.',
+      message: 'The person who approved a refund cannot also pay it out. Ask another member of staff who pays out refunds (refunds:payout).',
     });
   }
 }

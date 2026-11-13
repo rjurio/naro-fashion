@@ -193,3 +193,8 @@ Safety net for the service-layer tenant-scoping invariant (a correctly guarded r
 
 ## Offline sync contract (Oct 2026)
 - `Idempotency-Key` header on admin mutations is honoured globally (`src/idempotency/`). `expectedUpdatedAt` (products/categories/expenses PATCH) and `expectedStatus` (orders/rentals status) return 409 `{ code:'CONFLICT', current }`. Client ids on creates. Offline POS sales (`offline`, `clientCreatedAt`, `sessionId`). `GET /sync/changes`. Details: root CLAUDE.md → "Admin Offline Mode + Sync". When adding a new offline-writable endpoint, give it the same concurrency field and keep it idempotent-safe.
+
+## Refund payout permission (Nov 2026, local branch `local/refund-payout-permission`)
+- `refunds:payout` = payout-only: `PATCH /refund-requests/:id/pay|fail`, `PATCH /rental-money/refund-requests/:id/pay|fail`, plus the refund lists/reads. Nothing else (no request, approve, reject, retry, `/payments`, reversals, payment methods). `payments:manage` keeps the same payout routes. Both codes live in `refunds/payout-permission.ts` (`REFUND_PAYOUT_PERMISSIONS`); `refunds:payout` is in `MANAGER_EXCLUDED` (never auto-granted).
+- Retry (`POST /refund-requests/:id/retry`) creates a NEW request (the caller becomes the requester), so it stays with the requesting codes (`orders:refund` / `pos:refund` / `pos:layaway-cancel`).
+- Separation rules (`refunds/separation.ts` + trigger `naro_r3_refund_separation`) are about people, not permissions: they bind `refunds:payout`, `payments:manage` and SUPER_ADMIN identically. Spec: `refunds/refund-payout-permission.spec.ts` (route matrix through the real PermissionGuard + a shape check that no other controller references the code).

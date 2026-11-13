@@ -4,9 +4,10 @@ import { AdminGuard } from '../auth/guards/admin.guard';
 import { PermissionGuard } from '../auth/guards/permission.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { REFUND_PAYOUT_PERMISSIONS } from './payout-permission';
 import { DecideRefundDto, ListRefundsQuery, PayRefundDto, ReasonDto, RefundRequestsService } from './refund-requests.service';
 
-const REFUND_ROLES = ['refunds:approve', 'payments:manage', 'orders:refund', 'pos:refund', 'rentals:refund-request', 'pos:layaway-cancel'];
+const REFUND_ROLES = ['refunds:approve', 'payments:manage', 'refunds:payout', 'orders:refund', 'pos:refund', 'rentals:refund-request', 'pos:layaway-cancel'];
 
 /**
  * Unified refund workflow (R1b): every request — rental, online order, POS
@@ -45,17 +46,19 @@ export class RefundRequestsController {
   }
 
   @Patch(':id/pay')
-  @RequiresPermission('payments:manage')
+  @RequiresPermission(...REFUND_PAYOUT_PERMISSIONS)
   pay(@Param('id') id: string, @Body() dto: PayRefundDto, @CurrentUser() user: any) {
     return this.refunds.pay(id, dto, user);
   }
 
   @Patch(':id/fail')
-  @RequiresPermission('payments:manage')
+  @RequiresPermission(...REFUND_PAYOUT_PERMISSIONS)
   fail(@Param('id') id: string, @Body() dto: ReasonDto, @CurrentUser() user: any) {
     return this.refunds.fail(id, dto, user);
   }
 
+  // A retry CREATES a new request (the caller becomes its requester), so it
+  // stays with the requesting permissions — never refunds:payout.
   @Post(':id/retry')
   @RequiresPermission('orders:refund', 'pos:refund', 'pos:layaway-cancel')
   retry(@Param('id') id: string, @Body() dto: ReasonDto, @CurrentUser() user: any) {

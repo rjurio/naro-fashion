@@ -36,7 +36,8 @@ const normRef = (r?: string | null) => (r && r.trim() ? r.trim().toUpperCase().r
  * tested service (RentalMoneyService) and are delegated to it; order, POS-sale
  * and layaway requests are handled here with exactly the same rules:
  *  - approve / reject: `refunds:approve`, never the requester (403 SELF_APPROVAL);
- *  - pay: `payments:manage`, never the requester (403 PAYOUT_BY_REQUESTER);
+ *  - pay / fail: `refunds:payout` (payout-only) or `payments:manage`; never the
+ *    requester (403 PAYOUT_BY_REQUESTER) nor the approver (403 PAYOUT_BY_APPROVER);
  *    claimed APPROVED → PAYING (compare-and-swap) so a double click or a
  *    second payer can't pay twice; the payout row is linked one-to-one
  *    (Payment.refundRequestId unique); cash leaves the PAYER's own open shift;
