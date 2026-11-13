@@ -75,10 +75,19 @@ printf 'setInterval(() => {}, 1e9);
 check "a NARO-named app in the ROOT daemon → refused" '! guard && grep -q "runs OUTSIDE pm2-naro.service" /tmp/guard.out'
 (cd "$APP" && "$PM2BIN" delete naro-admin >/dev/null 2>&1; "$PM2BIN" save >/dev/null)
 check "after removing it → passes again" 'guard'
-sudo -u naro -H env PATH="$NODEDIR:/usr/bin:/bin" PM2_HOME=/tmp/naro-stray "$PM2BIN" ping >/dev/null 2>&1; sleep 2
-check "the stray naro daemon really runs (set-up)" 'pgrep -u naro -f "God Daemon \(/tmp/naro-stray\)"'
+# A stray naro daemon, as an operator's stray "pm2 ..." under the naro account would spawn.
+sudo -u naro -H env PATH="$NODEDIR:/usr/local/bin:/usr/bin:/bin" PM2_HOME=/tmp/naro-stray "$PM2BIN" ping > /tmp/stray.out 2>&1 || true
+for _ in $(seq 1 10); do pgrep -u naro -f 'God Daemon [(]/tmp/naro-stray[)]' >/dev/null && break; sleep 1; done
+if pgrep -u naro -f 'God Daemon [(]/tmp/naro-stray[)]' >/dev/null; then
+  pass "the stray naro daemon really runs (set-up: real pm2 daemon)"; STRAY=real
+else
+  echo "      | pm2 ping as naro did not leave a daemon: $(tr '
+' ' ' < /tmp/stray.out | cut -c1-200)"
+  sudo -u naro bash -c 'exec -a "PM2 v6.0.14: God Daemon (/tmp/naro-stray)" sleep 300' & STRAY_PID=$!; sleep 1
+  check "the stray naro daemon runs (set-up: stand-in process with the God Daemon title)" 'pgrep -u naro -f "God Daemon [(]/tmp/naro-stray[)]"'; STRAY=standin
+fi
 check "a second naro daemon → refused" '! guard && grep -q "another naro PM2 God Daemon" /tmp/guard.out'
-sudo -u naro -H env PATH="$NODEDIR:/usr/bin:/bin" PM2_HOME=/tmp/naro-stray "$PM2BIN" kill >/dev/null 2>&1
+if [ "$STRAY" = real ]; then sudo -u naro -H env PATH="$NODEDIR:/usr/local/bin:/usr/bin:/bin" PM2_HOME=/tmp/naro-stray "$PM2BIN" kill >/dev/null 2>&1; else pkill -u naro -f 'God Daemon [(]/tmp/naro-stray[)]'; fi; sleep 1
 check "after killing it → passes again" 'guard'
 chmod 664 /etc/naro-pm2.env
 check "switch file writable by group → refused" '! guard && grep -q "must be owned by root" /tmp/guard.out'
