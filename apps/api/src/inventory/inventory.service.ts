@@ -134,8 +134,10 @@ export class InventoryService {
       targetVariantId = variants[0].id;
     }
 
+    // The variant must belong to THIS product (else the ledger row would name
+    // the wrong product).
     const variant = await this.prisma.productVariant.findFirst({
-      where: { id: targetVariantId, tenantId },
+      where: { id: targetVariantId, tenantId, productId: dto.productId },
       select: { id: true },
     });
     if (!variant) throw new NotFoundException('Variant not found');
