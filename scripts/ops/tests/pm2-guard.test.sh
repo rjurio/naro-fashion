@@ -407,7 +407,7 @@ make_app() {
   rewrite "$A/deploy.sh" "$A/deploy.sh.tmp" 'unset PM2_GUARD_TEST' ': # test harness keeps PM2_GUARD_TEST'
   mv "$A/deploy.sh.tmp" "$A/deploy.sh"
   rewrite "$REPO/scripts/ops/rollback.sh" "$A/scripts/ops/rollback.sh" 'unset PM2_GUARD_TEST' ': # test harness keeps PM2_GUARD_TEST'
-  cp "$REPO/scripts/ops/deploy-lib.sh" "$REPO/scripts/ops/pm2-guard.sh" "$A/scripts/ops/"
+  cp "$REPO/scripts/ops/deploy-lib.sh" "$REPO/scripts/ops/pm2-guard.sh" "$REPO/scripts/ops/db-roles-lib.sh" "$A/scripts/ops/"
   cp "$REPO/ecosystem.config.js" "$A/"
   cat > "$A/scripts/ops/pg-backup.sh" <<'EOS'
 #!/usr/bin/env bash
@@ -431,7 +431,7 @@ EOS
   echo 2 > "$A/VERSION"
   # v2 = guarded tooling (current scripts)
   rewrite "$REPO/scripts/ops/rollback.sh" "$A/scripts/ops/rollback.sh" 'unset PM2_GUARD_TEST' ': # test harness keeps PM2_GUARD_TEST'
-  cp "$REPO/scripts/ops/deploy-lib.sh" "$REPO/scripts/ops/pm2-guard.sh" "$A/scripts/ops/"
+  cp "$REPO/scripts/ops/deploy-lib.sh" "$REPO/scripts/ops/pm2-guard.sh" "$REPO/scripts/ops/db-roles-lib.sh" "$A/scripts/ops/"
   g add -A && g commit -qm v2 && g push -q origin prod
   V2="$(g rev-parse HEAD)"
   g reset -q --hard "$V1"

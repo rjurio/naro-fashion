@@ -245,6 +245,16 @@ EOF
 #    `db push --accept-data-loss` is GONE: the schema only changes through
 #    committed migrations in prisma/migrations/ (docs/OPS/MIGRATIONS.md).
 
+# 5-. Database role separation (scripts/ops/db-roles/; release kit DB_ROLE_SEPARATION.md).
+#     Optional until enabled: /etc/naro-db-owner.env (root, 600) holds the
+#     OWNER URL for migrations; the app .env files then hold ONLY the runtime
+#     role. db-roles-lib.sh keeps the owner URL in a NON-exported variable and
+#     passes it to one prisma / psql command at a time, so it can never reach
+#     `pm2 reload --update-env`. Never printed.
+# shellcheck source=scripts/ops/db-roles-lib.sh
+. "$APP_DIR/scripts/ops/db-roles-lib.sh"
+db_roles_load /etc/naro-db-owner.env "$APP_DIR"
+
 # 5a. One-time baseline. A DB that was managed by `db push` has no
 #     _prisma_migrations table; `migrate deploy` would try to run 0_init
 #     against existing tables and fail. If (and only if) the live schema is
@@ -278,7 +288,7 @@ if [ "$HAS_MIGRATIONS_TABLE" = "f" ]; then
   log "Baseline = prisma/migrations/0_init replayed into shadow DB ${SHADOW_DB}"
   echo "------------------------------------------------------------------------"
   set +e
-  pnpm exec prisma migrate diff \
+  prisma_db migrate diff \
     --from-migrations "$BASELINE_DIR/migrations" \
     --to-schema-datasource prisma/schema.prisma \
     --shadow-database-url "$SHADOW_URL" \
@@ -291,7 +301,7 @@ if [ "$HAS_MIGRATIONS_TABLE" = "f" ]; then
   case "$DRIFT_RC" in
     0)
       log "✔ Live schema matches 0_init exactly — marking 0_init as applied (no SQL is executed)"
-      pnpm exec prisma migrate resolve --applied 0_init
+      prisma_db migrate resolve --applied 0_init
       ;;
     2)
       die "DRIFT: the live database differs from the 0_init baseline (SQL above = what it would take to make the DB match). NOT baselining and NOT auto-pushing. Reconcile by hand — see docs/OPS/MIGRATIONS.md 'First deploy / drift' — then re-run deploy.sh."
@@ -306,16 +316,16 @@ fi
 
 # 5b. Apply pending committed migrations (forward-only).
 log "🔍 Migration status before deploy:"
-pnpm exec prisma migrate status || true   # non-zero just means "pending"
+prisma_db migrate status || true   # non-zero just means "pending"
 log "🗄  prisma migrate deploy..."
-pnpm exec prisma migrate deploy
+prisma_db migrate deploy
 
 # 5c. Drift guard: after migrating, the DB must match schema.prisma. A
 #     non-empty diff means someone changed schema.prisma without running
 #     `prisma migrate dev` — the new code would then hit missing columns.
 #     Abort BEFORE building/swapping so the old (compatible) code stays live.
 set +e
-pnpm exec prisma migrate diff \
+prisma_db migrate diff \
   --from-schema-datasource prisma/schema.prisma \
   --to-schema-datamodel prisma/schema.prisma \
   --script --exit-code
@@ -326,6 +336,12 @@ case "$POST_DRIFT_RC" in
   2) die "schema.prisma has changes with NO migration (SQL above). Run 'pnpm prisma migrate dev --name <x>' locally, commit the migration, redeploy. Old build is still live." ;;
   *) die "prisma migrate diff errored (exit ${POST_DRIFT_RC}) during the post-migrate drift check." ;;
 esac
+
+# 5d. Role separation: re-apply the runtime role's privileges (new tables of
+#     this release) and verify them, plus the R3 triggers / functions once R3
+#     is installed. A failed check aborts BEFORE the build: the old build stays
+#     live on the same database.
+db_roles_apply_and_verify "$APP_DIR"
 cd "$APP_DIR"
 
 # ---------------------------------------------------------------------------
