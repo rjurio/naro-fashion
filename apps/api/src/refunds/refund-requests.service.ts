@@ -1,3 +1,4 @@
+import { assertPayerIndependent } from './separation';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
@@ -143,6 +144,8 @@ export class RefundRequestsService {
       await this.audit.log('REFUND_PAYOUT_DENIED', 'RefundRequest', id, { reason: 'PAYOUT_BY_REQUESTER' });
       throw new ForbiddenException({ statusCode: 403, code: 'PAYOUT_BY_REQUESTER', message: 'The person who requested a refund cannot also pay it out.' });
     }
+    // Round 25E D (G2): nor the person who approved it.
+    await assertPayerIndependent(r as any, actor.id, this.audit);
     if (r.status !== 'APPROVED') throw new ConflictException('Only an APPROVED request can be paid. Reload.');
     const reference = normRef(dto.reference);
     const problems = payoutProblems({ method: dto.method, reference, originalMethods: await this.originalMethods(r), verificationNote: dto.verificationNote });
