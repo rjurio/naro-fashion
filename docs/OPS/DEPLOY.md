@@ -42,6 +42,11 @@ templates) can fail during the ~1 minute API build.
 
 ## PM2 supervision guard
 
+> **OS-user mode (round 25F, inactive until `/etc/naro-pm2.env` exists):** the NARO apps can run under a dedicated unprivileged account `naro` with its own `pm2-naro.service`.
+> - The guard then verifies both daemons; every NARO pm2 command goes through `naro_pm2` (`sudo -u naro`, reset environment).
+> - `naro_fs_modes` re-asserts file modes before each reload.
+> - Rollout, rollback and checks: [OS_USER.md](OS_USER.md).
+
 ### Who supervises PM2 on this VPS
 
 Root PM2 is supervised by **`pm2-root.service`** (systemd, `Type=forking`,

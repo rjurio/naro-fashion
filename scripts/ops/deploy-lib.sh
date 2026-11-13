@@ -151,6 +151,15 @@ swap_back_artifacts() {
 DEPLOY_TOOLING=(deploy.sh scripts/ops/deploy-lib.sh scripts/ops/rollback.sh scripts/ops/pm2-guard.sh scripts/ops/tests/pm2-guard.test.sh)
 
 has_pm2_guard() { is_commit "${1:-}" && git cat-file -e "${1}:scripts/ops/pm2-guard.sh" 2>/dev/null; }
+# The commit's guard knows the NARO OS-user mode (/etc/naro-pm2.env).
+has_os_user_guard() { has_pm2_guard "${1:-}" && git cat-file -p "${1}:scripts/ops/pm2-guard.sh" 2>/dev/null | grep -q 'NARO_PM2_USER'; }
+# Tooling at <sha> can't serve this server: no guard, or OS-user mode is ON
+# and its guard predates it (it would refuse every pm2 command, fail closed).
+tooling_unfit_for() {
+  ! has_pm2_guard "${1:-}" && return 0
+  _pm2g_naro_conf
+  [ "${_PG_NARO_MODE:-0}" = "1" ] && ! has_os_user_guard "${1:-}"
+}
 
 restore_source_to() {
   # restore_source_to <sha> <sha-being-left>
@@ -174,8 +183,8 @@ restore_source_to() {
   log "↩ git reset --hard ${target:0:7}"
   git reset --hard "$target" || { warn "git reset --hard ${target:0:7} failed"; return 1; }
   rm -f "${DEPLOY_STATE_DIR}/tooling_from"
-  if ! has_pm2_guard "$target"; then
-    if has_pm2_guard "$leaving"; then
+  if tooling_unfit_for "$target"; then
+    if ! tooling_unfit_for "$leaving"; then
       for f in "${DEPLOY_TOOLING[@]}"; do
         if git cat-file -e "${leaving}:${f}" 2>/dev/null; then
           git checkout "$leaving" -- "$f" || { warn "could not keep guarded tooling ${f} from ${leaving:0:7}"; rc=1; }
@@ -183,9 +192,9 @@ restore_source_to() {
       done
       mkdir -p "$DEPLOY_STATE_DIR"
       printf '%s\n' "$leaving" > "${DEPLOY_STATE_DIR}/tooling_from"
-      log "🛡  ${target:0:7} predates the PM2 guard: application code is ${target:0:7}, deploy tooling kept from ${leaving:0:7} (guard retained)"
+      log "🛡  ${target:0:7} predates the PM2 guard (or its OS-user mode): application code is ${target:0:7}, deploy tooling kept from ${leaving:0:7} (guard retained)"
     else
-      warn "${target:0:7} predates the PM2 guard and no guarded tooling is available to keep — the checkout is now UNGUARDED"
+      warn "${target:0:7} predates the PM2 guard (or its OS-user mode) and no fitting tooling is available to keep — the checkout is now UNGUARDED or unusable here"
       rc=1
     fi
   fi
@@ -216,6 +225,10 @@ reload_pm2() {
     warn "PM2 NOT reloaded: supervision check failed (see above)"
     return 1
   fi
+  if ! naro_fs_modes; then
+    warn "PM2 NOT reloaded: the NARO account's file modes could not be set (see above)"
+    return 1
+  fi
   log "♻️  Restarting PM2 processes (GIT_SHA=${1:0:7})..."
   GIT_SHA="$1" pm2_guarded reload ecosystem.config.js --only naro-api --update-env \
     || { warn "PM2 NOT reloaded: 'pm2 reload naro-api' refused or failed"; return 1; }
@@ -234,14 +247,80 @@ pm2_guarded() {
     warn "refusing 'pm2 $*': PM2 supervision check failed (see above)"
     return 1
   fi
-  pm2 "$@"
+  naro_pm2 "$@"
+}
+
+naro_pm2() {
+  # naro_pm2 <pm2 args...>: run pm2 against the daemon that supervises the
+  # NARO apps. Root-only mode: the root daemon (as before). OS-user mode
+  # (/etc/naro-pm2.env): the dedicated account's daemon, through sudo, whose
+  # environment reset means ONLY PATH, PM2_HOME and GIT_SHA reach it — no root
+  # variable or secret can be copied into the apps by --update-env.
+  # Callers: pm2_guarded and pm2_diagnostics only (both check the guard first).
+  _pm2g_naro_conf
+  if [ "${_PG_NARO_MODE:-0}" = "1" ]; then
+    sudo -u "$_PG_NARO_USER" -H env PATH="${_PG_NARO_PATH}" PM2_HOME="$_PG_NARO_HOME" \
+      ${GIT_SHA:+GIT_SHA="$GIT_SHA"} pm2 "$@"
+  else
+    pm2 "$@"
+  fi
+}
+
+naro_pm2_hint() {
+  # The prefix an operator types for a NARO pm2 command (printed in help text only).
+  _pm2g_naro_conf
+  if [ "${_PG_NARO_MODE:-0}" = "1" ]; then
+    printf 'sudo -u %s -H env PM2_HOME=%s ' "$_PG_NARO_USER" "$_PG_NARO_HOME"
+  fi
+}
+
+_osu() {
+  # _osu <command...>: a file-ownership/mode command. Self-test: logged, not run.
+  if [ "${PM2_GUARD_TEST:-}" = "1" ] && [ -n "${PM2_GUARD_FS_LOG:-}" ]; then
+    echo "$*" >> "$PM2_GUARD_FS_LOG"
+    return 0
+  fi
+  "$@"
+}
+
+naro_fs_modes() {
+  # OS-user mode only: before every reload, re-assert what the NARO account
+  # may touch. Code and builds stay root-owned (the apps can't change them);
+  # the three .env files are root:<user> 640 (read, never write); uploads,
+  # private uploads (ID documents, 700) and the Next standalone caches belong
+  # to the account. Returns 1 on any failure (the caller does NOT reload).
+  _pm2g_naro_conf
+  [ "${_PG_NARO_MODE:-0}" = "1" ] || return 0
+  local u="$_PG_NARO_USER" rc=0 f d priv
+  for f in .env apps/api/.env packages/database/.env; do
+    [ -f "$f" ] || continue
+    _osu chown "root:${u}" "$f" && _osu chmod 640 "$f" || { warn "could not set root:${u} 640 on ${f}"; rc=1; }
+  done
+  priv="$(sed -n 's/^PRIVATE_UPLOAD_DIR=//p' apps/api/.env 2>/dev/null | head -1 | tr -d '"')"
+  priv="${priv:-apps/api/private-uploads}"
+  case "$priv" in /*) ;; *) priv="${PWD}/${priv}" ;; esac
+  for d in apps/api/uploads "$priv"; do
+    _osu mkdir -p "$d" && _osu chown -R "${u}:${u}" "$d" || { warn "could not give ${d} to ${u}"; rc=1; }
+  done
+  _osu chmod 700 "$priv" || rc=1
+  for d in apps/storefront/.next/standalone/apps/storefront/.next/cache apps/admin/.next/standalone/apps/admin/.next/cache; do
+    [ -d "$(dirname "$d")" ] || continue
+    _osu mkdir -p "$d" && _osu chown -R "${u}:${u}" "$d" || { warn "could not give ${d} to ${u}"; rc=1; }
+  done
+  for f in deploy.sh ecosystem.config.js apps/api/dist; do
+    [ -e "$f" ] || continue
+    if [ "$(stat -c %U "$f" 2>/dev/null)" = "$u" ]; then warn "${f} is owned by ${u}: code must stay root-owned"; rc=1; fi
+  done
+  [ "$rc" -eq 0 ] && log "🔒 File modes for ${u}: .env 640 root:${u}, uploads + private uploads + Next caches ${u}, code root-owned"
+  return "$rc"
 }
 
 rollback_incomplete_notice() {
   # rollback_incomplete_notice <rollback-target-sha> <what went wrong>
   # A rollback did not fully succeed. Printed with echo (not a heredoc) so
   # nothing in it can execute. Callers exit 3 after it.
-  local sha="${1:-<previous sha>}" reason="${2:-see above}"
+  local sha="${1:-<previous sha>}" reason="${2:-see above}" pfx
+  pfx="$(naro_pm2_hint)"
   {
     echo "========================================================================"
     echo "❌ ROLLBACK INCOMPLETE — OPERATOR INTERVENTION REQUIRED"
@@ -254,9 +333,9 @@ rollback_incomplete_notice() {
     echo "     through systemd (docs/OPS/DEPLOY.md 'PM2 supervision guard')."
     echo "  3. Fix the problem above (builds in apps/*/.next + apps/api/dist, git at"
     echo "     ${sha:0:7}, pnpm install / prisma generate), then reload ONLY NARO:"
-    echo "     GIT_SHA=${sha} pm2 reload ecosystem.config.js --only naro-api --update-env"
-    echo "     GIT_SHA=${sha} pm2 restart ecosystem.config.js --only naro-storefront,naro-admin --update-env"
-    echo "     pm2 save        (never 'pm2 restart all' — other apps share this daemon)"
+    echo "     ${pfx}GIT_SHA=${sha} pm2 reload ecosystem.config.js --only naro-api --update-env"
+    echo "     ${pfx}GIT_SHA=${sha} pm2 restart ecosystem.config.js --only naro-storefront,naro-admin --update-env"
+    echo "     ${pfx}pm2 save        (never 'pm2 restart all' — other apps share this daemon)"
     echo "  4. curl -s http://127.0.0.1:4000/api/v1/health   # 'commit' must be ${sha:0:7}"
     echo "     + storefront (Host: narofashion.co.tz), admin /login, one /_next/static asset each."
     echo "========================================================================"
@@ -267,8 +346,8 @@ pm2_diagnostics() {
   # `pm2 status` + recent logs for failure output — only when supervision is
   # verified (these read-only commands would also spawn a daemon). Never fails.
   if pm2_supervision_check --quiet 2>/dev/null; then
-    pm2 status || true
-    pm2 logs --nostream --lines 40 || true
+    naro_pm2 status || true
+    naro_pm2 logs --nostream --lines 40 || true
   else
     warn "skipping 'pm2 status' / 'pm2 logs': PM2 supervision is not verified (running pm2 now could start an unsupervised daemon)"
     pm2_supervision_check >/dev/null || true   # print the reason on stderr
@@ -290,6 +369,8 @@ print_db_rollback_help() {
   # Unquoted heredoc (for ${1}): NEVER put backticks or $(...) in the text —
   # they EXECUTE. Until 2026-11-09 a `pm2 restart all` here ran on every
   # automatic rollback, restarting every app on the shared VPS.
+  local pfx
+  pfx="$(naro_pm2_hint)"
   cat >&2 <<EOF
 ------------------------------------------------------------------------
 The DATABASE was NOT rolled back. Migrations are forward-only and must be
@@ -297,14 +378,14 @@ backward compatible (expand/contract — docs/OPS/MIGRATIONS.md), so the
 previous code should run against the migrated schema.
 Only if it does not, restore the pre-deploy dump:
   bash scripts/ops/pm2-guard.sh   # must PASS before any pm2 command
-  pm2 stop naro-api naro-admin naro-storefront
+  ${pfx}pm2 stop naro-api naro-admin naro-storefront
   sudo -u postgres psql -c "DROP DATABASE naro_fashion;"
   sudo -u postgres psql -c "CREATE DATABASE naro_fashion OWNER naro_admin;"
   PGPASSFILE=/root/.pgpass pg_restore --clean --if-exists --no-owner --no-acl \\
     -h localhost -U naro_admin -d naro_fashion ${1:-<pre-deploy dump in /var/backups/naro/postgres/>}
   # re-apply table ownership (docs/OPS/BACKUPS.md "Restoring"), then
   # (never 'pm2 restart all' — the VPS also runs other apps)
-  pm2 restart naro-api naro-admin naro-storefront
+  ${pfx}pm2 restart naro-api naro-admin naro-storefront
 ------------------------------------------------------------------------
 EOF
 }
