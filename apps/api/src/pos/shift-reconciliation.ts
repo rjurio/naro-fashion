@@ -80,7 +80,28 @@ export interface ReconPayment {
   refundSubject?: string | null;
   /** RefundRequest.component (rental payouts), when known. */
   refundComponent?: string | null;
+  /** RefundRequest.kind (CANCELLATION / DEPOSIT_RETURN / OVERPAYMENT …), when known. */
+  refundKind?: string | null;
+  /** Payment.providerCode: set for online gateway payments. */
+  providerCode?: string | null;
 }
+
+export type ReconView = 'CASHIER' | 'MANAGER';
+
+/**
+ * Which rental component a rental payout returned. An overpayment payout
+ * (request kind OVERPAYMENT, or a payout row without a component whose request
+ * has none either) returns SURPLUS money: 'OVERPAID', never the rental fee.
+ */
+export function rentalPayoutComponent(p: ReconPayment): string {
+  if (p.component === 'RENTAL_FEE' || p.component === 'DEPOSIT' || p.component === 'LATE_FEE') return p.component;
+  if (String(p.refundKind ?? '').toUpperCase() === 'OVERPAYMENT') return 'OVERPAID';
+  if (p.component == null && p.refundComponent == null) return p.refundRequestId ? 'OVERPAID' : 'UNALLOCATED';
+  return p.refundComponent ?? 'UNALLOCATED';
+}
+
+/** Online gateway money: attributable to the online channel, never to a drawer. */
+export const isOnline = (p: ReconPayment) => !!p.providerCode || p.orderChannel === 'ONLINE';
 
 interface Bucket {
   cash: number;
@@ -181,6 +202,13 @@ export interface ReconcileInput {
   rentalsTouched: LiabilityInputs['rentals'];
   liabilities: LiabilityInputs;
   now?: Date;
+  /**
+   * CASHIER = the shift's own cashier without reports:view: shop-wide sections
+   * (liabilities now, other staff's unattributed rows) are omitted, and the
+   * number of hidden rows is still shown, never silently dropped.
+   * MANAGER (default) = everything.
+   */
+  view?: ReconView;
 }
 
 const actorOf = (p: ReconPayment): string | null => {
@@ -220,7 +248,7 @@ export function reconcileShift(input: ReconcileInput) {
     } else if (p.status === 'REFUNDED') {
       const s = payoutSubject(p);
       add(payouts[s], p);
-      if (s === 'RENTAL') add((rentalPayoutByComponent[p.component ?? p.refundComponent ?? 'UNALLOCATED'] ??= bucket()), p);
+      if (s === 'RENTAL') add((rentalPayoutByComponent[rentalPayoutComponent(p)] ??= bucket()), p);
       m.out += c(p.amount);
       if (isCash(p.method)) cashOut += c(p.amount);
       accounted.add(p.id);
@@ -252,26 +280,54 @@ export function reconcileShift(input: ReconcileInput) {
   const incomeRefunded =
     payouts.POS_SALE.cash + payouts.POS_SALE.nonCash + payouts.ORDER.cash + payouts.ORDER.nonCash + comp('RENTAL_FEE') + comp('LATE_FEE');
   const layawayReturned = payouts.LAYAWAY.cash + payouts.LAYAWAY.nonCash;
+  const overpaymentsReturned = comp('OVERPAID');
   const retained = input.retainedDeposits.reduce((s, r) => s + c(r.retainedAmount), 0);
 
-  // Not attributed to any shift (never guessed into this one).
-  const winCash = input.untaggedInWindow.filter((p) => isCash(p.method) && (p.status === 'COMPLETED' || p.status === 'REFUNDED'));
-  const winNonCash = input.untaggedInWindow.filter(
-    (p) => !isCash(p.method) && (p.status === 'COMPLETED' || p.status === 'REFUNDED') && actorOf(p) === session.adminUserId,
-  );
-  const listRow = (p: ReconPayment) => ({
+  // Not attributed to any shift (never guessed into this one, never dropped).
+  // Every untagged row inside the shift's window is listed with a reason; the
+  // CASHIER view hides other staff's rows but says how many it hid.
+  const view: ReconView = input.view ?? 'MANAGER';
+  const money = (p: ReconPayment) => p.status === 'COMPLETED' || p.status === 'REFUNDED';
+  const mineOrUnknown = (p: ReconPayment) => {
+    const who = actorOf(p);
+    return who == null || who === session.adminUserId;
+  };
+  const listRow = (p: ReconPayment, reason: string) => ({
     id: p.id,
     status: p.status,
     method: p.method,
     amount: tzs(c(p.amount)),
+    direction: p.status === 'REFUNDED' ? 'OUT' : p.status === 'COMPLETED' ? 'IN' : 'NONE',
     createdAt: p.createdAt,
-    category: p.status === 'COMPLETED' ? receiptCategory(p) : payoutSubject(p),
+    category: p.status === 'REFUNDED' ? payoutSubject(p) : receiptCategory(p),
     rentalOrderId: p.rentalOrderId ?? null,
     orderId: p.orderId ?? null,
     layawayId: p.layawayId ?? null,
     recordedBy: actorOf(p),
+    reason,
   });
-  const unattributedCashNet = winCash.reduce((s, p) => s + (p.status === 'COMPLETED' ? c(p.amount) : -c(p.amount)), 0);
+  const untagged = input.untaggedInWindow;
+  const groups = {
+    cash: untagged.filter((p) => money(p) && isCash(p.method)),
+    nonCashThisCashier: untagged.filter((p) => money(p) && !isCash(p.method) && !isOnline(p) && actorOf(p) === session.adminUserId),
+    nonCashOtherStaff: untagged.filter((p) => money(p) && !isCash(p.method) && !isOnline(p) && actorOf(p) !== session.adminUserId),
+    online: untagged.filter((p) => money(p) && !isCash(p.method) && isOnline(p)),
+    reversed: untagged.filter((p) => p.status === 'REVERSED'),
+  };
+  const manager = view === 'MANAGER';
+  const shown = {
+    cash: manager ? groups.cash : groups.cash.filter(mineOrUnknown),
+    nonCashThisCashier: groups.nonCashThisCashier,
+    nonCashOtherStaff: manager ? groups.nonCashOtherStaff : [],
+    online: manager ? groups.online : [],
+    reversed: manager ? groups.reversed : groups.reversed.filter(mineOrUnknown),
+  };
+  const hiddenRows =
+    groups.cash.length - shown.cash.length + groups.nonCashOtherStaff.length - shown.nonCashOtherStaff.length +
+    groups.online.length - shown.online.length + groups.reversed.length - shown.reversed.length;
+  const net = (rows: ReconPayment[]) =>
+    rows.reduce((t, p) => t + (p.status === 'COMPLETED' ? c(p.amount) : p.status === 'REFUNDED' ? -c(p.amount) : 0), 0);
+  const unattributedCashNet = net(groups.cash);
 
   // Ledger cross-check for the rentals this shift touched.
   const rentals = input.rentalsTouched.map((r) => {
@@ -377,6 +433,7 @@ export function reconcileShift(input: ReconcileInput) {
       depositsReturned: tzs(depositReturned),
       layawayPrepaymentsReceived: tzs(receipts.LAYAWAY.cash + receipts.LAYAWAY.nonCash),
       layawayPrepaymentsReturned: tzs(layawayReturned),
+      overpaymentsReturned: tzs(overpaymentsReturned),
       unclassified: tzs(sumNature('UNCLASSIFIED')),
       depositsRetainedAsIncome: {
         amount: tzs(retained),
@@ -387,18 +444,39 @@ export function reconcileShift(input: ReconcileInput) {
     reversed,
     ignored,
     notAttributed: {
+      totals: {
+        cash: { net: tzs(net(shown.cash)), rows: shown.cash.length },
+        nonCash: { net: tzs(net([...shown.nonCashThisCashier, ...shown.nonCashOtherStaff])), rows: shown.nonCashThisCashier.length + shown.nonCashOtherStaff.length },
+        online: { net: tzs(net(shown.online)), rows: shown.online.length },
+        reversed: { rows: shown.reversed.length },
+        hiddenRows,
+        note: 'Not attributed to any shift: NOT in the drawer figure, and never counted as zero. Each row says why.',
+      },
       cashWithoutShift: {
-        net: tzs(unattributedCashNet),
-        rows: winCash.map(listRow),
-        note: 'Cash recorded during this shift with no drawer tag (any cashier). It is NOT in the expected cash; check whether it went through this drawer.',
+        net: tzs(net(shown.cash)),
+        rows: shown.cash.map((p) => listRow(p, 'cash recorded during this shift without a drawer tag; check whether it went through this drawer')),
+        note: 'Cash recorded during this shift with no drawer tag. It is NOT in the expected cash; check whether it went through this drawer.',
       },
       nonCashByThisCashier: {
-        rows: winNonCash.map(listRow),
+        rows: shown.nonCashThisCashier.map((p) => listRow(p, 'non-cash money this cashier recorded without a shift tag (does not affect the drawer)')),
         note: 'Non-cash money this cashier recorded or paid during the shift without a shift tag. It does not affect the drawer.',
       },
+      nonCashByOtherStaff: {
+        rows: shown.nonCashOtherStaff.map((p) => listRow(p, actorOf(p) ? 'non-cash money recorded by other staff without a shift tag' : 'non-cash money with no recorded staff member and no shift tag')),
+      },
+      onlineInWindow: {
+        net: tzs(net(shown.online)),
+        rows: shown.online.map((p) => listRow(p, 'online gateway payment: belongs to the online channel, not to a drawer')),
+      },
+      reversedWithoutShift: {
+        rows: shown.reversed.map((p) => listRow(p, 'reversed (voided) money without a shift tag: listed, not counted')),
+      },
+      hiddenNote: !manager && hiddenRows > 0
+        ? `${hiddenRows} row(s) recorded by other staff or online are hidden in the cashier view; a manager sees them.`
+        : null,
     },
     rentals,
-    liabilitiesNow: {
+    liabilitiesNow: !manager ? null : {
       asOf: (input.now ?? new Date()).toISOString(),
       depositsHeld: { amount: tzs(depositsHeld), rentals: depositRentals },
       layawayPrepaymentsHeld: { amount: tzs(layawayHeld), layaways: layawayCount },
@@ -407,7 +485,25 @@ export function reconcileShift(input: ReconcileInput) {
       cancelledRentalsRefundDue: { count: refundDue.count, held: tzs(refundDue.held), rentalOrderIds: refundDue.rentalOrderIds },
     },
     checks,
+    view,
+    omitted: manager ? [] : ['liabilitiesNow', 'nonCashByOtherStaff', 'onlineInWindow', 'unattributed rows of other staff'],
+    ...completeness(),
   };
+
+  function completeness() {
+    const warnings: Array<{ code: string; severity: 'WARN' | 'INFO'; message: string }> = [];
+    const warn = (code: string, message: string) => warnings.push({ code, severity: 'WARN', message });
+    const info = (code: string, message: string) => warnings.push({ code, severity: 'INFO', message });
+    if (groups.cash.length) warn('UNATTRIBUTED_CASH', `${groups.cash.length} cash row(s) (net ${tzs(unattributedCashNet)} TZS) were recorded during the shift without a drawer tag; they are not in the expected cash.`);
+    if (groups.nonCashThisCashier.length) warn('UNATTRIBUTED_NONCASH_THIS_CASHIER', `${groups.nonCashThisCashier.length} non-cash row(s) by this cashier have no shift tag.`);
+    if (groups.nonCashOtherStaff.length) warn('UNATTRIBUTED_NONCASH_OTHER_STAFF', `${groups.nonCashOtherStaff.length} non-cash row(s) by other or unknown staff have no shift tag.`);
+    if (groups.online.length) info('ONLINE_IN_WINDOW', `${groups.online.length} online gateway payment(s) happened during the shift (online channel, not this drawer).`);
+    if (groups.reversed.length) info('REVERSED_WITHOUT_SHIFT', `${groups.reversed.length} reversed row(s) without a shift tag (not money).`);
+    for (const [k, v] of Object.entries(checks)) if (v === false) warn(`CHECK_FAILED_${k}`, `Self-check failed: ${k}.`);
+    if (session.closedAt == null) info('SHIFT_OPEN', 'The shift is still open: no counted cash yet.');
+    if (!manager && hiddenRows > 0) info('ROWS_HIDDEN_IN_CASHIER_VIEW', `${hiddenRows} row(s) by other staff / online are hidden here; a manager sees them.`);
+    return { complete: !warnings.some((x) => x.severity === 'WARN'), warnings };
+  }
 }
 
 export type ShiftReconciliation = ReturnType<typeof reconcileShift>;
