@@ -1,6 +1,14 @@
 import { lateDays, lateFeeFor, lateFeeSentence, lateFeeTerms, storedLateFeeTerms } from './late-fee';
 import { assertHandoverSafeguard } from './handover-safeguard';
 import {
+  assertChecklistReleasable,
+  assertInspectionComplete,
+  CONFIRMED_STATUSES,
+  declareGatePassed,
+  freezeSnapshot,
+  lockChecklist,
+} from './checklist/checklist-core';
+import {
   Injectable,
   Logger,
   NotFoundException,
@@ -28,6 +36,7 @@ import {
 } from './rental-terms';
 
 const termsLogger = new Logger('RentalTerms');
+const checklistLogger = new Logger('RentalChecklist');
 // One warning per (tenant, product, setting, value): the quote is public and
 // can be called often; a bad setting is logged once per process, not per call.
 const warnedSettings = new Set<string>();
@@ -432,6 +441,7 @@ export class RentalsService {
       }
       await this.assertReleasable(rental);
     }
+    const isRelease = RELEASE_TARGETS.includes(status) && !RELEASE_TARGETS.includes(rental.status) && !HANDED_OVER.includes(rental.status);
 
     const data: any = { status };
     if (status === 'ID_VERIFIED') {
@@ -490,10 +500,51 @@ export class RentalsService {
 
     // Compare-and-swap on the status we validated against, so two admins
     // can't both apply transitions computed from the same stale read.
-    const claim = await this.prisma.rentalOrder.updateMany({
-      where: { id, tenantId: this.tenantContext.requireId, status: rental.status },
-      data,
-    });
+    //
+    // R3: a hand-over and a closure run their checklist gate INSIDE the same
+    // transaction as the write, under the booking's checklist lock (evidence
+    // can't change between the check and the write), and declare it to the
+    // database trigger, which refuses the write otherwise (rollback-proof).
+    const tenantIdForClaim = this.tenantContext.requireId;
+    let usedExceptions: string[] = [];
+    let claim: { count: number };
+    try {
+      const write = async (tx: any) => {
+        if (isRelease) {
+          await lockChecklist(tx, id);
+          usedExceptions = await assertChecklistReleasable(tx, tenantIdForClaim, rental, user?.id ?? null);
+          await declareGatePassed(tx, 'handover', id);
+        }
+        if (status === 'CLOSED') {
+          await lockChecklist(tx, id);
+          await assertInspectionComplete(tx, tenantIdForClaim, id, 'CLOSE');
+          await declareGatePassed(tx, 'close', id);
+        }
+        const c = await tx.rentalOrder.updateMany({
+          where: {
+            id, tenantId: tenantIdForClaim, status: rental.status,
+            // The gown checked at hand-over must still be the booking's gown.
+            ...(isRelease && { rentalUnitId: rental.rentalUnitId ?? null }),
+          },
+          data,
+        });
+        if (c.count > 0 && usedExceptions.length) {
+          await tx.rentalChecklistException.updateMany({
+            where: { id: { in: usedExceptions }, tenantId: tenantIdForClaim, status: 'APPROVED' },
+            data: { status: 'USED', usedById: user?.id ?? null, usedAt: new Date() },
+          });
+        }
+        return c;
+      };
+      // Only the gated steps need the transaction (lock + check + write + trigger declaration).
+      claim = isRelease || status === 'CLOSED' ? await this.prisma.$transaction(write) : await write(this.prisma);
+    } catch (e: any) {
+      const code = e?.getResponse?.()?.code;
+      if (code === 'CHECKLIST_INCOMPLETE' || code === 'EXCEPTION_DECIDER_HANDING_OVER' || code === 'INSPECTION_INCOMPLETE' || code === 'DISCREPANCY_OPEN') {
+        await this.auditService.log(isRelease ? 'RELEASE_BLOCKED' : 'CLOSE_BLOCKED', 'Rental', id, { code, missing: e.getResponse()?.missing ?? e.getResponse()?.notInspected ?? [] });
+      }
+      throw e;
+    }
     if (claim.count === 0) {
       if (expectedStatus !== undefined) throw await staleConflict();
       throw new ConflictException('Rental status changed concurrently. Reload and try again.');
@@ -510,7 +561,19 @@ export class RentalsService {
       from: rental.status,
       to: status,
       ...(data.holdState !== undefined && { holdState: data.holdState, holdExpiresAt: data.holdExpiresAt }),
+      ...(usedExceptions.length && { checklistExceptionsUsed: usedExceptions }),
     });
+    // R3: confirming the booking (by hand, e.g. at 0 % down payment) fixes its
+    // checklist. Best effort: if it fails, the hand-over gate asks for a desk
+    // snapshot, so nothing can leave unchecked.
+    if (CONFIRMED_STATUSES.includes(status)) {
+      try {
+        const frozen: any = await freezeSnapshot(this.prisma, this.tenantContext.requireId, id, null);
+        if (frozen?.created) await this.auditService.log('CHECKLIST_SNAPSHOT_FROZEN', 'Rental', id, { source: frozen.source, snapshotId: frozen.snapshot?.id });
+      } catch (e: any) {
+        checklistLogger.warn(`R3: checklist snapshot for rental ${id} not frozen at confirmation: ${e?.message ?? e}`);
+      }
+    }
     return updated;
   }
 

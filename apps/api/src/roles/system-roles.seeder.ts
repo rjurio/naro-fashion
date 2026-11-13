@@ -30,6 +30,10 @@ export const MANAGER_EXCLUDED = [
   'pos:layaway-cancel',
   'rentals:handover-safeguard',
   'rentals:waive-late-fee',
+  // R3 mandatory checklist: granted per designated person.
+  'rentals:checklist-verify',
+  'rentals:checklist-exception',
+  'rentals:checklist-templates',
 ];
 
 export const STAFF_CODES = [

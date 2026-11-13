@@ -1,6 +1,7 @@
 import { rentalBalances } from '../rentals/rental-ledger';
 import { Injectable, Logger } from '@nestjs/common';
 import { hasApprovedId } from '../id-verification/id-approval';
+import { freezeSnapshot } from '../rentals/checklist/checklist-core';
 import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -393,6 +394,14 @@ export class PaymentSettlementService {
         this.logger.log(
           `Rental ${rental.rentalNumber}: ${feePaid} TZS of the rental fee received (down payment ${downPaymentDue}) — advanced to ${target}`,
         );
+        // R3: the booking is confirmed → its checklist is fixed now (template
+        // edits after this never change it). Best effort; the hand-over gate
+        // refuses a booking without one.
+        try {
+          await freezeSnapshot(this.prisma, tenantId, rentalOrderId, null);
+        } catch (e: any) {
+          this.logger.warn(`R3: checklist snapshot for rental ${rental.rentalNumber} not frozen at confirmation: ${e?.message ?? e}`);
+        }
       }
     }
   }
