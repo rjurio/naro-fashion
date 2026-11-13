@@ -15,6 +15,7 @@ import * as crypto from 'crypto';
 import { adminLockClears } from '../auth/util/admin-lockout';
 import { REQUEST } from '@nestjs/core';
 import { SecurityActor, SecurityResult, recordSecurityEvent } from '../audit/security-audit';
+import { effectivePermissionCodes } from '../auth/util/permission-check';
 
 /** The authenticated caller (req.user from JwtStrategy). */
 export interface AdminActor {
@@ -24,6 +25,9 @@ export interface AdminActor {
 }
 
 const SUPER_ADMIN = 'SUPER_ADMIN';
+
+/** Per-request memo of the caller's authority (see actorAuthority). */
+type ActorCache = { value?: boolean; codes?: Set<string> };
 
 @Injectable()
 export class AdminUsersService {
@@ -124,6 +128,37 @@ export class AdminUsersService {
   }
 
   /**
+   * Privilege-escalation rule (round 25F): below SUPER_ADMIN, an admin may
+   * only hand out — or take control of an account holding — permissions they
+   * hold themselves. Returns null for a super actor (unrestricted), else the
+   * caller's effective permission codes.
+   */
+  private async actorAuthority(actor: AdminActor | undefined, tenantId: string, cache: ActorCache): Promise<Set<string> | null> {
+    if (cache.value === undefined) cache.value = await this.isSuperActor(actor, tenantId);
+    if (cache.value) return null;
+    if (!cache.codes) cache.codes = actor?.id ? await effectivePermissionCodes(this.prisma as any, actor.id, tenantId) : new Set<string>();
+    return cache.codes;
+  }
+
+  private beyondOwn(theirs: Iterable<string>, mine: Set<string>): string[] {
+    return Array.from(new Set(theirs)).filter((c) => !mine.has(c)).sort();
+  }
+
+  /** A non-super caller may only act on an admin account whose permissions they all hold. */
+  private async assertTargetWithinActor(targetId: string, actor: AdminActor | undefined, tenantId: string, cache: ActorCache) {
+    const mine = await this.actorAuthority(actor, tenantId, cache);
+    if (!mine) return;
+    const theirs = await effectivePermissionCodes(this.prisma as any, targetId, tenantId);
+    const beyond = this.beyondOwn(theirs, mine);
+    if (beyond.length) {
+      throw new ForbiddenException({
+        statusCode: 403, code: 'TARGET_HAS_MORE_PERMISSIONS', codes: beyond,
+        message: `This admin holds permissions you don't have (${beyond.join(', ')}); only a SUPER_ADMIN can change this account.`,
+      });
+    }
+  }
+
+  /**
    * Resolve a role the caller may assign in this tenant: the tenant's own
    * (non-deleted) role, or a shared system role. Another tenant's role id →
    * 404. The SUPER_ADMIN system role (or any role named SUPER_ADMIN) requires
@@ -133,7 +168,7 @@ export class AdminUsersService {
     roleId: string,
     tenantId: string,
     actor: AdminActor | undefined,
-    superCache: { value?: boolean },
+    superCache: ActorCache,
   ) {
     // assignRole's body is an inline type (no ValidationPipe) — never let a
     // non-string (e.g. a Prisma operator object) reach the where-clause.
@@ -150,6 +185,22 @@ export class AdminUsersService {
       if (superCache.value === undefined) superCache.value = await this.isSuperActor(actor, tenantId);
       if (!superCache.value) {
         throw new ForbiddenException('Only SUPER_ADMIN can assign the SUPER_ADMIN role');
+      }
+    }
+    // A non-super caller may only assign a role whose permissions they hold
+    // (otherwise: create an account with a stronger role and log in as it).
+    const mine = await this.actorAuthority(actor, tenantId, superCache);
+    if (mine) {
+      const grants = await this.prisma.rolePermission.findMany({
+        where: { roleId: role.id },
+        select: { permission: { select: { code: true } } },
+      });
+      const beyond = this.beyondOwn(grants.map((g: any) => g.permission.code), mine);
+      if (beyond.length) {
+        throw new ForbiddenException({
+          statusCode: 403, code: 'BEYOND_OWN_PERMISSIONS', codes: beyond,
+          message: `You can only assign roles whose permissions you hold yourself (${beyond.join(', ')}).`,
+        });
       }
     }
     return role;
@@ -203,7 +254,7 @@ export class AdminUsersService {
   private async createInner(dto: CreateAdminUserDto, createdById: string, actor?: AdminActor) {
     const tenantId = this.tenantContext.requireId;
     const actorRef: AdminActor = actor ?? { id: createdById };
-    const superCache: { value?: boolean } = {};
+    const superCache: ActorCache = {};
 
     const roleString = dto.role || 'STAFF';
     if (roleString === SUPER_ADMIN) {
@@ -286,6 +337,18 @@ export class AdminUsersService {
       }
     }
 
+    // Escalation guard (round 25F): below SUPER_ADMIN nobody changes their
+    // own role, and nobody edits (password / email → takeover) an account
+    // holding permissions they don't hold themselves.
+    const cache: ActorCache = {};
+    if (actor?.id === id) {
+      if (dto.role !== undefined && dto.role !== admin.role && !(await this.isSuperActor(actor, tenantId))) {
+        throw new ForbiddenException({ statusCode: 403, code: 'OWN_ROLE', message: 'You cannot change your own role.' });
+      }
+    } else {
+      await this.assertTargetWithinActor(id, actor, tenantId, cache);
+    }
+
     // Explicit whitelist — never spread the DTO straight into Prisma.
     const data: Record<string, any> = {};
     if (dto.firstName !== undefined) data.firstName = dto.firstName;
@@ -345,6 +408,8 @@ export class AdminUsersService {
     if (admin.role === SUPER_ADMIN && !(await this.isSuperActor(actor ?? { id: performedById }, tenantId))) {
       throw new ForbiddenException('Only SUPER_ADMIN can enable/disable SUPER_ADMIN accounts');
     }
+    // Re-enabling a stronger account is a way to regain its permissions.
+    await this.assertTargetWithinActor(id, actor ?? { id: performedById }, tenantId, {});
     return this.prisma.adminUser.update({
       where: { id },
       data: { isActive: !admin.isActive },

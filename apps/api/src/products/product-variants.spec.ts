@@ -211,5 +211,27 @@ describe('ProductsService — variant tenancy + diff update', () => {
       // with 0 stock the same person can still create the product
       await expect(service.create({ name: 'G0', description: 'd', price: 1, categoryId: 'cat1', variants: [{ name: 'S', price: 1, stock: 0 }] } as any, staff)).resolves.toBeDefined();
     });
+    it('round 25F C: removing a size that still has stock needs inventory:manage; nothing written', async () => {
+      const e: any = await service.update('p1', { variants: [] } as any, staff).catch((x: any) => x);
+      expect(e.getResponse().code).toBe('INVENTORY_PERMISSION_REQUIRED');
+      expect(prisma.productVariant.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.productVariant.updateMany).not.toHaveBeenCalled();
+      await service.update('p1', { variants: [] } as any, SUPER);
+      expect(prisma.productVariant.deleteMany).toHaveBeenCalled();
+    });
+    it('round 25F C: PATCH /products/:id is no way round the inventory-settings permission', async () => {
+      prisma.product.findFirst.mockResolvedValue({ id: 'p1', slug: 'gown', deletedAt: null, purchasePrice: '1000', minimumStock: 5, supplierName: 'A', supplierContact: null });
+      for (const change of [{ minimumStock: 0 }, { purchasePrice: 1 }, { supplierName: 'B' }, { supplierContact: '0700' }]) {
+        const e: any = await service.update('p1', change as any, staff).catch((x: any) => x);
+        expect([Object.keys(change)[0], e?.getResponse?.().code]).toEqual([Object.keys(change)[0], 'INVENTORY_PERMISSION_REQUIRED']);
+      }
+      expect(prisma.product.update).not.toHaveBeenCalled();
+      // unchanged values re-sent, and other fields, still work for the same person
+      await service.update('p1', { name: 'Gown 2', minimumStock: 5, purchasePrice: 1000, supplierName: 'A' } as any, staff);
+      expect(prisma.product.update).toHaveBeenCalledTimes(1);
+      // SUPER_ADMIN (bypass) may change them
+      await service.update('p1', { minimumStock: 0 } as any, SUPER);
+      expect(prisma.product.update).toHaveBeenCalledTimes(2);
+    });
   });
 });

@@ -134,3 +134,86 @@ describe('roles: no self-granted permission bypass', () => {
     expect(b.prisma.rolePermission.createMany).toHaveBeenCalled();
   });
 });
+
+describe('round 25F C: PermissionGuard on inventory:manage routes', () => {
+  function guardFor(codes: string[]) {
+    const reflector: any = { getAllAndOverride: () => ['inventory:manage'] };
+    const prisma: any = { adminUserRole: { findMany: jest.fn(async () => [{ role: { permissions: codes.map((code) => ({ permission: { code } })) } }]) } };
+    return { guard: new PermissionGuard(reflector, prisma), prisma };
+  }
+  const ctx = (user: any): any => ({ getHandler: () => null, getClass: () => null, switchToHttp: () => ({ getRequest: () => ({ user }) }) });
+  it('SUPER_ADMIN passes with NO grant (role bypass; no permission lookup at all)', async () => {
+    const { guard, prisma } = guardFor([]);
+    await expect(guard.canActivate(ctx({ id: 'sa', isAdmin: true, role: 'SUPER_ADMIN', tenantId: 't1' }))).resolves.toBe(true);
+    expect(prisma.adminUserRole.findMany).not.toHaveBeenCalled();
+  });
+  it('a holder of inventory:manage passes; STAFF / a MANAGER without it -> 403; a customer -> 403', async () => {
+    await expect(guardFor(['inventory:manage']).guard.canActivate(ctx({ id: 'm1', isAdmin: true, role: 'MANAGER', tenantId: 't1' }))).resolves.toBe(true);
+    await expect(guardFor(['inventory:view']).guard.canActivate(ctx({ id: 's1', isAdmin: true, role: 'STAFF', tenantId: 't1' }))).rejects.toMatchObject({ status: 403 });
+    await expect(guardFor(['orders:view']).guard.canActivate(ctx({ id: 'm2', isAdmin: true, role: 'MANAGER', tenantId: 't1' }))).rejects.toMatchObject({ status: 403 });
+    await expect(guardFor(['inventory:manage']).guard.canActivate(ctx({ id: 'c1', tenantId: 't1' }))).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe('round 25F C: adjust only a variant of the named product', () => {
+  it('variant lookup is scoped by tenant AND product', async () => {
+    const prisma: any = {
+      product: { findFirst: jest.fn(async () => ({ id: 'p1', purchasePrice: 0 })) },
+      productVariant: { findFirst: jest.fn(async () => null) },
+      $transaction: jest.fn(),
+    };
+    const svc = new InventoryService(prisma, { requireId: 't1' } as any, { log: jest.fn() } as any);
+    await expect(svc.adjustStock({ productId: 'p1', variantId: 'v-of-p2', type: 'RESTOCK', quantity: 1 } as any, 'a')).rejects.toMatchObject({ status: 404 });
+    expect(prisma.productVariant.findFirst.mock.calls[0][0].where).toEqual({ id: 'v-of-p2', tenantId: 't1', productId: 'p1' });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('round 25F C: roles - restore is a grant; permissionIds validated', () => {
+  function make(opts: { holds?: boolean; mine?: string[]; grants?: string[]; perms?: any[] } = {}) {
+    const prisma: any = {
+      role: {
+        findFirst: jest.fn(async () => ({ id: 'r1', tenantId: 't1', isSystem: false, deletedAt: new Date() })),
+        update: jest.fn(async () => ({ id: 'r1' })),
+      },
+      adminUserRole: {
+        findFirst: jest.fn(async () => (opts.holds ? { adminUserId: 'u1', roleId: 'r1' } : null)),
+        findMany: jest.fn(async () => [{ role: { permissions: (opts.mine ?? []).map((code) => ({ permission: { code } })) } }]),
+      },
+      permission: { findMany: jest.fn(async () => opts.perms ?? [{ code: 'orders:view' }]) },
+      rolePermission: {
+        createMany: jest.fn(async () => ({ count: 1 })),
+        findMany: jest.fn(async () => (opts.grants ?? []).map((code) => ({ permission: { code } }))),
+      },
+    };
+    const svc = new RolesService(prisma, { requireId: 't1' } as any, { log: jest.fn(async () => undefined) } as any);
+    return { svc, prisma };
+  }
+  const manager = { id: 'u1', isAdmin: true, role: 'MANAGER', tenantId: 't1' };
+  it('restoring a role you hold -> 403 OWN_ROLE; one carrying permissions you lack -> 403 BEYOND_OWN_PERMISSIONS', async () => {
+    const a = make({ holds: true, mine: ['roles:manage', 'inventory:manage'], grants: ['inventory:manage'] });
+    expect((await a.svc.restore('r1', manager).catch((x) => x)).getResponse().code).toBe('OWN_ROLE');
+    const b = make({ holds: false, mine: ['roles:manage'], grants: ['inventory:manage'] });
+    expect((await b.svc.restore('r1', manager).catch((x) => x)).getResponse().code).toBe('BEYOND_OWN_PERMISSIONS');
+    expect(a.prisma.role.update).not.toHaveBeenCalled();
+    expect(b.prisma.role.update).not.toHaveBeenCalled();
+  });
+  it('restore within your permissions, or by SUPER_ADMIN -> allowed', async () => {
+    const a = make({ holds: false, mine: ['roles:manage', 'orders:view'], grants: ['orders:view'] });
+    await a.svc.restore('r1', manager);
+    expect(a.prisma.role.update).toHaveBeenCalled();
+    const b = make({ holds: true, grants: ['inventory:manage'] });
+    await b.svc.restore('r1', { id: 's1', isAdmin: true, role: 'SUPER_ADMIN', tenantId: 't1' });
+    expect(b.prisma.role.update).toHaveBeenCalled();
+  });
+  it('addPermissions: non-array / non-string / unknown ids -> 400/404, nothing written', async () => {
+    const sup = { id: 's1', isAdmin: true, role: 'SUPER_ADMIN', tenantId: 't1' };
+    const a = make();
+    await expect(a.svc.addPermissions('r1', undefined as any, sup)).rejects.toMatchObject({ status: 400 });
+    await expect(a.svc.addPermissions('r1', [{ not: 'x' }] as any, sup)).rejects.toMatchObject({ status: 400 });
+    const b = make({ perms: [] });
+    await expect(b.svc.addPermissions('r1', ['missing'], sup)).rejects.toMatchObject({ status: 404 });
+    expect(a.prisma.rolePermission.createMany).not.toHaveBeenCalled();
+    expect(b.prisma.rolePermission.createMany).not.toHaveBeenCalled();
+  });
+});

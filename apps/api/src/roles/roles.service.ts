@@ -1,5 +1,5 @@
 import { effectivePermissionCodes } from '../auth/util/permission-check';
-import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
@@ -97,7 +97,7 @@ export class RolesService {
     return this.prisma.role.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
   }
 
-  async restore(id: string) {
+  async restore(id: string, actor?: any) {
     const tenantId = this.tenantContext.requireId;
     // Only the owning tenant may restore its own (custom) role. System roles
     // have tenantId=null and are never soft-deleted, so `{ id, tenantId }`
@@ -105,7 +105,16 @@ export class RolesService {
     const role = await this.prisma.role.findFirst({ where: { id, tenantId } });
     if (!role) throw new NotFoundException('Role not found');
     if (role.isSystem) throw new ForbiddenException('Cannot restore system roles');
-    return this.prisma.role.update({ where: { id }, data: { deletedAt: null, isActive: true } });
+    // Restoring re-activates every grant the role carries for everyone still
+    // assigned to it, so it is a grant: same rule as addPermissions.
+    const grants = await this.prisma.rolePermission.findMany({
+      where: { roleId: id },
+      select: { permission: { select: { code: true } } },
+    });
+    await this.assertMayGrant(id, grants.map((g: any) => g.permission.code), actor, 'RESTORE_DENIED');
+    const restored = await this.prisma.role.update({ where: { id }, data: { deletedAt: null, isActive: true } });
+    await this.auditService.log('RESTORE', 'Role', id);
+    return restored;
   }
 
   async getRolePermissions(id: string) {
@@ -125,30 +134,42 @@ export class RolesService {
     // mutate another tenant's custom role by id.
     const role = await this.resolveVisibleRole(id);
     if (role.isSystem) throw new ForbiddenException('Cannot modify permissions on system roles');
-    // Security fix (no self-granted bypass): below SUPER_ADMIN, nobody adds
-    // permissions to a role they hold themselves, nor grants a permission
-    // they don't hold.
-    if (!(actor?.isPlatformAdmin || actor?.role === 'SUPER_ADMIN')) {
-      if (!actor?.id) throw new ForbiddenException('Unknown actor.');
-      const holds = await this.prisma.adminUserRole.findFirst({ where: { adminUserId: actor.id, roleId: id } });
-      if (holds) {
-        await this.auditService.log('ADD_PERMISSIONS_DENIED', 'Role', id, { reason: 'OWN_ROLE' });
-        throw new ForbiddenException({ statusCode: 403, code: 'OWN_ROLE', message: 'You cannot add permissions to a role you hold yourself.' });
-      }
-      const wanted = await this.prisma.permission.findMany({ where: { id: { in: permissionIds } }, select: { code: true } });
-      const mine = await effectivePermissionCodes(this.prisma as any, actor.id, actor.tenantId ?? null);
-      const beyond = wanted.map((w) => w.code).filter((c) => !mine.has(c));
-      if (beyond.length) {
-        await this.auditService.log('ADD_PERMISSIONS_DENIED', 'Role', id, { reason: 'BEYOND_OWN', codes: beyond });
-        throw new ForbiddenException({ statusCode: 403, code: 'BEYOND_OWN_PERMISSIONS', codes: beyond, message: `You can only grant permissions you hold yourself (${beyond.join(', ')}).` });
-      }
+    // inline body type (no ValidationPipe): never let a non-string reach Prisma
+    if (!Array.isArray(permissionIds) || permissionIds.length === 0 || permissionIds.some((p) => typeof p !== 'string' || !p)) {
+      throw new BadRequestException('permissionIds must be a non-empty array of permission ids');
     }
+    permissionIds = Array.from(new Set(permissionIds));
+    const wanted = await this.prisma.permission.findMany({ where: { id: { in: permissionIds } }, select: { code: true } });
+    if (wanted.length !== permissionIds.length) throw new NotFoundException('Permission not found');
+    await this.assertMayGrant(id, wanted.map((w) => w.code), actor, 'ADD_PERMISSIONS_DENIED');
     await this.prisma.rolePermission.createMany({
       data: permissionIds.map(pid => ({ roleId: id, permissionId: pid })),
       skipDuplicates: true,
     });
     await this.auditService.log('ADD_PERMISSIONS', 'Role', id);
     return this.getRolePermissions(id);
+  }
+
+  /**
+   * Security fix (no self-granted bypass): below SUPER_ADMIN, nobody grants
+   * to a role they hold themselves, nor grants a permission they don't hold.
+   * SUPER_ADMIN (DB-refreshed role on req.user) and platform admins are
+   * unrestricted. Refusals are audited.
+   */
+  private async assertMayGrant(roleId: string, codes: string[], actor: any, auditAction: string) {
+    if (actor?.isPlatformAdmin || actor?.role === 'SUPER_ADMIN') return;
+    if (!actor?.id) throw new ForbiddenException('Unknown actor.');
+    const holds = await this.prisma.adminUserRole.findFirst({ where: { adminUserId: actor.id, roleId } });
+    if (holds) {
+      await this.auditService.log(auditAction, 'Role', roleId, { reason: 'OWN_ROLE' });
+      throw new ForbiddenException({ statusCode: 403, code: 'OWN_ROLE', message: 'You cannot grant permissions through a role you hold yourself.' });
+    }
+    const mine = await effectivePermissionCodes(this.prisma as any, actor.id, actor.tenantId ?? null);
+    const beyond = Array.from(new Set(codes)).filter((c) => !mine.has(c)).sort();
+    if (beyond.length) {
+      await this.auditService.log(auditAction, 'Role', roleId, { reason: 'BEYOND_OWN', codes: beyond });
+      throw new ForbiddenException({ statusCode: 403, code: 'BEYOND_OWN_PERMISSIONS', codes: beyond, message: `You can only grant permissions you hold yourself (${beyond.join(', ')}).` });
+    }
   }
 
   // Resolves a role the current tenant is allowed to see: its own, or a shared
