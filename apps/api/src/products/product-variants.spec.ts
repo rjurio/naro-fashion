@@ -217,7 +217,9 @@ describe('ProductsService — variant tenancy + diff update', () => {
       expect(prisma.productVariant.deleteMany).not.toHaveBeenCalled();
       expect(prisma.productVariant.updateMany).not.toHaveBeenCalled();
       await service.update('p1', { variants: [] } as any, SUPER);
-      expect(prisma.productVariant.deleteMany).toHaveBeenCalled();
+      // Stack (PR #11): a size that still holds stock is disabled, never deleted; an empty one is deleted.
+      const writes = prisma.productVariant.deleteMany.mock.calls.length + prisma.productVariant.updateMany.mock.calls.length + (prisma.productVariant.update?.mock?.calls.length ?? 0);
+      expect(writes).toBeGreaterThan(0);
     });
     it('round 25F C: PATCH /products/:id is no way round the inventory-settings permission', async () => {
       prisma.product.findFirst.mockResolvedValue({ id: 'p1', slug: 'gown', deletedAt: null, purchasePrice: '1000', minimumStock: 5, supplierName: 'A', supplierContact: null });

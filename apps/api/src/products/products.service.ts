@@ -767,7 +767,7 @@ export class ProductsService {
   ) {
     const existing = await tx.productVariant.findMany({
       where: { productId: product.id, tenantId },
-      select: { id: true, sku: true, stock: true },
+      select: { id: true, sku: true, stock: true, isActive: true },
     });
     // PR #42 + #11: an existing size's stock is refused below (STOCK_EDIT_NOT_ALLOWED);
     // opening stock of a NEW size needs inventory:manage.
@@ -777,7 +777,8 @@ export class ProductsService {
     // Removing a size that still holds stock deletes (or takes out of sale)
     // that stock with no ledger row — an inventory movement too.
     const payloadIds = new Set(variants.map((v) => v.id).filter(Boolean));
-    if (existing.some((e) => !payloadIds.has(e.id) && e.stock > 0)) {
+    // A size that is already disabled stays disabled with its stock: leaving it out changes nothing.
+    if (existing.some((e) => !payloadIds.has(e.id) && e.stock > 0 && e.isActive !== false)) {
       await this.assertInventoryPermission(this.currentActor, 'removal of a size that still has stock');
     }
     const existingById = new Map(existing.map((v) => [v.id, v]));

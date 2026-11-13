@@ -164,7 +164,11 @@ describe('round 25F C: adjust only a variant of the named product', () => {
     };
     const svc = new InventoryService(prisma, { requireId: 't1' } as any, { log: jest.fn() } as any);
     await expect(svc.adjustStock({ productId: 'p1', variantId: 'v-of-p2', type: 'RESTOCK', quantity: 1 } as any, 'a')).rejects.toMatchObject({ status: 404 });
-    expect(prisma.productVariant.findFirst.mock.calls[0][0].where).toEqual({ id: 'v-of-p2', tenantId: 't1', productId: 'p1' });
+    // Stack: Release 1's resolveTarget looks the variant up by tenant, then refuses one of another product (400).
+    expect(prisma.productVariant.findFirst.mock.calls[0][0].where).toEqual({ id: 'v-of-p2', tenantId: 't1' });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    prisma.productVariant.findFirst.mockResolvedValue({ id: 'v-of-p2', productId: 'p2', stock: 3 });
+    await expect(svc.adjustStock({ productId: 'p1', variantId: 'v-of-p2', type: 'RESTOCK', quantity: 1 } as any, 'a')).rejects.toMatchObject({ status: 400 });
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });

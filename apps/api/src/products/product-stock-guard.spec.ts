@@ -31,7 +31,7 @@ function world(initial: Array<{ id: string; stock: number; sku?: string }>) {
     sizeGuide: { findFirst: jest.fn(async () => ({ id: 'sg1' })) },
     productVariant: {
       findMany: jest.fn(async () => {
-        const rows = [...variants.values()].map((v) => ({ id: v.id, sku: v.sku, stock: v.stock }));
+        const rows = [...variants.values()].map((v) => ({ id: v.id, sku: v.sku, stock: v.stock, isActive: v.isActive }));
         if (midSave) { const f = midSave; midSave = null; f(); }
         return rows;
       }),
@@ -173,7 +173,8 @@ describe('product form never overwrites stock (API-level guard)', () => {
 
   it('removing a variant that still holds stock disables it instead of deleting it (stock record kept)', async () => {
     const w = world([{ id: 'keep', stock: 1 }, { id: 'withStock', stock: 4 }, { id: 'empty', stock: 0 }]);
-    await w.service.update('p1', { variants: [{ id: 'keep', name: 'S', price: 1 }] } as any);
+    // PR #42 (5efa247): taking an active stocked size out of the form needs inventory:manage (SUPER_ADMIN holds it).
+    await w.service.update('p1', { variants: [{ id: 'keep', name: 'S', price: 1 }] } as any, { id: 'owner', isAdmin: true, role: 'SUPER_ADMIN' } as any);
     expect(w.writes).toContain('variant.disable:withStock');
     expect(w.writes).toContain('variant.delete:empty');
     expect(w.variants.get('withStock')).toMatchObject({ stock: 4, isActive: false });
@@ -193,6 +194,15 @@ describe('product form never overwrites stock (API-level guard)', () => {
     w.variants.get('off')!.isActive = false;
     await w.service.update('p1', { variants: [{ id: 'on', name: 'S', price: 1 }, { id: 'off', name: 'M', price: 1, isActive: true }] } as any);
     expect(w.variants.get('off')).toMatchObject({ isActive: true, stock: 5 });
+    // Taking it out of sale again is an inventory action (PR #42): it needs inventory:manage.
+    await expect(w.service.update('p1', { variants: [{ id: 'on', name: 'S', price: 1 }] } as any)).rejects.toMatchObject({ status: 403 });
+    await w.service.update('p1', { variants: [{ id: 'on', name: 'S', price: 1 }] } as any, { id: 'owner', isAdmin: true, role: 'SUPER_ADMIN' } as any);
+    expect(w.variants.get('off')).toMatchObject({ isActive: false, stock: 5 });
+  });
+
+  it('PR #42 port: leaving out a size that is ALREADY disabled changes nothing, so it needs no inventory permission', async () => {
+    const w = world([{ id: 'on', stock: 2 }, { id: 'off', stock: 5 }]);
+    w.variants.get('off')!.isActive = false;
     await w.service.update('p1', { variants: [{ id: 'on', name: 'S', price: 1 }] } as any);
     expect(w.variants.get('off')).toMatchObject({ isActive: false, stock: 5 });
   });
