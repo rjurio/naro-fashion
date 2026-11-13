@@ -3,6 +3,7 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -569,21 +570,34 @@ export class PosService {
    * rental ledger for rentals this shift touched, and the shop's open
    * liabilities now. Pure maths in ./shift-reconciliation.ts.
    */
-  async getSessionReconciliation(id: string) {
+  async getSessionReconciliation(id: string, viewer?: { id?: string; isAdmin?: boolean; isPlatformAdmin?: boolean; role?: string; tenantId?: string | null } | null) {
     const tenantId = this.tenantContext.requireId;
     const session = await this.prisma.posSession.findFirst({ where: { id, tenantId } });
     if (!session) throw new NotFoundException('Session not found.');
+    // MANAGER view: reports:view (SUPER_ADMIN / platform admins hold it).
+    // CASHIER view: the shift's own cashier, without the shop-wide sections.
+    // Anyone else: 403. (Another shop's session is a 404 above.)
+    const manager = await userHasPermission(this.prisma as any, viewer, 'reports:view');
+    if (!manager && (!viewer?.id || viewer.id !== session.adminUserId)) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'RECONCILIATION_NOT_PERMITTED',
+        message: 'Only the cashier who ran this shift, or a manager with reports:view, can see this reconciliation.',
+      });
+    }
+    const view = manager ? 'MANAGER' : 'CASHIER';
     const from = session.openedAt;
     const to = session.closedAt ?? new Date();
     const paymentInclude = {
       order: { select: { channel: true } },
-      refundRequest: { select: { subject: true, component: true } },
+      refundRequest: { select: { subject: true, component: true, kind: true } },
     } as const;
     const toRecon = (p: any): ReconPayment => ({
       ...p,
       orderChannel: p.order?.channel ?? null,
       refundSubject: p.refundRequest?.subject ?? null,
       refundComponent: p.refundRequest?.component ?? null,
+      refundKind: p.refundRequest?.kind ?? null,
     });
     const [tagged, inWindow, retained] = await Promise.all([
       this.prisma.payment.findMany({
@@ -592,7 +606,7 @@ export class PosService {
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.payment.findMany({
-        where: { tenantId, status: { in: ['COMPLETED', 'REFUNDED'] }, createdAt: { gte: from, lte: to } },
+        where: { tenantId, status: { in: ['COMPLETED', 'REFUNDED', 'REVERSED'] }, createdAt: { gte: from, lte: to } },
         include: paymentInclude,
         orderBy: { createdAt: 'asc' },
       }),
@@ -608,19 +622,21 @@ export class PosService {
       refundRequests: { where: { tenantId }, select: { component: true, amount: true, retainedAmount: true, status: true } },
     } as const;
     const touchedIds = [...new Set(tagged.map((p) => p.rentalOrderId).filter((x): x is string => !!x))];
+    // Shop-wide liabilities are a manager's view only: not even loaded for a cashier.
+    const shopWide = view === 'MANAGER';
     const [rentalsTouched, rentalsWithMoney, layaways, openRequests] = await Promise.all([
       touchedIds.length
         ? this.prisma.rentalOrder.findMany({ where: { tenantId, id: { in: touchedIds } }, select: rentalSelect })
         : Promise.resolve([]),
-      this.prisma.rentalOrder.findMany({
+      !shopWide ? Promise.resolve([]) : this.prisma.rentalOrder.findMany({
         where: { tenantId, payments: { some: { tenantId, status: { in: ['COMPLETED', 'REFUNDED'] } } } },
         select: rentalSelect,
       }),
-      this.prisma.layaway.findMany({
+      !shopWide ? Promise.resolve([]) : this.prisma.layaway.findMany({
         where: { tenantId, status: { not: 'COMPLETED' } },
         select: { id: true, status: true, payments: { where: { tenantId }, select: { amount: true, status: true } } },
       }),
-      this.prisma.refundRequest.findMany({
+      !shopWide ? Promise.resolve([]) : this.prisma.refundRequest.findMany({
         where: { tenantId, status: { in: ['REQUESTED', 'APPROVED', 'PAYING'] } },
         select: { id: true, subject: true, status: true, amount: true },
       }),
@@ -632,6 +648,7 @@ export class PosService {
       retainedDeposits: retained.map((r) => ({ refundRequestId: r.id, rentalOrderId: r.rentalOrderId, retainedAmount: r.retainedAmount, paidAt: r.paidAt })),
       rentalsTouched: rentalsTouched as any,
       liabilities: { rentals: rentalsWithMoney as any, layaways: layaways as any, refundRequests: openRequests as any },
+      view,
     });
   }
 

@@ -1,4 +1,4 @@
-import { payoutSubject, receiptCategory, reconcileShift, ReconPayment } from './shift-reconciliation';
+import { payoutSubject, receiptCategory, reconcileShift, ReconPayment, rentalPayoutComponent } from './shift-reconciliation';
 
 const S = 'shift-1';
 const T0 = new Date('2026-11-13T06:00:00Z');
@@ -34,6 +34,7 @@ const run = (tagged: ReconPayment[], extra: any = {}) =>
     rentalsTouched: extra.rentalsTouched ?? [],
     liabilities: extra.liabilities ?? emptyLiab,
     now: at(700),
+    view: extra.view,
   });
 
 describe('shift reconciliation (R4)', () => {
@@ -171,11 +172,11 @@ describe('shift reconciliation (R4)', () => {
     });
     expect(r.rentals[0].thisShift).toEqual({ feeReceived: 120000, depositReceived: 200000, lateFeeReceived: 10000, depositReturned: 150000 });
     expect(r.rentals[0].ledgerNow).toMatchObject({ depositHeld: 50000, feeOutstanding: 0, depositOutstanding: 0 });
-    expect(r.liabilitiesNow.depositsHeld).toEqual({ amount: 50000, rentals: 1 });
-    expect(r.liabilitiesNow.layawayPrepaymentsHeld).toEqual({ amount: 13000, layaways: 1 });
-    expect(r.liabilitiesNow.refundRequestsApprovedUnpaid).toMatchObject({ count: 2, amount: 51000, bySubject: { RENTAL: 50000, POS_SALE: 1000 } });
-    expect(r.liabilitiesNow.refundRequestsAwaitingApproval).toMatchObject({ count: 1, amount: 700 });
-    expect(r.liabilitiesNow.cancelledRentalsRefundDue).toMatchObject({ count: 1, held: 180000 });
+    expect(r.liabilitiesNow!.depositsHeld).toEqual({ amount: 50000, rentals: 1 });
+    expect(r.liabilitiesNow!.layawayPrepaymentsHeld).toEqual({ amount: 13000, layaways: 1 });
+    expect(r.liabilitiesNow!.refundRequestsApprovedUnpaid).toMatchObject({ count: 2, amount: 51000, bySubject: { RENTAL: 50000, POS_SALE: 1000 } });
+    expect(r.liabilitiesNow!.refundRequestsAwaitingApproval).toMatchObject({ count: 1, amount: 700 });
+    expect(r.liabilitiesNow!.cancelledRentalsRefundDue).toMatchObject({ count: 1, held: 180000 });
   });
 
   it('category helpers', () => {
@@ -184,5 +185,74 @@ describe('shift reconciliation (R4)', () => {
     expect(receiptCategory(pay({}))).toBe('OTHER');
     expect(payoutSubject(pay({ status: 'REFUNDED', orderId: 'o', orderChannel: 'ONLINE' }))).toBe('ORDER');
     expect(payoutSubject(pay({ status: 'REFUNDED', orderId: 'o', refundSubject: 'POS_SALE' }))).toBe('POS_SALE');
+  });
+
+  describe('round 25E: completeness, cashier view, overpaid payouts', () => {
+    const untaggedMix = () => [
+      pay({ gatewayResponse: {}, amount: 12000, rentalOrderId: 'r2', component: 'DEPOSIT' }), // cash, no drawer, unknown actor
+      pay({ gatewayResponse: { recordedByAdminId: 'other-cashier' }, amount: 7000, orderId: 'o9', orderChannel: 'POS' }), // cash by someone else
+      pay({ gatewayResponse: { recordedByAdminId: 'cashier' }, method: 'MPESA', amount: 8000, rentalOrderId: 'r2', component: 'RENTAL_FEE' }),
+      pay({ gatewayResponse: { recordedByAdminId: 'other-cashier' }, method: 'CARD', amount: 3000, orderId: 'o8', orderChannel: 'POS' }),
+      pay({ gatewayResponse: {}, method: 'MOBILE_MONEY', amount: 50000, rentalOrderId: 'r4', providerCode: 'CLICKPESA_MIXX' }), // online
+      pay({ gatewayResponse: {}, status: 'REVERSED', amount: 4000, orderId: 'o7', orderChannel: 'POS' }),
+    ];
+
+    it('a fully attributed shift is complete; nothing is hidden', () => {
+      const r = run(shift(), { session: { closingCash: 250000, expectedCash: 250000, cashDifference: 0 } });
+      expect(r.complete).toBe(true);
+      expect(r.warnings.filter((w) => w.severity === 'WARN')).toEqual([]);
+      expect(r.notAttributed.totals).toMatchObject({ cash: { net: 0, rows: 0 }, nonCash: { net: 0, rows: 0 }, hiddenRows: 0 });
+      expect(r.view).toBe('MANAGER');
+    });
+
+    it('MANAGER: every untagged row in the window is LISTED with a reason and totalled — never zero, never dropped; complete = false', () => {
+      const r = run(shift(), { untagged: untaggedMix() });
+      expect(r.drawer.expectedCash).toBe(250000); // the drawer figure excludes them …
+      expect(r.notAttributed.totals.cash).toEqual({ net: 19000, rows: 2 }); // … but they are carried explicitly
+      expect(r.notAttributed.totals.nonCash).toEqual({ net: 11000, rows: 2 });
+      expect(r.notAttributed.totals.online).toEqual({ net: 50000, rows: 1 });
+      expect(r.notAttributed.totals.reversed).toEqual({ rows: 1 });
+      const all = [
+        ...r.notAttributed.cashWithoutShift.rows, ...r.notAttributed.nonCashByThisCashier.rows, ...r.notAttributed.nonCashByOtherStaff.rows,
+        ...r.notAttributed.onlineInWindow.rows, ...r.notAttributed.reversedWithoutShift.rows,
+      ];
+      expect(all).toHaveLength(6);
+      expect(all.every((x) => typeof x.reason === 'string' && x.reason.length > 10)).toBe(true);
+      expect(r.complete).toBe(false);
+      expect(r.warnings.map((w) => w.code)).toEqual(expect.arrayContaining(['UNATTRIBUTED_CASH', 'UNATTRIBUTED_NONCASH_THIS_CASHIER', 'UNATTRIBUTED_NONCASH_OTHER_STAFF', 'ONLINE_IN_WINDOW', 'REVERSED_WITHOUT_SHIFT']));
+      expect(r.warnings.find((w) => w.code === 'ONLINE_IN_WINDOW')?.severity).toBe('INFO');
+      expect(r.liabilitiesNow).not.toBeNull();
+    });
+
+    it('online payments in the window alone do not make a shift incomplete (online channel, not this drawer)', () => {
+      const r = run(shift(), { untagged: [pay({ gatewayResponse: {}, method: 'MOBILE_MONEY', amount: 50000, providerCode: 'CLICKPESA_MIXX' })] });
+      expect(r.complete).toBe(true);
+      expect(r.notAttributed.onlineInWindow.rows).toHaveLength(1);
+    });
+
+    it('CASHIER view: own drawer + own / unknown-actor rows; other staff and online rows hidden but COUNTED; no shop liabilities', () => {
+      const r = run(shift(), { untagged: untaggedMix(), view: 'CASHIER' });
+      expect(r.view).toBe('CASHIER');
+      expect(r.liabilitiesNow).toBeNull();
+      expect(r.omitted).toContain('liabilitiesNow');
+      expect(r.drawer.expectedCash).toBe(250000); // same drawer maths
+      expect(r.notAttributed.cashWithoutShift.rows.map((x) => x.amount)).toEqual([12000]); // unknown actor shown, other cashier hidden
+      expect(r.notAttributed.nonCashByThisCashier.rows.map((x) => x.amount)).toEqual([8000]);
+      expect(r.notAttributed.nonCashByOtherStaff.rows).toEqual([]);
+      expect(r.notAttributed.onlineInWindow.rows).toEqual([]);
+      expect(r.notAttributed.totals.hiddenRows).toBe(3); // other cashier's cash + card, and the online row (the reversed row has no actor: shown)
+      expect(r.notAttributed.reversedWithoutShift.rows).toHaveLength(1);
+    });
+
+    it('an overpayment payout is labelled OVERPAID, not RENTAL_FEE, and is not counted as income refunded', () => {
+      const over = pay({ rentalOrderId: 'r1', component: null, amount: 100000, status: 'REFUNDED', method: 'MPESA', refundSubject: 'RENTAL', refundKind: 'OVERPAYMENT', refundComponent: 'RENTAL_FEE', refundRequestId: 'q1' });
+      const r = run([...shift(), over]);
+      expect(Object.keys(r.rentalPayoutsByComponent).sort()).toEqual(['DEPOSIT', 'OVERPAID']);
+      expect(r.rentalPayoutsByComponent.OVERPAID.total).toBe(100000);
+      expect(r.books.overpaymentsReturned).toBe(100000);
+      expect(r.books.incomeRefunded).toBe(5000); // only the POS sale refund
+      expect(rentalPayoutComponent(pay({ status: 'REFUNDED', component: null, refundComponent: null, refundRequestId: 'q' }))).toBe('OVERPAID');
+      expect(rentalPayoutComponent(pay({ status: 'REFUNDED', component: 'DEPOSIT', refundKind: 'DEPOSIT_RETURN' }))).toBe('DEPOSIT');
+    });
   });
 });
