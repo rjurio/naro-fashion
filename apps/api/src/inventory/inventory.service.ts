@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { ConflictException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
@@ -93,11 +94,12 @@ export class InventoryService {
   async updateSettings(productId: string, dto: UpdateInventorySettingsDto) {
     const product = await this.prisma.product.findFirst({ where: { id: productId, tenantId: this.tenantContext.requireId } });
     if (!product) throw new NotFoundException('Product not found');
-    return this.prisma.product.update({
-      where: { id: productId },
-      data: { ...dto },
-      select: { id: true, name: true, purchasePrice: true, minimumStock: true, supplierName: true, supplierContact: true },
-    });
+    const select = { id: true, name: true, purchasePrice: true, minimumStock: true, supplierName: true, supplierContact: true };
+    const before = await this.prisma.product.findFirst({ where: { id: productId, tenantId: this.tenantContext.requireId }, select });
+    await this.prisma.product.updateMany({ where: { id: productId, tenantId: this.tenantContext.requireId }, data: { ...dto } });
+    const after = await this.prisma.product.findFirst({ where: { id: productId, tenantId: this.tenantContext.requireId }, select });
+    await this.auditService.log('UPDATE_INVENTORY_SETTINGS', 'Inventory', productId, { before, after });
+    return after;
   }
 
   async adjustStock(dto: AdjustStockDto, performedBy?: string) {
@@ -134,23 +136,39 @@ export class InventoryService {
 
     const variant = await this.prisma.productVariant.findFirst({
       where: { id: targetVariantId, tenantId },
+      select: { id: true },
     });
     if (!variant) throw new NotFoundException('Variant not found');
-    const quantityBefore = variant.stock;
-    const quantityAfter = quantityBefore + quantityChange;
 
+    // Security fix: one transaction, tenant-scoped, atomic and guarded —
+    // a decrease never takes stock below 0, an optional expectedStock refuses
+    // a stale read, and the ledger's before/after come from inside the
+    // transaction (they were read before it, so concurrent adjustments
+    // recorded wrong values).
     const result = await this.prisma.$transaction(async (tx) => {
-      await tx.productVariant.update({
-        where: { id: targetVariantId },
-        data: { stock: { increment: quantityChange } },
-      });
+      const where: Prisma.ProductVariantWhereInput = {
+        id: targetVariantId, tenantId,
+        ...(dto.expectedStock !== undefined ? { stock: dto.expectedStock } : quantityChange < 0 ? { stock: { gte: -quantityChange } } : {}),
+      };
+      if (dto.expectedStock !== undefined && dto.expectedStock + quantityChange < 0) {
+        throw new ConflictException({ statusCode: 409, code: 'INSUFFICIENT_STOCK', message: 'Stock cannot go below 0.' });
+      }
+      const res = await tx.productVariant.updateMany({ where, data: { stock: { increment: quantityChange } } });
+      if (res.count !== 1) {
+        const now = await tx.productVariant.findFirst({ where: { id: targetVariantId, tenantId }, select: { stock: true } });
+        if (dto.expectedStock !== undefined && now && now.stock !== dto.expectedStock) {
+          throw new ConflictException({ statusCode: 409, code: 'STALE_STOCK', current: now.stock, message: `Stock changed meanwhile (now ${now.stock}). Reload and try again.` });
+        }
+        throw new ConflictException({ statusCode: 409, code: 'INSUFFICIENT_STOCK', current: now?.stock ?? null, message: 'Stock cannot go below 0.' });
+      }
+      const after = await tx.productVariant.findFirst({ where: { id: targetVariantId, tenantId }, select: { stock: true } });
+      const quantityAfter = after!.stock;
+      const quantityBefore = quantityAfter - quantityChange;
 
-      // Update lastRestockedAt if RESTOCK
       if (dto.type === 'RESTOCK') {
-        await tx.product.update({ where: { id: dto.productId }, data: { lastRestockedAt: new Date() } });
+        await tx.product.updateMany({ where: { id: dto.productId, tenantId }, data: { lastRestockedAt: new Date() } });
       }
 
-      // Create transaction record
       return tx.inventoryTransaction.create({
         data: {
           tenantId,
@@ -168,7 +186,10 @@ export class InventoryService {
         },
       });
     });
-    await this.auditService.log('ADJUST_STOCK', 'Inventory', dto.productId, { type: dto.type, quantity: dto.quantity });
+    await this.auditService.log('ADJUST_STOCK', 'Inventory', dto.productId, {
+      variantId: targetVariantId, type: dto.type, quantityChange,
+      before: result.quantityBefore, after: result.quantityAfter, note: dto.note ?? null, transactionId: result.id,
+    });
     return result;
   }
 }

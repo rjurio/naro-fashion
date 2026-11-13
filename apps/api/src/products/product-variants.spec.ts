@@ -44,6 +44,7 @@ describe('ProductsService — variant tenancy + diff update', () => {
     service = new ProductsService(prisma, { requireId: TENANT } as any, { log: jest.fn() } as any);
   });
 
+  const SUPER = { id: 'admin-1', isAdmin: true, role: 'SUPER_ADMIN', tenantId: TENANT };
   describe('#1 create — every variant gets tenantId', () => {
     it('sets tenantId on each nested variant create', async () => {
       await service.create({
@@ -55,7 +56,7 @@ describe('ProductsService — variant tenancy + diff update', () => {
           { name: 'S', price: 100, stock: 1 },
           { name: 'M', price: 100, stock: 2 },
         ],
-      } as any);
+      } as any, SUPER);
       const data = prisma.product.create.mock.calls[0][0].data;
       expect(data.tenantId).toBe(TENANT);
       expect(data.variants.create).toHaveLength(2);
@@ -66,7 +67,7 @@ describe('ProductsService — variant tenancy + diff update', () => {
       prisma.category.findMany.mockResolvedValue([{ id: 'cat1', slug: 'gowns', name: 'Gowns' }]);
       prisma.product.findMany = jest.fn().mockResolvedValue([]);
       const csv = 'name,description,price,categorySlug,stock\nGown,Nice,5000,gowns,3\n';
-      const res = await service.bulkImport(Buffer.from(csv));
+      const res = await service.bulkImport(Buffer.from(csv), SUPER);
       expect(res.created).toBe(1);
       const data = prisma.product.create.mock.calls[0][0].data;
       expect(data.variants.create[0].tenantId).toBe(TENANT);
@@ -105,7 +106,7 @@ describe('ProductsService — variant tenancy + diff update', () => {
     beforeEach(() => {
       prisma.product.findFirst.mockResolvedValue({ id: 'p1', slug: 'gown', deletedAt: null });
       prisma.productVariant.findMany.mockResolvedValue([
-        { id: 'v_keep', sku: 'gown-v1' },
+        { id: 'v_keep', sku: 'gown-v1', stock: 4 },
         { id: 'v_sold', sku: 'gown-v2' },
         { id: 'v_unused', sku: 'gown-v3' },
       ]);
@@ -118,7 +119,7 @@ describe('ProductsService — variant tenancy + diff update', () => {
           { id: 'v_keep', name: 'S (edited)', price: 120, stock: 4 },
           { name: 'XL', price: 150, stock: 1 },
         ],
-      } as any);
+      } as any, SUPER);
 
       // kept variant updated in place — same id
       expect(prisma.productVariant.update).toHaveBeenCalledTimes(1);
@@ -185,5 +186,27 @@ describe('ProductsService — variant tenancy + diff update', () => {
     const block = src.match(/const publicProductDetailSelect = \{[\s\S]*?reviews: \{([\s\S]*?)select:/);
     expect(block).not.toBeNull();
     expect(block![1]).toMatch(/where: \{ isApproved: true \}/);
+  });
+
+  describe('round 25F B: stock only through Inventory', () => {
+    beforeEach(() => {
+      prisma.product.findFirst.mockResolvedValue({ id: 'p1', slug: 'gown', deletedAt: null });
+      prisma.productVariant.findMany.mockResolvedValue([{ id: 'v_keep', sku: 'gown-v1', stock: 4 }]);
+      prisma.orderItem.findMany?.mockResolvedValue?.([]);
+      prisma.adminUserRole = { findMany: jest.fn(async () => []) };
+    });
+    const staff = { id: 's1', isAdmin: true, role: 'STAFF', tenantId: TENANT };
+    it('changing the stock of an EXISTING variant in the product form → 409 STOCK_EDIT_NOT_ALLOWED (even SUPER_ADMIN)', async () => {
+      const e: any = await service.update('p1', { variants: [{ id: 'v_keep', name: 'S', price: 120, stock: 9 }] } as any, SUPER).catch((x: any) => x);
+      expect(e.getResponse().code).toBe('STOCK_EDIT_NOT_ALLOWED');
+    });
+    it('opening stock (new product, new size, CSV import) needs inventory:manage', async () => {
+      const e1: any = await service.update('p1', { variants: [{ id: 'v_keep', name: 'S', price: 120, stock: 4 }, { name: 'XL', price: 150, stock: 2 }] } as any, staff).catch((x: any) => x);
+      expect(e1.getResponse().code).toBe('INVENTORY_PERMISSION_REQUIRED');
+      const e2: any = await service.create({ name: 'G', description: 'd', price: 1, categoryId: 'cat1', variants: [{ name: 'S', price: 1, stock: 1 }] } as any, staff).catch((x: any) => x);
+      expect(e2.getResponse().code).toBe('INVENTORY_PERMISSION_REQUIRED');
+      // with 0 stock the same person can still create the product
+      await expect(service.create({ name: 'G0', description: 'd', price: 1, categoryId: 'cat1', variants: [{ name: 'S', price: 1, stock: 0 }] } as any, staff)).resolves.toBeDefined();
+    });
   });
 });

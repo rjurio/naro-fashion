@@ -12,8 +12,8 @@ import { InventoryService } from './inventory.service';
 describe('InventoryService.adjustStock — performedBy attribution', () => {
   function makeService() {
     const txClient = {
-      productVariant: { update: jest.fn().mockResolvedValue({}) },
-      product: { update: jest.fn().mockResolvedValue({}) },
+      productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findFirst: jest.fn().mockResolvedValue({ stock: 15 }) },
+      product: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       inventoryTransaction: {
         create: jest.fn().mockImplementation((args: any) => Promise.resolve(args.data)),
       },
