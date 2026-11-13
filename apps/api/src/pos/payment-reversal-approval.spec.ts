@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { PERMISSIONS_KEY } from '../auth/decorators/requires-permission.decorator';
 import { PosController } from './pos.controller';
 import { PosService } from './pos.service';
@@ -15,9 +17,13 @@ function world(over: any = {}) {
   const requests: any[] = [];
   const reviews: any[] = [];
   const audit = { log: jest.fn(async () => undefined) };
+  const refunds = { refundedRows: over.__refundedRows ?? 0, openRequests: over.__openRefundRequests ?? 0 };
+  delete payment.__refundedRows; delete payment.__openRefundRequests;
   const tx: any = {
     $executeRaw: jest.fn(async () => 1),
+    refundRequest: { count: jest.fn(async () => refunds.openRequests) },
     payment: {
+      count: jest.fn(async () => refunds.refundedRows),
       findFirst: jest.fn(async () => ({ ...payment })),
       updateMany: jest.fn(async ({ where, data }: any) => {
         if (where.status && payment.status !== where.status) return { count: 0 };
@@ -57,7 +63,7 @@ function world(over: any = {}) {
     $transaction: jest.fn(async (cb: any) => cb(tx)),
   };
   const service = new PosService(prisma, { requireId: T } as any, audit as any);
-  return { service, payment, requests, reviews, audit, tx };
+  return { service, payment, requests, reviews, audit, tx, refunds };
 }
 const code = async (p: Promise<unknown>) => { try { await p; return 'OK'; } catch (e: any) { return e.getResponse?.().code ?? e.message; } };
 
@@ -102,6 +108,43 @@ describe('payment reversal: request → independent approval → executed once',
     expect(await code(w.service.rejectReversal(b.request.id, undefined, 'cashier'))).toBe('SELF_DECISION');
     expect((await w.service.rejectReversal(b.request.id, 'terminal report shows it', 'manager')).status).toBe('REJECTED');
     expect(w.payment.status).toBe('COMPLETED');
+  });
+  it('an already-reversed or refunded payment, or a sale with a refund requested / paid, is refused (request AND execution)', async () => {
+    expect(await code(world({ status: 'REVERSED' }).service.requestReversal('pay-9', 'Not on terminal settlement report', 'cashier'))).toMatch(/only a COMPLETED/);
+    expect(await code(world({ status: 'REFUNDED' }).service.requestReversal('pay-9', 'Not on terminal settlement report', 'cashier'))).toMatch(/only a COMPLETED/);
+    expect(await code(world({ __refundedRows: 1 }).service.requestReversal('pay-9', 'Not on terminal settlement report', 'cashier'))).toBe('HAS_REFUNDS');
+    expect(await code(world({ __openRefundRequests: 1 }).service.requestReversal('pay-9', 'Not on terminal settlement report', 'cashier'))).toBe('HAS_REFUNDS');
+    // a refund raised AFTER the reversal request blocks the execution too
+    const w = world();
+    const { request }: any = await w.service.requestReversal('pay-9', 'Not on terminal settlement report', 'cashier');
+    w.refunds.openRequests = 1;
+    expect(await code(w.service.approveReversal(request.id, undefined, 'manager'))).toBe('HAS_REFUNDS');
+    expect(w.payment.status).toBe('COMPLETED');
+    expect(w.tx.order.updateMany).not.toHaveBeenCalled();
+    // the refund-target query is tenant-scoped and covers the sale
+    expect(w.tx.refundRequest.count.mock.calls[0][0].where).toMatchObject({ tenantId: T, OR: [{ orderId: 'o9' }] });
+  });
+  it('a SUPER_ADMIN requester is not exempt: same person -> 403 SELF_APPROVAL (the service has no role bypass)', async () => {
+    const w = world();
+    const { request }: any = await w.service.requestReversal('pay-9', 'Not on terminal settlement report', 'super-1');
+    expect(await code(w.service.approveReversal(request.id, undefined, 'super-1'))).toBe('SELF_APPROVAL');
+    const src = fs.readFileSync(path.join(__dirname, 'pos.service.ts'), 'utf8');
+    const body = src.slice(src.indexOf('async approveReversal('), src.indexOf('async rejectReversal('));
+    expect(body).not.toMatch(/SUPER_ADMIN|isPlatformAdmin/);
+  });
+  it('the one-step reversePayment() is reachable from no route and called by no other source file', () => {
+    expect((PosController.prototype as any).reversePayment).toBeUndefined();
+    const root = path.join(__dirname, '..');
+    const offenders: string[] = [];
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const f = path.join(d, e.name);
+        if (e.isDirectory()) walk(f);
+        else if (f.endsWith('.ts') && !f.endsWith('.spec.ts') && !f.endsWith('pos.service.ts') && /\.reversePayment\(/.test(fs.readFileSync(f, 'utf8'))) offenders.push(f);
+      }
+    };
+    walk(root);
+    expect(offenders).toEqual([]);
   });
   it('cash, provider-verified and rental payments cannot even be requested', async () => {
     expect(await code(world({ method: 'CASH', gatewayResponse: {} }).service.requestReversal('pay-9', 'wrong change given', 'cashier'))).toMatch(/Only manually confirmed/);

@@ -395,11 +395,36 @@ export class PosService {
     }
   }
 
+  /**
+   * A payment whose sale / layaway already has money going back to the
+   * customer (a REFUNDED payout row, or a refund request that is open or
+   * paid) is never reversed: the refund was computed against this money, so
+   * reversing it too would count the same amount twice. Such a case goes to
+   * the owner for manual review.
+   */
+  private async assertNoRefunds(tx: any, p: any) {
+    const tenantId = this.tenantContext.requireId;
+    const targets = [p.orderId ? { orderId: p.orderId } : null, p.layawayId ? { layawayId: p.layawayId } : null].filter(Boolean);
+    if (targets.length === 0) return;
+    const [refunded, requests] = await Promise.all([
+      tx.payment.count({ where: { tenantId, status: 'REFUNDED', OR: targets } }),
+      tx.refundRequest.count({ where: { tenantId, status: { in: ['REQUESTED', 'APPROVED', 'PAYING', 'PAID'] }, OR: targets } }),
+    ]);
+    if (refunded > 0 || requests > 0) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'HAS_REFUNDS',
+        message: 'This sale already has a refund (requested or paid). A reversal would count the same money twice — refer it to the owner.',
+      });
+    }
+  }
+
   private async reverseInTx(tx: any, paymentId: string, reason: string, actorId: string, extra: Record<string, unknown>) {
     const tenantId = this.tenantContext.requireId;
     const p = await tx.payment.findFirst({ where: { id: paymentId, tenantId } });
     if (!p) throw new NotFoundException('Payment not found.');
     this.assertReversible(p);
+    await this.assertNoRefunds(tx, p);
     const gr: any = p.gatewayResponse ?? {};
     const claimed = await tx.payment.updateMany({
       where: { id: p.id, tenantId, status: 'COMPLETED' },
@@ -441,6 +466,7 @@ export class PosService {
       const p = await tx.payment.findFirst({ where: { id: paymentId, tenantId } });
       if (!p) throw new NotFoundException('Payment not found.');
       this.assertReversible(p);
+      await this.assertNoRefunds(tx, p);
       const now = new Date();
       await tx.paymentReversalRequest.updateMany({
         where: { tenantId, paymentId, status: 'REQUESTED', expiresAt: { lte: now } },
