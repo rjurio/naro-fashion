@@ -5,6 +5,7 @@ import { Loader2 } from 'lucide-react';
 import { adminApi } from '@/lib/api';
 import { useToast } from '@/contexts/ToastContext';
 import { useSyncStatus } from '@/contexts/SyncContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 /**
  * Round 25F E — second-person approvals:
@@ -12,6 +13,9 @@ import { useSyncStatus } from '@/contexts/SyncContext';
  *  - payment reversals (a different holder of payments:reverse);
  *  - review of card / mobile-money payments confirmed by hand at the till (reports:view).
  * Each section only loads if the signed-in person may see it (403 → hidden).
+ * Your OWN requests show only "Withdraw"; the decide buttons appear only on
+ * other people's requests (the server refuses a self-decision anyway, for
+ * every role — this just doesn't offer it).
  */
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-TZ');
 const when = (d: unknown) => (d ? new Date(String(d)).toLocaleString() : '—');
@@ -19,6 +23,8 @@ const when = (d: unknown) => (d ? new Date(String(d)).toLocaleString() : '—');
 export default function ApprovalsPage() {
   const toast = useToast();
   const { online } = useSyncStatus();
+  const { user } = useAuth();
+  const mine = (requestedById: unknown) => !!user?.id && String(requestedById) === user.id;
   const [stock, setStock] = useState<any[] | null>(null);
   const [reversals, setReversals] = useState<any[] | null>(null);
   const [manual, setManual] = useState<any[] | null>(null);
@@ -81,13 +87,21 @@ export default function ApprovalsPage() {
               <thead><tr className="text-left"><th>Asked</th><th>Type</th><th>Qty</th><th>Stock then</th><th>Reason</th><th>By</th><th /></tr></thead>
               <tbody>
                 {stock.map((r) => (
-                  <tr key={r.id} className="border-t border-[hsl(var(--border))]">
+                  <tr key={r.id} data-testid={`stock-request-${r.id}`} className="border-t border-[hsl(var(--border))]">
                     <td>{when(r.createdAt)}</td><td>{r.type === 'DAMAGE' ? 'Write-off' : 'Decrease'}</td><td>−{r.quantity}</td>
-                    <td>{r.stockAtRequest} → {r.stockAtRequest - r.quantity}</td><td>{r.note}</td><td className="font-mono text-xs">{String(r.requestedById).slice(-6)}</td>
+                    <td>{r.stockAtRequest} → {r.stockAtRequest - r.quantity}</td><td>{r.note}</td><td className="font-mono text-xs">{mine(r.requestedById) ? 'you' : String(r.requestedById).slice(-6)}</td>
                     <td className="space-x-1 whitespace-nowrap">
-                      <button className={btn} disabled={!!busy} onClick={() => run(`sa${r.id}`, () => adminApi.approveInventoryAdjustment(r.id), 'Applied')}><Spin k={`sa${r.id}`} />Approve</button>
-                      <button className={btn} disabled={!!busy} onClick={() => run(`sr${r.id}`, () => adminApi.rejectInventoryAdjustment(r.id), 'Rejected')}><Spin k={`sr${r.id}`} />Reject</button>
-                      <button className={btn} disabled={!!busy} onClick={() => run(`sw${r.id}`, () => adminApi.withdrawInventoryAdjustment(r.id), 'Withdrawn')}><Spin k={`sw${r.id}`} />Withdraw (mine)</button>
+                      {mine(r.requestedById) ? (
+                        <>
+                          <span data-testid={`stock-own-${r.id}`} className="text-xs text-[hsl(var(--muted-foreground))] mr-1">Your request: someone else must approve it.</span>
+                          <button data-testid={`stock-withdraw-${r.id}`} className={btn} disabled={!!busy} onClick={() => run(`sw${r.id}`, () => adminApi.withdrawInventoryAdjustment(r.id), 'Withdrawn')}><Spin k={`sw${r.id}`} />Withdraw</button>
+                        </>
+                      ) : (
+                        <>
+                          <button data-testid={`stock-approve-${r.id}`} className={btn} disabled={!!busy} onClick={() => run(`sa${r.id}`, () => adminApi.approveInventoryAdjustment(r.id), 'Applied')}><Spin k={`sa${r.id}`} />Approve</button>
+                          <button data-testid={`stock-reject-${r.id}`} className={btn} disabled={!!busy} onClick={() => run(`sr${r.id}`, () => adminApi.rejectInventoryAdjustment(r.id), 'Rejected')}><Spin k={`sr${r.id}`} />Reject</button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -106,13 +120,21 @@ export default function ApprovalsPage() {
               <thead><tr className="text-left"><th>Asked</th><th>Payment</th><th>Reason</th><th>By</th><th>Expires</th><th /></tr></thead>
               <tbody>
                 {reversals.map((r) => (
-                  <tr key={r.id} className="border-t border-[hsl(var(--border))]">
+                  <tr key={r.id} data-testid={`reversal-request-${r.id}`} className="border-t border-[hsl(var(--border))]">
                     <td>{when(r.createdAt)}</td><td className="font-mono text-xs">{r.paymentId}</td><td>{r.reason}</td>
-                    <td className="font-mono text-xs">{String(r.requestedById).slice(-6)}</td><td>{when(r.expiresAt)}</td>
+                    <td className="font-mono text-xs">{mine(r.requestedById) ? 'you' : String(r.requestedById).slice(-6)}</td><td>{when(r.expiresAt)}</td>
                     <td className="space-x-1 whitespace-nowrap">
-                      <button className={btn} disabled={!!busy} onClick={() => run(`ra${r.id}`, () => adminApi.approvePaymentReversal(r.id), 'Reversed')}><Spin k={`ra${r.id}`} />Approve &amp; reverse</button>
-                      <button className={btn} disabled={!!busy} onClick={() => run(`rr${r.id}`, () => adminApi.rejectPaymentReversal(r.id), 'Rejected')}><Spin k={`rr${r.id}`} />Reject</button>
-                      <button className={btn} disabled={!!busy} onClick={() => run(`rw${r.id}`, () => adminApi.withdrawPaymentReversal(r.id), 'Withdrawn')}><Spin k={`rw${r.id}`} />Withdraw (mine)</button>
+                      {mine(r.requestedById) ? (
+                        <>
+                          <span data-testid={`reversal-own-${r.id}`} className="text-xs text-[hsl(var(--muted-foreground))] mr-1">Your request: someone else must approve it.</span>
+                          <button data-testid={`reversal-withdraw-${r.id}`} className={btn} disabled={!!busy} onClick={() => run(`rw${r.id}`, () => adminApi.withdrawPaymentReversal(r.id), 'Withdrawn')}><Spin k={`rw${r.id}`} />Withdraw</button>
+                        </>
+                      ) : (
+                        <>
+                          <button data-testid={`reversal-approve-${r.id}`} className={btn} disabled={!!busy} onClick={() => run(`ra${r.id}`, () => adminApi.approvePaymentReversal(r.id), 'Reversed')}><Spin k={`ra${r.id}`} />Approve &amp; reverse</button>
+                          <button data-testid={`reversal-reject-${r.id}`} className={btn} disabled={!!busy} onClick={() => run(`rr${r.id}`, () => adminApi.rejectPaymentReversal(r.id), 'Rejected')}><Spin k={`rr${r.id}`} />Reject</button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -131,13 +153,19 @@ export default function ApprovalsPage() {
               <thead><tr className="text-left"><th>Confirmed</th><th>Method</th><th>Amount</th><th>Reference</th><th>By</th><th>Note</th><th /></tr></thead>
               <tbody>
                 {manual.map((p) => (
-                  <tr key={p.paymentId} className="border-t border-[hsl(var(--border))]">
+                  <tr key={p.paymentId} data-testid={`manual-review-${p.paymentId}`} className="border-t border-[hsl(var(--border))]">
                     <td>{when(p.confirmedAt ?? p.createdAt)}</td><td>{p.method}</td><td>{fmt(p.amount)}</td><td className="font-mono text-xs">{p.reference}</td>
                     <td className="font-mono text-xs">{String(p.confirmedById ?? '').slice(-6)}</td>
                     <td><input className="px-2 py-1 text-xs border border-[hsl(var(--border))] rounded bg-transparent" placeholder="note (needed to query)" value={notes[p.paymentId] ?? ''} onChange={(e) => setNotes({ ...notes, [p.paymentId]: e.target.value })} /></td>
                     <td className="space-x-1 whitespace-nowrap">
-                      <button className={btn} disabled={!!busy} onClick={() => run(`mo${p.paymentId}`, () => adminApi.reviewManualConfirmation(p.paymentId, 'OK', notes[p.paymentId]), 'Marked as checked')}><Spin k={`mo${p.paymentId}`} />Checked</button>
-                      <button className={btn} disabled={!!busy} onClick={() => run(`mq${p.paymentId}`, () => adminApi.reviewManualConfirmation(p.paymentId, 'QUERIED', notes[p.paymentId]), 'Queried')}><Spin k={`mq${p.paymentId}`} />Query</button>
+                      {mine(p.confirmedById) ? (
+                        <span className="text-xs text-[hsl(var(--muted-foreground))]">You confirmed it: someone else reviews it.</span>
+                      ) : (
+                        <>
+                          <button className={btn} disabled={!!busy} onClick={() => run(`mo${p.paymentId}`, () => adminApi.reviewManualConfirmation(p.paymentId, 'OK', notes[p.paymentId]), 'Marked as checked')}><Spin k={`mo${p.paymentId}`} />Checked</button>
+                          <button className={btn} disabled={!!busy} onClick={() => run(`mq${p.paymentId}`, () => adminApi.reviewManualConfirmation(p.paymentId, 'QUERIED', notes[p.paymentId]), 'Queried')}><Spin k={`mq${p.paymentId}`} />Query</button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
