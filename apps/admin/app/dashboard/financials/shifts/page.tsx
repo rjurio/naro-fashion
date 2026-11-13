@@ -3,7 +3,12 @@
 /**
  * Admin → Financials → Shift reconciliation (R4, round 25D F). Read-only.
  *
- * Each shift opens into GET /pos/sessions/:id/reconciliation (reports:view):
+ * Each shift opens into GET /pos/sessions/:id/reconciliation. A manager
+ * (reports:view) gets the MANAGER view; the shift's own cashier gets the
+ * CASHIER view (their drawer, without the shop-wide sections). Round 25E: a
+ * completeness banner lists every warning, and every payment without a shift
+ * tag is listed with its reason and totalled — never counted as zero.
+ * The reconciliation shows:
  *  - the drawer: opening + cash in − cash out = expected, against the cash
  *    counted at close (and the expected figure saved at close, if it differs);
  *  - money received by category (POS sales, rental fee, deposit, late fee,
@@ -17,6 +22,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Loader2, RefreshCw } from 'lucide-react';
 import { adminApi } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 
 const tzs = (n: unknown) => (n == null ? '—' : `TZS ${Number(n).toLocaleString('en-US')}`);
 const when = (d?: string | null) => (d ? new Date(d).toLocaleString() : '—');
@@ -62,17 +68,64 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+const COMPONENT_LABELS: Record<string, string> = {
+  RENTAL_FEE: 'Rental fee refunded',
+  DEPOSIT: 'Deposit returned',
+  LATE_FEE: 'Late fee refunded',
+  OVERPAID: 'Overpayment returned (surplus)',
+  UNALLOCATED: 'Not allocated',
+};
+
+function RowList({ rows, money = true }: { rows: any[]; money?: boolean }) {
+  return (
+    <ul className="list-disc ml-5">
+      {rows.map((x: any) => (
+        <li key={x.id}>
+          {x.direction === 'OUT' ? 'Paid out' : x.direction === 'IN' ? 'Received' : 'Reversed'} {money ? tzs(x.amount) : `(${tzs(x.amount)}, not money)`} · {x.method} · {x.category} · {when(x.createdAt)}
+          <span className="block text-[hsl(var(--muted-foreground))]">{x.reason}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function Reconciliation({ r }: { r: any }) {
   const d = r.drawer;
   const diffCls = d.difference == null ? '' : d.difference === 0 ? 'text-emerald-600' : 'text-red-600';
   const receipts = Object.entries(r.receipts ?? {}).filter(([, b]: any) => b.count > 0);
   const payouts = Object.entries(r.payouts ?? {}).filter(([, b]: any) => b.count > 0);
-  const cashNoShift = r.notAttributed?.cashWithoutShift?.rows ?? [];
-  const nonCashMine = r.notAttributed?.nonCashByThisCashier?.rows ?? [];
-  const L = r.liabilitiesNow ?? {};
+  const na = r.notAttributed ?? {};
+  const cashNoShift = na.cashWithoutShift?.rows ?? [];
+  const nonCashMine = na.nonCashByThisCashier?.rows ?? [];
+  const nonCashOthers = na.nonCashByOtherStaff?.rows ?? [];
+  const online = na.onlineInWindow?.rows ?? [];
+  const reversedNoShift = na.reversedWithoutShift?.rows ?? [];
+  const anyNotAttributed = cashNoShift.length + nonCashMine.length + nonCashOthers.length + online.length + reversedNoShift.length > 0 || Number(na.totals?.hiddenRows) > 0;
+  const warn = (r.warnings ?? []).filter((w: any) => w.severity === 'WARN');
+  const info = (r.warnings ?? []).filter((w: any) => w.severity === 'INFO');
+  const L = r.liabilitiesNow;
+  const byComponent = Object.entries(r.rentalPayoutsByComponent ?? {});
   const allChecks = r.checks?.everyTaggedRowAccounted && r.checks?.receiptsAddUp && r.checks?.payoutsAddUp;
   return (
     <div className="border-t border-[hsl(var(--border))] p-3 text-sm grid grid-cols-1 lg:grid-cols-2 gap-3" data-testid="shift-reconciliation">
+      <div className="lg:col-span-2 flex flex-wrap items-center gap-2 text-xs">
+        <span className={`rounded px-2 py-0.5 font-medium ${r.view === 'CASHIER' ? 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200' : 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200'}`} data-testid="recon-view">
+          {r.view === 'CASHIER' ? 'Cashier view: your drawer' : 'Manager view'}
+        </span>
+        {r.view === 'CASHIER' && <span className="text-[hsl(var(--muted-foreground))]">Shop-wide liabilities and other staff&apos;s rows are shown to managers only.</span>}
+      </div>
+      <div
+        className={`lg:col-span-2 rounded-lg border p-3 text-xs ${r.complete ? 'border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30' : 'border-red-300 bg-red-50 dark:bg-red-950/30'}`}
+        data-testid="recon-completeness"
+        data-complete={r.complete ? 'true' : 'false'}
+      >
+        <div className="flex items-center gap-2 font-medium">
+          {r.complete ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <AlertTriangle className="w-4 h-4 text-red-600" />}
+          {r.complete ? 'Complete: every payment in this shift is accounted for.' : `Incomplete: ${warn.length} item(s) need checking before this shift is signed off.`}
+        </div>
+        {warn.length > 0 && <ul className="list-disc ml-6 mt-1" data-testid="recon-warnings">{warn.map((w: any) => <li key={w.code}>{w.message}</li>)}</ul>}
+        {info.length > 0 && <ul className="ml-6 mt-1 text-[hsl(var(--muted-foreground))]">{info.map((w: any) => <li key={w.code}>{w.message}</li>)}</ul>}
+      </div>
       <Section title="Drawer cash">
         <Row label="Opening float" value={tzs(d.openingCash)} />
         <Row label="+ Cash received" value={tzs(d.cashIn)} testId="recon-cash-in" />
@@ -97,6 +150,9 @@ function Reconciliation({ r }: { r: any }) {
         <Row label="Deposits returned" value={tzs(r.books.depositsReturned)} testId="recon-deposits-returned" />
         <Row label="Layaway instalments received (held)" value={tzs(r.books.layawayPrepaymentsReceived)} />
         <Row label="Layaway money returned" value={tzs(r.books.layawayPrepaymentsReturned)} />
+        {Number(r.books.overpaymentsReturned) > 0 && (
+          <Row label="Overpayments returned (customer surplus)" value={tzs(r.books.overpaymentsReturned)} testId="recon-overpaid-returned" />
+        )}
         {Number(r.books.depositsRetainedAsIncome?.amount) > 0 && (
           <Row label="Deposits kept for damage (became income, no cash)" value={tzs(r.books.depositsRetainedAsIncome.amount)} />
         )}
@@ -140,6 +196,11 @@ function Reconciliation({ r }: { r: any }) {
             </tbody>
           </table>
         )}
+        {byComponent.length > 0 && (
+          <ul className="mt-2 text-xs" data-testid="recon-rental-payouts">
+            {byComponent.map(([k, b]: any) => <li key={k} data-testid={`recon-rental-payout-${k}`}>{COMPONENT_LABELS[k] ?? k}: {tzs(b.total)}</li>)}
+          </ul>
+        )}
         <div className="mt-2 text-xs">
           <div className="font-medium">By method (in / out)</div>
           <ul data-testid="recon-methods">
@@ -149,21 +210,19 @@ function Reconciliation({ r }: { r: any }) {
         </div>
       </Section>
 
-      {(cashNoShift.length > 0 || nonCashMine.length > 0) && (
+      {anyNotAttributed && (
         <div className="lg:col-span-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs space-y-2" data-testid="recon-not-attributed">
-          <div className="flex gap-2 font-medium"><AlertTriangle className="w-4 h-4 text-amber-600" /> Money with no shift tag (not in the expected cash)</div>
-          {cashNoShift.length > 0 && (
-            <div>
-              <div>Cash recorded during this shift without a drawer (net {tzs(r.notAttributed.cashWithoutShift.net)}). Check whether it went through this drawer:</div>
-              <ul className="list-disc ml-5">{cashNoShift.map((x: any) => <li key={x.id}>{x.status === 'COMPLETED' ? 'Received' : 'Paid out'} {tzs(x.amount)} · {x.category} · {when(x.createdAt)}</li>)}</ul>
-            </div>
-          )}
-          {nonCashMine.length > 0 && (
-            <div>
-              <div>Non-cash money this cashier recorded without a shift tag (doesn&apos;t affect the drawer):</div>
-              <ul className="list-disc ml-5">{nonCashMine.map((x: any) => <li key={x.id}>{x.method} {tzs(x.amount)} · {x.category} · {when(x.createdAt)}</li>)}</ul>
-            </div>
-          )}
+          <div className="flex gap-2 font-medium"><AlertTriangle className="w-4 h-4 text-amber-600" /> Money with no shift tag: listed, NOT in the expected cash, never counted as zero</div>
+          <div data-testid="recon-not-attributed-totals">
+            Not attributed: cash {tzs(na.totals?.cash?.net)} ({na.totals?.cash?.rows ?? 0} row(s)) · non-cash {tzs(na.totals?.nonCash?.net)} ({na.totals?.nonCash?.rows ?? 0} row(s))
+            {Number(na.totals?.online?.rows) > 0 && <> · online {tzs(na.totals.online.net)} ({na.totals.online.rows})</>} — not in the drawer figure.
+          </div>
+          {cashNoShift.length > 0 && <div><div className="font-medium">Cash without a drawer tag (net {tzs(na.cashWithoutShift.net)})</div><RowList rows={cashNoShift} /></div>}
+          {nonCashMine.length > 0 && <div><div className="font-medium">Non-cash recorded by this cashier without a shift tag</div><RowList rows={nonCashMine} /></div>}
+          {nonCashOthers.length > 0 && <div><div className="font-medium">Non-cash recorded by other or unknown staff without a shift tag</div><RowList rows={nonCashOthers} /></div>}
+          {online.length > 0 && <div><div className="font-medium">Online gateway payments during the shift (online channel)</div><RowList rows={online} /></div>}
+          {reversedNoShift.length > 0 && <div><div className="font-medium">Reversed payments without a shift tag</div><RowList rows={reversedNoShift} money={false} /></div>}
+          {na.hiddenNote && <p className="italic" data-testid="recon-hidden-note">{na.hiddenNote}</p>}
         </div>
       )}
 
@@ -186,13 +245,19 @@ function Reconciliation({ r }: { r: any }) {
         </Section>
       )}
 
-      <Section title={`Shop liabilities now (${when(L.asOf)})`}>
-        <Row label={`Deposits held (${L.depositsHeld?.rentals ?? 0} bookings)`} value={tzs(L.depositsHeld?.amount)} testId="recon-deposits-held" />
-        <Row label={`Layaway money held (${L.layawayPrepaymentsHeld?.layaways ?? 0})`} value={tzs(L.layawayPrepaymentsHeld?.amount)} />
-        <Row label={`Refunds approved, not paid (${L.refundRequestsApprovedUnpaid?.count ?? 0})`} value={tzs(L.refundRequestsApprovedUnpaid?.amount)} testId="recon-approved-unpaid" />
-        <Row label={`Refunds awaiting approval (${L.refundRequestsAwaitingApproval?.count ?? 0})`} value={tzs(L.refundRequestsAwaitingApproval?.amount)} />
-        <Row label={`Cancelled bookings with money due back (${L.cancelledRentalsRefundDue?.count ?? 0})`} value={tzs(L.cancelledRentalsRefundDue?.held)} />
-      </Section>
+      {L ? (
+        <Section title={`Shop liabilities now (${when(L.asOf)})`}>
+          <Row label={`Deposits held (${L.depositsHeld?.rentals ?? 0} bookings)`} value={tzs(L.depositsHeld?.amount)} testId="recon-deposits-held" />
+          <Row label={`Layaway money held (${L.layawayPrepaymentsHeld?.layaways ?? 0})`} value={tzs(L.layawayPrepaymentsHeld?.amount)} />
+          <Row label={`Refunds approved, not paid (${L.refundRequestsApprovedUnpaid?.count ?? 0})`} value={tzs(L.refundRequestsApprovedUnpaid?.amount)} testId="recon-approved-unpaid" />
+          <Row label={`Refunds awaiting approval (${L.refundRequestsAwaitingApproval?.count ?? 0})`} value={tzs(L.refundRequestsAwaitingApproval?.amount)} />
+          <Row label={`Cancelled bookings with money due back (${L.cancelledRentalsRefundDue?.count ?? 0})`} value={tzs(L.cancelledRentalsRefundDue?.held)} />
+        </Section>
+      ) : (
+        <Section title="Shop liabilities now">
+          <p className="text-xs text-[hsl(var(--muted-foreground))]" data-testid="recon-liabilities-hidden">Shown to managers (View Reports) only.</p>
+        </Section>
+      )}
 
       <div className="lg:col-span-2 text-xs flex items-center gap-2" data-testid="recon-checks">
         {allChecks ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <AlertTriangle className="w-4 h-4 text-red-600" />}
@@ -204,6 +269,8 @@ function Reconciliation({ r }: { r: any }) {
 }
 
 export default function ShiftsPage() {
+  const { user } = useAuth();
+  const [mineOnly, setMineOnly] = useState(false);
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -233,7 +300,7 @@ export default function ShiftsPage() {
       setRecon((m) => ({ ...m, [id]: r }));
       setReconError((m) => { const n = { ...m }; delete n[id]; return n; });
     } catch (e: any) {
-      setReconError((m) => ({ ...m, [id]: e?.status === 403 ? 'You need the "View Reports" permission to see the reconciliation.' : e?.message || 'Could not load the reconciliation' }));
+      setReconError((m) => ({ ...m, [id]: e?.status === 403 ? 'Only the cashier who ran this shift, or a manager with the "View Reports" permission, can see its reconciliation.' : e?.message || 'Could not load the reconciliation' }));
     } finally {
       setBusy(null);
     }
@@ -252,6 +319,10 @@ export default function ShiftsPage() {
           <h1 className="text-2xl font-bold">Shift reconciliation</h1>
           <p className="text-sm text-[hsl(var(--muted-foreground))]">Cash counted at the close of each POS shift against the cash the system expected, with every payment behind it.</p>
         </div>
+        <div className="flex items-center gap-3">
+        <label className="inline-flex items-center gap-1 text-sm">
+          <input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} data-testid="shifts-mine-only" /> My shifts only
+        </label>
         <button
           onClick={load}
           disabled={loading}
@@ -260,12 +331,13 @@ export default function ShiftsPage() {
         >
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Refresh
         </button>
+        </div>
       </div>
       {loading && rows.length === 0 ? <Loader2 className="w-5 h-5 animate-spin text-brand-gold" /> : error ? <p className="text-sm text-red-600">{error}</p> : rows.length === 0 ? (
         <p className="text-sm text-[hsl(var(--muted-foreground))]">No shifts yet.</p>
       ) : (
         <div className="space-y-2">
-          {rows.map((s) => {
+          {rows.filter((s) => !mineOnly || s.adminUserId === user?.id).map((s) => {
             const diff = s.cashDifference == null ? null : Number(s.cashDifference);
             return (
               <div key={s.id} className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))]" data-testid={`shift-${s.id}`}>
