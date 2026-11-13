@@ -182,7 +182,7 @@ systemctl start pm2-root.service; sleep 2
 (cd /var/www/sportflow && PORT=3200 HOST=127.0.0.1 STANDIN_LABEL=sportflow rpm2 start server.js --name sportflow-web > /dev/null)
 rpm2 start /var/www/jumuiya/idle.js --name pm2-logrotate > /dev/null
 rpm2 start /var/www/jumuiya/idle.js --name jumuiya-cron > /dev/null && rpm2 stop jumuiya-cron > /dev/null
-rpm2 start /var/www/jumuiya/crash.js --name jumuiya-worker --max-restarts 2 --restart-delay 200 > /dev/null
+rpm2 start /var/www/jumuiya/crash.js --name jumuiya-worker --max-restarts 2 > /dev/null   # crash loop -> errored
 for _ in $(seq 1 40); do rpm2 jlist | node "$SHIM/jlist-filter.js" | grep -q '^jumuiya-worker .*status=errored' && break; sleep 1; done
 rpm2 save > /dev/null
 # kiuruwi: its own account, unit and daemon

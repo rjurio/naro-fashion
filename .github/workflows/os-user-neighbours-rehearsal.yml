@@ -47,6 +47,8 @@ jobs:
           fi
           pg_dump --version; psql --version
       - name: PM2 (the VPS runs pm2 6.0.14)
-        run: npm i -g pm2@6.0.14 && pm2 --version
+        # NOT `pm2 --version`: any pm2 CLI call spawns a daemon (here: one
+        # owned by the runner user) — the very failure mode the guard is for.
+        run: npm i -g pm2@6.0.14 && npm ls -g pm2
       - name: Rehearse deploy / rollback / migration with neighbours
         run: sudo -E env PATH="$PATH" REPO="$GITHUB_WORKSPACE" DATABASE_URL="postgresql://postgres:ci@localhost:5432/naro_fashion?schema=public" bash ci-osu/osu-neighbours-rehearsal.sh
