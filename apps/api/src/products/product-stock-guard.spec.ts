@@ -144,13 +144,24 @@ describe('product form never overwrites stock (API-level guard)', () => {
     await w.service.update('p1', { variants: [
       { id: 'v1', name: 'S', price: 100 },
       { name: 'XL', price: 150, stock: 3 },
-    ] } as any, 'owner-id');
+    ] } as any, { id: 'owner-id', isAdmin: true, role: 'SUPER_ADMIN', tenantId: 't1' });
     const created = [...w.variants.values()].find((v) => v.name === 'XL')!;
     expect(created.stock).toBe(3);
     expect(w.ledger).toEqual([expect.objectContaining({
       type: 'ADJUSTMENT', quantityBefore: 0, quantityChange: 3, quantityAfter: 3,
       variantId: created.id, performedBy: 'owner-id', reference: 'product-form:new-variant', tenantId: 't1',
     })]);
+  });
+
+  it('PR #42 port: opening stock of a NEW size without inventory:manage → 403 INVENTORY_PERMISSION_REQUIRED, nothing written', async () => {
+    const w = world([{ id: 'v1', stock: 2 }]);
+    const e: any = await err(w.service.update('p1', { variants: [
+      { id: 'v1', name: 'S', price: 100 },
+      { name: 'XL', price: 150, stock: 3 },
+    ] } as any, 'owner-id'));
+    expect(e.getResponse().code).toBe('INVENTORY_PERMISSION_REQUIRED');
+    expect([...w.variants.values()].find((v) => v.name === 'XL')).toBeUndefined();
+    expect(w.ledger).toHaveLength(0);
   });
 
   it('a new variant without stock (or with junk / negative stock) starts at 0 and writes no ledger row', async () => {
