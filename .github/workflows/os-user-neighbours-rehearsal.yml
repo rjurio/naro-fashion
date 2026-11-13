@@ -1,0 +1,52 @@
+# CI VEHICLE — never merged: the NARO deploy / rollback paths and the OS-user
+# migration on REAL systemd + REAL pm2 6.0.14, with decoy neighbours (Jumuiya
+# prod + staging, Sportflow, logrotate, a stopped and an errored app in the
+# root daemon; kiuruwi in its own account + unit). Asserts the neighbours'
+# PIDs / restart counts, both other daemons, and the recovery access (sshd
+# config, root authorized_keys, sudoers, PAM, root password) are unchanged.
+# Pull requests only; read-only token; no secrets; nothing touches the VPS.
+name: OS-user neighbour rehearsal (CI only)
+on:
+  pull_request:
+    branches: [ops/naro-os-user]
+permissions:
+  contents: read
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: naro_fashion
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @naro/database exec prisma generate
+      - name: Database schema (throwaway service)
+        run: pnpm --filter @naro/database exec prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://postgres:ci@localhost:5432/naro_fashion?schema=public
+      - run: pnpm --filter api build && test -f apps/api/dist/main.js
+      - name: PostgreSQL client for the pre-deploy pg_dump
+        run: |
+          if ! command -v pg_dump >/dev/null || [ "$(pg_dump --version | grep -oE '[0-9]+' | head -1)" -lt 16 ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16 || sudo apt-get install -y -qq postgresql-client
+          fi
+          pg_dump --version; psql --version
+      - name: PM2 (the VPS runs pm2 6.0.14)
+        run: npm i -g pm2@6.0.14 && pm2 --version
+      - name: Rehearse deploy / rollback / migration with neighbours
+        run: sudo -E env PATH="$PATH" REPO="$GITHUB_WORKSPACE" DATABASE_URL="postgresql://postgres:ci@localhost:5432/naro_fashion?schema=public" bash ci-osu/osu-neighbours-rehearsal.sh
