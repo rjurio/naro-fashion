@@ -226,11 +226,15 @@ if [ -z "$PREDEPLOY_DUMP" ] || [ ! -s "$PREDEPLOY_DUMP" ]; then
   die "pre-deploy dump '${PREDEPLOY_DUMP}' is missing or empty — refusing to touch the schema"
 fi
 log "✔ Pre-deploy dump: ${PREDEPLOY_DUMP} ($(du -h "$PREDEPLOY_DUMP" | awk '{print $1}'))"
+# Printed text only (unquoted heredoc: no backticks or command substitution
+# inside). In OS-user mode the NARO apps live in the naro daemon, so the
+# operator's pm2 commands need the sudo prefix.
+NARO_PM2_PFX="$(naro_pm2_hint)"
 cat <<EOF
 ------------------------------------------------------------------------
 To ROLL BACK the database to the state before this deploy:
   bash scripts/ops/pm2-guard.sh   # must PASS before any pm2 command
-  pm2 stop naro-api naro-admin naro-storefront
+  ${NARO_PM2_PFX}pm2 stop naro-api naro-admin naro-storefront
   sudo -u postgres psql -c "DROP DATABASE naro_fashion;"
   sudo -u postgres psql -c "CREATE DATABASE naro_fashion OWNER naro_admin;"
   PGPASSFILE=/root/.pgpass pg_restore --clean --if-exists --no-owner --no-acl \\

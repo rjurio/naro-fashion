@@ -42,6 +42,11 @@ templates) can fail during the ~1 minute API build.
 
 ## PM2 supervision guard
 
+> **OS-user mode (round 25F, inactive until `/etc/naro-pm2.env` exists):** the NARO apps can run under a dedicated unprivileged account `naro` with its own `pm2-naro.service`.
+> - The guard then verifies both daemons; every NARO pm2 command goes through `naro_pm2` (`sudo -u naro`, reset environment).
+> - `naro_fs_modes` re-asserts file modes before each reload.
+> - Rollout, rollback and checks: [OS_USER.md](OS_USER.md).
+
 ### Who supervises PM2 on this VPS
 
 Root PM2 is supervised by **`pm2-root.service`** (systemd, `Type=forking`,
@@ -104,7 +109,10 @@ warning for `kiuruwi`):
 5. At the start of `rollback.sh`, before anything is swapped.
 
 The `pm2 status` / `pm2 logs` failure diagnostics go through
-`pm2_diagnostics`, which skips them unless the guard passes.
+`pm2_diagnostics`, which skips them unless the guard passes. The logs are the
+three NARO apps' only (`pm2 logs '/^naro-(api|storefront|admin)$/'`): a bare
+`pm2 logs` means `all`, and in root mode it would copy the other apps' log
+lines into NARO's deploy output.
 
 ### NARO never restarts other apps
 
@@ -118,6 +126,17 @@ They never run `all`. The self-test fails the build on any pm2 command
 outside `pm2_guarded`/`pm2_diagnostics`, any pm2 command naming `all`, and
 any backtick or `$(` inside an unquoted heredoc. That last check exists
 because the rollback help text once **executed** `pm2 restart all` that way.
+It also fails on a pm2 subcommand other than reload / restart / save /
+status / logs, on any `systemctl` use beyond the guard's read-only `show`, and
+on any reference to sshd, `~/.ssh`, sudoers, PAM, ufw, passwords or account
+commands in the deploy path. Section 6 of the self-test runs deploy, rollback
+and automatic rollback in both modes with Jumuiya / Sportflow / logrotate /
+kiuruwi decoys online, stopped, errored and restarting, and fails if any
+neighbour PID changes. Neighbours and recovery access: [OS_USER.md](OS_USER.md).
+
+In **root mode**, `pm2 save` writes the shared `/root/.pm2/dump.pm2`, so it
+also records the other apps' current state (as their own deploys' `pm2 save`
+does). In OS-user mode NARO never sends any command to the root daemon.
 
 Also keep these off this box:
 - `systemctl reload pm2-root.service`: its `ExecReload` is `pm2 reload all`.

@@ -14,7 +14,8 @@
 # `unset PM2_GUARD_TEST` line (both asserted to exist first).
 #
 # Sections: 1) guard scenarios  2) deploy-lib wiring  3) deploy/rollback
-# flows  4) static invariants.
+# flows  5) OS-user mode  6) neighbour apps (Jumuiya, Sportflow, logrotate,
+# kiuruwi) in both modes  4) static invariants.
 
 set -uo pipefail
 
@@ -73,7 +74,7 @@ mksock() {
 }
 
 fresh() {
-  rm -rf "$PROC" "$T/root" "$T/pm2_calls" "$T/sysctl_count" "$T/mutate_at" "$T/mutate.sh"
+  rm -rf "$PROC" "$T/root" "$T/home" "$T/pm2_calls" "$T/pm2_ctx" "$T/sysctl_count" "$T/mutate_at" "$T/mutate.sh" "$T"/unit.*.props "$T/fs_log" "$T/sudo_calls"
   mkdir -p "$PROC" "$PMH"
   mkproc 1 0 0 /init.scope /sbin/init
   mkproc 1000 1 0 "$CG_UNIT" "PM2 v6.0.14: God Daemon ($PMH)" "PM2_HOME=$PMH"
@@ -135,7 +136,7 @@ cat > "$BIN/fake-systemctl" <<EOF
 n=\$(( \$(cat "$T/sysctl_count" 2>/dev/null || echo 0) + 1 ))
 echo "\$n" > "$T/sysctl_count"
 if [ -f "$T/mutate_at" ] && [ "\$n" = "\$(cat "$T/mutate_at")" ]; then bash "$T/mutate.sh"; fi
-cat "$T/unit.props"
+if [ -f "$T/unit.\$2.props" ]; then cat "$T/unit.\$2.props"; else cat "$T/unit.props"; fi
 EOF
 cat > "$BIN/fake-ss" <<EOF
 #!/usr/bin/env bash
@@ -149,8 +150,57 @@ case "\$1" in
     [ -n "\${GIT_SHA:-}" ] && echo "\$GIT_SHA" > "$T/live_sha" ;;
   *) echo "\$*" >> "$T/pm2_calls" ;;
 esac
+# which daemon the call targets (section 6 asserts it), and its simulated effect
+echo "home=\${PM2_HOME:-} \$1" >> "$T/pm2_ctx"
+if [ -f "$T/simulate" ]; then bash "$BIN/pm2-sim" "\$@"; fi
 exit 0
 EOF
+# Simulated blast radius of a pm2 command (section 6, only while $T/simulate
+# exists): the apps it would restart get NEW pids in the fake /proc; stopped or
+# deleted ones disappear. Only the daemon at $PM2_HOME is affected, as with
+# real pm2. So "neighbour PIDs unchanged" is a real test: a 'restart all' or a
+# command naming a neighbour WOULD change them (proven by a control test).
+cat > "$BIN/pm2-sim" <<'SIM'
+#!/usr/bin/env bash
+T="$(cd "$(dirname "$0")/.." && pwd)"
+PROC="$T/proc"
+home="${PM2_HOME:-${HOME:-}/.pm2}"
+daemon="$(tr -d '[:space:]' < "$home/pm2.pid" 2>/dev/null)"
+{ [ -n "$daemon" ] && [ -d "$PROC/$daemon" ]; } || exit 0
+sub="${1:-}"
+shift || true
+case "$sub" in
+  reload|restart|stop|delete|start|kill|update|resurrect|startOrReload|startOrRestart) ;;
+  *) exit 0 ;;
+esac
+all=0; eco=0; names=" "; prev=""
+case "$sub" in kill|update|resurrect) all=1 ;; esac
+for a in "$@"; do
+  if [ "$prev" = "--only" ]; then names+="${a//,/ } "
+  elif [ "$a" = all ]; then all=1
+  elif [[ "$a" == -* ]]; then :
+  elif [[ "$a" == *ecosystem* ]]; then eco=1
+  else names+="$a "; fi
+  prev="$a"
+done
+if [ "$names" = " " ] && [ "$all" = 0 ] && [ "$eco" = 1 ]; then names=" naro-api naro-storefront naro-admin "; fi
+appname() { tr '\0' '\n' < "$PROC/$1/environ" 2>/dev/null | sed -n -e 's/^name=//p' -e 's/^pm2_env=.*"name":"\([^"]*\)".*/\1/p' | head -1; }
+next="$(cat "$T/sim_next_pid" 2>/dev/null || echo 8000)"
+for d in "$PROC"/[0-9]*; do
+  pid="${d##*/}"
+  [ "$(awk '/^PPid:/ {print $2; exit}' "$d/status" 2>/dev/null)" = "$daemon" ] || continue
+  n="$(appname "$pid")"
+  [ -n "$n" ] || continue
+  if [ "$all" = 1 ] || [[ "$names" == *" $n "* ]]; then
+    case "$sub" in
+      stop|delete) rm -rf "$d" ;;
+      *) mv "$d" "$PROC/$next"; next=$((next + 1)) ;;
+    esac
+  fi
+done
+echo "$next" > "$T/sim_next_pid"
+exit 0
+SIM
 
 # --- flow decoys -------------------------------------------------------------
 cat > "$BINF/pnpm" <<EOF
@@ -172,7 +222,12 @@ fi
 exit 0
 EOF
 printf '#!/usr/bin/env bash\necho t\n' > "$BINF/psql"
-printf '#!/usr/bin/env bash\necho "sudo $*" >> "%s/sudo_calls"\nexit 0\n' "$T" > "$BINF/sudo"
+cat > "$BINF/sudo" <<EOF
+#!/usr/bin/env bash
+echo "sudo \$*" >> "$T/sudo_calls"
+if [ "\${1:-}" = "-u" ] && [ "\${2:-}" = "naro" ] && [ "\${3:-}" = "-H" ]; then shift 3; exec "\$@"; fi
+exit 0
+EOF
 cat > "$BINF/curl" <<EOF
 #!/usr/bin/env bash
 url=""; wcode=0
@@ -218,6 +273,9 @@ run_guard() {
 }
 
 no_pm2_calls() { [ ! -s "$T/pm2_calls" ]; }
+
+# pm2_diagnostics tails the NARO apps' logs only (never 'all').
+DIAG_LOGS='logs /^naro-(api|storefront|admin)$/ --nostream --lines 40'
 
 expect_pass() {
   local name="$1" want="${2:-}"
@@ -498,7 +556,7 @@ fresh; make_app; echo "$V2" > "$T/bad_sha"; deploy; rc=$?
 c=1; [ "$rc" = 1 ] && head_is "$V1" && builds_are "$V1" && live_is "$V1" && no_restart_all \
   && expect_pm2 "$(pm2_reload_set "$V2")
 status
-logs --nostream --lines 40
+$DIAG_LOGS
 $(pm2_reload_set "$V1")" \
   && grep -q "Rollback COMPLETE and healthy" "$T/out" && [ "$(cat "$A/.deploy/rolled_back_from")" = "$V2" ] && c=0
 flow_result "automatic rollback: exit 1, v1 restored + reloaded, never 'restart all'" "$c"
@@ -587,6 +645,331 @@ if [ -f "$T/sudo_calls" ]; then bad "flows must never reach sudo (baseline path)
 
 fi  # PM2_GUARD_TEST_SKIP_FLOWS
 # ===========================================================================
+echo "5) OS-user mode (/etc/naro-pm2.env: NARO apps on a dedicated account):"
+# ===========================================================================
+NPMH="$T/home/naro/.pm2"
+CG_NARO="/system.slice/pm2-naro.service"
+NUID=990
+NCONF="$T/naro-pm2.env"
+fresh_naro() {
+  # The VPS after the move: the root daemon keeps the other apps; the NARO
+  # apps run under user naro's daemon (pm2-naro.service).
+  fresh
+  rm -rf "$PROC/1001" "$PROC/1002" "$PROC/1003" "$PROC/1006"
+  mkdir -p "$NPMH"
+  mkproc 5000 1 "$NUID" "$CG_NARO" "PM2 v6.0.14: God Daemon ($NPMH)" "PM2_HOME=$NPMH"
+  mkproc 5001 5000 "$NUID" "$CG_NARO" "node /var/www/naro-fashion/apps/api/dist/main.js" 'pm2_env={"exec_mode":"cluster_mode","name":"naro-api","pm_id":0}'
+  mkproc 5002 5000 "$NUID" "$CG_NARO" "next-server (v15.5.28)" 'pm2_env={"name":"naro-storefront","exec_mode":"cluster_mode","pm_id":1}'
+  mkproc 5003 5000 "$NUID" "$CG_NARO" "next-server (v15.5.28)" 'pm2_env={"exec_mode":"cluster_mode","name":"naro-admin","pm_id":2}'
+  mkproc 5006 5001 "$NUID" "$CG_NARO" "node helper.js" "name=naro-api"
+  printf '5000\n' > "$NPMH/pm2.pid"
+  mksock "$NPMH/rpc.sock"
+  mksock "$NPMH/pub.sock"
+  cat > "$T/unit.pm2-naro.service.props" <<EOF
+LoadState=loaded
+ActiveState=active
+SubState=running
+MainPID=5000
+ControlGroup=$CG_NARO
+PIDFile=$NPMH/pm2.pid
+Environment=PATH=/usr/bin:/bin PM2_HOME=$NPMH
+User=naro
+EOF
+  cat >> "$T/ss_unix" <<EOF
+u_str LISTEN 0 511 $NPMH/rpc.sock 32001 * 0 users:(("PM2 v6.0.14: Go",pid=5000,fd=23))
+u_str LISTEN 0 511 $NPMH/pub.sock 32002 * 0 users:(("PM2 v6.0.14: Go",pid=5000,fd=22))
+EOF
+  sed -i -e 's|\*:4000 \*:\* users:(("PM2 v6.0.14: Go",pid=1000|*:4000 *:* users:(("PM2 v6.0.14: Go",pid=5000|' \
+         -e 's|0.0.0.0:3000 0.0.0.0:\* users:(("PM2 v6.0.14: Go",pid=1000|0.0.0.0:3000 0.0.0.0:* users:(("PM2 v6.0.14: Go",pid=5000|' \
+         -e 's|0.0.0.0:3001 0.0.0.0:\* users:(("PM2 v6.0.14: Go",pid=1000|0.0.0.0:3001 0.0.0.0:* users:(("PM2 v6.0.14: Go",pid=5000|' "$T/ss_tcp"
+  printf 'NARO_PM2_USER=naro\nNARO_PM2_HOME=%s\nNARO_PM2_UNIT=pm2-naro.service\nNARO_PM2_PATH=%s\n' "$NPMH" "$BIN:$BINF:$PATH" > "$NCONF"
+}
+nsetprop() { sed -i "s|^$1=.*|$1=$2|" "$T/unit.pm2-naro.service.props"; }
+NARO_ENV=("PM2_GUARD_NARO_CONF=$NCONF" "PM2_GUARD_NARO_UID=$NUID" "PM2_GUARD_FS_LOG=$T/fs_log")
+run_guard_naro() {
+  env PATH="$BIN:$PATH" "${GUARD_ENV[@]}" "${NARO_ENV[@]}" PM2_GUARD_SOCKET_FLAG="$SOCKFLAG" \
+    PM2_GUARD_UID=0 PM2_HOME="$PMH" APP_DIR="$REPO" bash "$GUARD" > "$T/out" 2>&1
+}
+nexpect_pass() { if run_guard_naro && no_pm2_calls && grep -qF -- "$2" "$T/out"; then ok "$1"; else bad "$1 (expected PASS with '$2')"; show "$T/out"; fi; }
+nexpect_fail() { if ! run_guard_naro && no_pm2_calls && grep -qF -- "$2" "$T/out"; then ok "$1"; else bad "$1 (expected FAIL with '$2')"; show "$T/out"; fi; }
+
+fresh_naro; nexpect_pass "OS-user mode: healthy root + naro daemons pass" "PASSED (0 warning(s))"
+fresh_naro; nexpect_pass "OS-user mode: NARO apps counted under the naro daemon" "naro-api: 1/1 instance(s)"
+fresh_naro; nexpect_pass "OS-user mode: the root daemon is still verified (other apps)" "daemon 1000 is a root God Daemon inside $CG_UNIT"
+fresh_naro; nsetprop ActiveState inactive; nsetprop SubState dead; nsetprop MainPID 0
+nexpect_fail "naro unit inactive -> refuse" "pm2-naro.service is inactive/dead, not active/running"
+fresh_naro; nsetprop User root
+nexpect_fail "naro unit runs as root -> refuse" "pm2-naro.service runs as User='root', expected naro"
+fresh_naro; sed -i "s|^Uid:.*|Uid:\t0\t0\t0\t0|" "$PROC/5000/status"
+nexpect_fail "naro daemon running as root (wrong user) -> refuse" "not naro (uid $NUID)"
+fresh_naro; printf '4242\n' > "$NPMH/pm2.pid"
+nexpect_fail "naro pm2.pid != MainPID -> refuse" "not the one systemd supervises"
+fresh_naro; mkproc 1001 1000 0 "$CG_UNIT" "node /var/www/naro-fashion/apps/api/dist/main.js" 'pm2_env={"name":"naro-api","pm_id":1}'
+nexpect_fail "a NARO app left in the root daemon -> refuse" "naro-api process 1001 runs OUTSIDE pm2-naro.service"
+fresh_naro; sed -i "s|^Uid:.*|Uid:\t0\t0\t0\t0|" "$PROC/5001/status"
+nexpect_fail "a NARO worker running as root inside the naro unit -> refuse" "naro-api process 5001 runs as uid '0', expected naro"
+fresh_naro; mkproc 5100 2000 "$NUID" "$CG_SSH" "PM2 v6.0.14: God Daemon (/tmp/x/.pm2)"
+nexpect_fail "a second naro daemon (e.g. from an SSH shell) -> refuse" "another naro PM2 God Daemon is running: 5100"
+fresh_naro; sed -i 's|\*:4000 \*:\* users:(("PM2 v6.0.14: Go",pid=5000|*:4000 *:* users:(("PM2 v6.0.14: Go",pid=1000|' "$T/ss_tcp"
+nexpect_fail "port 4000 held by the root daemon -> refuse" "naro-api: :4000 is held by 1000"
+fresh_naro; setprop ActiveState inactive; setprop SubState dead; setprop MainPID 0
+nexpect_fail "root daemon down (other apps unsupervised) -> refuse even though naro is fine" "pm2-root.service is inactive/dead, not active/running"
+fresh_naro; NARO_ENV=("PM2_GUARD_NARO_CONF=$NCONF" "PM2_GUARD_NARO_UID=" "PM2_GUARD_FS_LOG=$T/fs_log")
+nexpect_fail "switch names an account without a uid -> refuse" "has no non-root uid"
+NARO_ENV=("PM2_GUARD_NARO_CONF=$NCONF" "PM2_GUARD_NARO_UID=$NUID" "PM2_GUARD_FS_LOG=$T/fs_log")
+fresh_naro; mkproc 3001 1 999 /system.slice/pm2-kiuruwi.service "PM2 v6.0.14: God Daemon (/home/kiuruwi/.pm2)"
+nexpect_pass "another account's daemon (kiuruwi) stays warn-only" "non-root PM2 daemon pid 3001"
+fresh_naro; rm -f "$NCONF"
+if ! run_guard_naro && grep -qF "naro-api process 5001 runs OUTSIDE pm2-root.service" "$T/out"; then
+  ok "switch removed while the apps still run as naro -> root-only check refuses (fail closed)"
+else
+  bad "removing the switch must fail closed"; show "$T/out"
+fi
+
+lib_run_naro() {
+  ( cd "$REPO" && export PATH="$BINF:$BIN:$PATH" "${GUARD_ENV[@]}" "${NARO_ENV[@]}" PM2_GUARD_UID=0 \
+      PM2_GUARD_SOCKET_FLAG="$SOCKFLAG" PM2_HOME="$PMH" APP_DIR="$REPO"
+    set -euo pipefail
+    # shellcheck source=scripts/ops/deploy-lib.sh
+    . scripts/ops/deploy-lib.sh
+    "$@" ) > "$T/out" 2>&1
+}
+fresh_naro
+if lib_run_naro reload_pm2 abc1234 && [ "$(cat "$T/pm2_calls")" = "GIT_SHA=abc1234 reload ecosystem.config.js --only naro-api --update-env
+GIT_SHA=abc1234 restart ecosystem.config.js --only naro-storefront,naro-admin --update-env
+save" ] && [ "$(grep -c '^sudo -u naro -H env PATH=' "$T/sudo_calls")" = 3 ] && grep -q "PM2_HOME=$NPMH GIT_SHA=abc1234 pm2 reload ecosystem.config.js --only naro-api --update-env" "$T/sudo_calls"; then
+  ok "OS-user mode: reload_pm2 runs exactly the 3 named NARO commands, as naro, against the naro PM2_HOME"
+else
+  bad "OS-user reload_pm2"; show "$T/out"; show "$T/pm2_calls" 2>/dev/null; show "$T/sudo_calls" 2>/dev/null
+fi
+FSAPP="$T/fsapp"; rm -rf "$FSAPP" "$T/fs_log"; mkdir -p "$FSAPP/apps/api/uploads" "$FSAPP/packages/database"
+for f in .env apps/api/.env packages/database/.env; do echo "DATABASE_URL=x" > "$FSAPP/$f"; done
+( cd "$FSAPP" && export "${GUARD_ENV[@]}" "${NARO_ENV[@]}"
+  # shellcheck source=scripts/ops/deploy-lib.sh
+  . "$REPO/scripts/ops/deploy-lib.sh"; naro_fs_modes ) > "$T/out" 2>&1
+if grep -qx "chown root:naro .env" "$T/fs_log" && grep -qx "chmod 640 apps/api/.env" "$T/fs_log" \
+   && grep -qx "chown -R naro:naro apps/api/uploads" "$T/fs_log" && grep -q "chmod 700 .*private-uploads" "$T/fs_log"; then
+  ok "OS-user mode: file modes re-asserted before the reload (.env root:naro 640, uploads naro, private uploads 700)"
+else
+  bad "naro_fs_modes"; show "$T/fs_log" 2>/dev/null
+fi
+fresh_naro; nsetprop ActiveState inactive; nsetprop MainPID 0
+if ! lib_run_naro reload_pm2 abc1234 && no_pm2_calls && [ ! -s "$T/sudo_calls" ] && grep -q "PM2 NOT reloaded" "$T/out"; then
+  ok "OS-user mode: naro daemon down -> no pm2 command at all"
+else
+  bad "OS-user reload must refuse with the naro daemon down"; show "$T/out"
+fi
+fresh_naro
+if lib_run_naro rollback_incomplete_notice abc1234 && grep -q "sudo -u naro -H env PM2_HOME=$NPMH GIT_SHA=abc1234 pm2 reload" "$T/out" && no_pm2_calls; then
+  ok "OS-user mode: operator help text names the naro command (printed, not run)"
+else
+  bad "OS-user help text"; show "$T/out"
+fi
+
+if [ "${PM2_GUARD_TEST_SKIP_FLOWS:-}" != "1" ]; then
+  deploy_naro() { FLOW_ENV=("EXPECTED_SHA=$V2" "${NARO_ENV[@]}"); run_flow "$A/deploy.sh"; }
+  rollback_naro() { FLOW_ENV=("${NARO_ENV[@]}"); run_flow "$A/scripts/ops/rollback.sh" --yes; }
+  fresh_naro; make_app; deploy_naro; rc=$?
+  c=1; [ "$rc" = 0 ] && head_is "$V2" && builds_are "$V2" && live_is "$V2" && expect_pm2 "$(pm2_reload_set "$V2")" \
+    && [ "$(grep -c '^sudo -u naro -H env' "$T/sudo_calls")" = 3 ] && c=0
+  flow_result "OS-user mode: normal deploy, v2 live, the 3 NARO commands run as naro" "$c"
+  rm -f "$T/pm2_calls" "$T/sudo_calls"; rollback_naro; rc=$?
+  c=1; [ "$rc" = 0 ] && head_is "$V1" && builds_are "$V1" && live_is "$V1" && expect_pm2 "$(pm2_reload_set "$V1")" \
+    && [ "$(grep -c '^sudo -u naro -H env' "$T/sudo_calls")" = 3 ] && c=0
+  flow_result "OS-user mode: manual rollback, v1 restored, the 3 NARO commands run as naro" "$c"
+  fresh_naro; nsetprop ActiveState inactive; nsetprop MainPID 0; make_app; deploy_naro; rc=$?
+  c=1; [ "$rc" != 0 ] && [ "$(pm2_lines)" = 0 ] && head_is "$V1" && builds_are "$V1" && grep -q "nothing was changed" "$T/out" && c=0
+  flow_result "OS-user mode: naro daemon down before deploy -> refused at stage 0, nothing changed" "$c"
+  fresh_naro; make_app; echo "$V2" > "$T/bad_sha"; deploy_naro; rc=$?
+  c=1; [ "$rc" = 1 ] && head_is "$V1" && builds_are "$V1" && live_is "$V1" && no_restart_all && grep -q "Rollback COMPLETE and healthy" "$T/out" && c=0
+  flow_result "OS-user mode: unhealthy release -> automatic rollback through the naro daemon" "$c"
+fi
+
+# ===========================================================================
+echo "6) neighbour apps (Jumuiya prod + staging, Sportflow, logrotate, kiuruwi) in both modes:"
+# ===========================================================================
+KH="$T/home/kiuruwi/.pm2"
+KCG="/system.slice/pm2-kiuruwi.service"
+add_neighbours() {
+  # The other tenants of the VPS, on top of fresh / fresh_naro (which already
+  # put sportflow-web 1004 and jumuiya-staging-web 1005 in the root daemon):
+  # Jumuiya prod in cluster mode, logrotate, two look-alike names, a fork-mode
+  # sportflow listening on :3200 itself, and kiuruwi's own daemon + app.
+  mkproc 1010 1000 0 "$CG_UNIT" "node /var/www/jumuiya/server.js" 'pm2_env={"exec_mode":"cluster_mode","name":"jumuiya-web","pm_id":7}'
+  mkproc 1011 1000 0 "$CG_UNIT" "node /root/.pm2/modules/pm2-logrotate/app.js" "name=pm2-logrotate"
+  mkproc 1012 1000 0 "$CG_UNIT" "node preview.js" "name=naro-admin-preview"
+  mkproc 1013 1000 0 "$CG_UNIT" "node docs.js" 'pm2_env={"name":"naro-api-docs","pm_id":9}'
+  mkdir -p "$KH"
+  mkproc 3001 1 999 "$KCG" "PM2 v6.0.14: God Daemon ($KH)" "PM2_HOME=$KH"
+  mkproc 3011 3001 999 "$KCG" "node /var/www/kiuruwi/server.js" "name=kiuruwi-web"
+  printf '3001\n' > "$KH/pm2.pid"
+  sed -i '/:3200 /d' "$T/ss_tcp"
+  {
+    echo 'LISTEN 0 511 *:3200 *:* users:(("node",pid=1004,fd=21))'
+    echo 'LISTEN 0 511 127.0.0.1:3100 0.0.0.0:* users:(("PM2 v6.0.14: Go",pid=1000,fd=70))'
+    echo 'LISTEN 0 511 127.0.0.1:3110 0.0.0.0:* users:(("next-server (v1",pid=1005,fd=21))'
+    echo 'LISTEN 0 511 127.0.0.1:3300 0.0.0.0:* users:(("node",pid=3011,fd=21))'
+  } >> "$T/ss_tcp"
+  {
+    echo "u_str LISTEN 0 511 $KH/rpc.sock 33001 * 0 users:((\"PM2 v6.0.14: Go\",pid=3001,fd=23))"
+    echo "u_str LISTEN 0 511 $KH/pub.sock 33002 * 0 users:((\"PM2 v6.0.14: Go\",pid=3001,fd=22))"
+  } >> "$T/ss_unix"
+}
+neighbours_down() {
+  # jumuiya-web stopped (process gone), jumuiya-staging-web errored (gone,
+  # port free), sportflow-web restarting (new pid, not listening yet)
+  rm -rf "$PROC/1010" "$PROC/1005"
+  sed -i -e '/:3100 /d' -e '/:3110 /d' -e '/:3200 /d' "$T/ss_tcp"
+  mv "$PROC/1004" "$PROC/1020"
+}
+_simname() { tr '\0' '\n' < "$1/environ" 2>/dev/null | sed -n -e 's/^name=//p' -e 's/^pm2_env=.*"name":"\([^"]*\)".*/\1/p' | head -1; }
+neighbour_snap() {
+  # every process that is NOT one of the three NARO apps: pid, app name, cmdline
+  local d n
+  for d in "$PROC"/[0-9]*; do
+    n="$(_simname "$d")"
+    case "$n" in naro-api|naro-storefront|naro-admin) continue ;; esac
+    printf '%s %s %s\n' "${d##*/}" "${n:--}" "$(tr '\0' ' ' < "$d/cmdline")"
+  done | sort
+}
+naro_snap() {
+  local d n
+  for d in "$PROC"/[0-9]*; do
+    n="$(_simname "$d")"
+    case "$n" in naro-api|naro-storefront|naro-admin) echo "${d##*/} $n" ;; esac
+  done | sort
+}
+RE_RELOAD='^GIT_SHA=[0-9a-f]* reload ecosystem\.config\.js --only naro-api --update-env$'
+RE_RESTART='^GIT_SHA=[0-9a-f]* restart ecosystem\.config\.js --only naro-storefront,naro-admin --update-env$'
+only_naro_cmds() {
+  # every recorded pm2 command is one of the NARO allow-list (no neighbour
+  # name, no 'all', no resurrect / kill / update / delete / stop / start)
+  [ -s "$T/pm2_calls" ] || { echo "        no pm2 command recorded"; return 1; }
+  local l
+  while IFS= read -r l; do
+    if [[ "$l" =~ $RE_RELOAD ]] || [[ "$l" =~ $RE_RESTART ]] || [ "$l" = save ] || [ "$l" = status ] || [ "$l" = "$DIAG_LOGS" ]; then
+      continue
+    fi
+    echo "        unexpected pm2 command: $l"; return 1
+  done < "$T/pm2_calls"
+}
+homes_are() {
+  # homes_are <PM2_HOME>: every pm2 call went to that daemon and no other
+  [ -s "$T/pm2_ctx" ] && ! grep -vqF "home=$1 " "$T/pm2_ctx"
+}
+clear_calls() { rm -f "$T/pm2_calls" "$T/pm2_ctx" "$T/sudo_calls"; }
+
+for nb_mode in root naro; do
+  if [ "$nb_mode" = naro ]; then NB_HOME="$NPMH"; else NB_HOME="$PMH"; fi
+  nb_fresh() { if [ "$nb_mode" = naro ]; then fresh_naro; else fresh; fi; add_neighbours; }
+  nb_guard() { if [ "$nb_mode" = naro ]; then run_guard_naro; else run_guard; fi; }
+  nb_pass() {
+    # nb_pass <name> <expected text>: guard PASSES, no ✖ line, no pm2 call
+    if nb_guard && no_pm2_calls && ! grep -q '✖' "$T/out" && grep -qF -- "$2" "$T/out"; then ok "$nb_mode mode: $1"; else bad "$nb_mode mode: $1 (expected PASS with '$2')"; show "$T/out"; fi
+  }
+
+  nb_fresh; nb_pass "all neighbours online -> PASS" "PASSED"
+  nb_fresh; neighbours_down; nb_pass "neighbours stopped / errored / restarting -> PASS (never a failure)" "PASSED"
+  nb_fresh; nb_pass "kiuruwi's own daemon (another account) -> warning only" "non-root PM2 daemon pid 3001 (uid 999) — not NARO's, ignored"
+  nb_fresh
+  if nb_guard && grep -qF "naro-storefront: :3000 served from the supervised daemon tree" "$T/out" \
+     && ! grep -E 'naro-(api|storefront|admin)' "$T/out" | grep -qE '(:3200|:3100|:3110|:3300|1004|1005|1010|3011)'; then
+    ok "$nb_mode mode: neighbours on :3200 / :3100 / :3110 / :3300 are not read as NARO listeners"
+  else
+    bad "$nb_mode mode: neighbour ports must not be attributed to NARO"; show "$T/out"
+  fi
+  nb_fresh
+  if nb_guard && grep -qF "naro-api: 1/1 instance(s)" "$T/out" && grep -qF "naro-admin: 1/1 instance(s)" "$T/out"; then
+    ok "$nb_mode mode: look-alike names (naro-admin-preview, naro-api-docs) are not counted as NARO instances"
+  else
+    bad "$nb_mode mode: look-alike app names"; show "$T/out"
+  fi
+  nb_fresh; mkproc 1030 2000 0 "$CG_SSH" "node /var/www/jumuiya/server.js" "name=jumuiya-web"
+  nb_pass "a neighbour's own stray process (outside any unit) is not NARO's concern -> PASS" "PASSED"
+  # Boundary: a neighbour app holding a NARO port IS a conflict -> refuse
+  nb_fresh; echo 'LISTEN 0 511 0.0.0.0:3000 0.0.0.0:* users:(("node",pid=1004,fd=30))' >> "$T/ss_tcp"
+  if ! nb_guard && no_pm2_calls && grep -qF "naro-storefront: :3000 is held by 1004" "$T/out"; then
+    ok "$nb_mode mode: a neighbour (sportflow) listening on a NARO port -> refuse"
+  else
+    bad "$nb_mode mode: a neighbour on :3000 must be refused"; show "$T/out"
+  fi
+done
+
+if [ "${PM2_GUARD_TEST_SKIP_FLOWS:-}" != "1" ]; then
+  touch "$T/simulate"
+  # Control: the detectors are not vacuous — a 'restart all' on the root daemon
+  # changes neighbour PIDs and fails the allow-list.
+  fresh; add_neighbours; before="$(neighbour_snap)"
+  env PATH="$BIN:$PATH" PM2_HOME="$PMH" pm2 restart all >/dev/null 2>&1
+  if [ "$(neighbour_snap)" != "$before" ] && ! only_naro_cmds >/dev/null; then
+    ok "control: a 'pm2 restart all' WOULD be caught (neighbour PIDs change, allow-list fails)"
+  else
+    bad "control: the neighbour detectors must catch 'pm2 restart all'"
+  fi
+  fresh_naro; add_neighbours; before="$(neighbour_snap)"
+  env PATH="$BIN:$PATH" PM2_HOME="$PMH" pm2 reload jumuiya-web >/dev/null 2>&1
+  if [ "$(neighbour_snap)" != "$before" ] && ! homes_are "$NPMH"; then
+    ok "control: a command naming a neighbour on the root daemon WOULD be caught"
+  else
+    bad "control: the neighbour detectors must catch 'pm2 reload jumuiya-web'"
+  fi
+
+  for nb_mode in root naro; do
+    if [ "$nb_mode" = naro ]; then NB_HOME="$NPMH"; else NB_HOME="$PMH"; fi
+    nb_deploy() { if [ "$nb_mode" = naro ]; then deploy_naro; else deploy; fi; }
+    nb_rollback() { if [ "$nb_mode" = naro ]; then rollback_naro; else rollback; fi; }
+    nb_sudo_ok() {
+      # naro mode: every pm2 call went through 'sudo -u naro'; root mode: no sudo at all
+      if [ "$nb_mode" = naro ]; then
+        [ "$(grep -c '^sudo -u naro -H env' "$T/sudo_calls" 2>/dev/null)" = "$(wc -l < "$T/pm2_calls" | tr -d ' ')" ]
+      else
+        [ ! -s "$T/sudo_calls" ]
+      fi
+    }
+    nb_isolated() {
+      # nb_isolated <neighbour snapshot before>: only NARO commands, to NARO's
+      # daemon, and every non-NARO process (incl. both other daemons) unchanged
+      only_naro_cmds && homes_are "$NB_HOME" && nb_sudo_ok && [ "$(neighbour_snap)" = "$1" ]
+    }
+
+    # A. deploy + manual rollback, all neighbours online
+    nb_fresh; make_app; before="$(neighbour_snap)"; nbefore="$(naro_snap)"; nb_deploy; rc=$?
+    c=1; [ "$rc" = 0 ] && live_is "$V2" && nb_isolated "$before" && [ "$(naro_snap)" != "$nbefore" ] && c=0
+    flow_result "$nb_mode mode: deploy with neighbours online: only the NARO commands, to $( [ "$nb_mode" = naro ] && echo "the naro daemon" || echo "--only NARO apps" ); neighbour PIDs unchanged (NARO PIDs did change)" "$c"
+    if [ "$nb_mode" = naro ]; then
+      if grep -qF "sudo -u naro -H env PM2_HOME=$NPMH pm2 stop naro-api naro-admin naro-storefront" "$T/out"; then
+        ok "naro mode: the deploy's DB-rollback help names the naro pm2 prefix (printed only)"
+      else
+        bad "naro mode: deploy help text should carry the naro prefix"; show "$T/out" 60
+      fi
+    fi
+    clear_calls; before="$(neighbour_snap)"; nbefore="$(naro_snap)"; nb_rollback; rc=$?
+    c=1; [ "$rc" = 0 ] && live_is "$V1" && nb_isolated "$before" && [ "$(naro_snap)" != "$nbefore" ] && c=0
+    flow_result "$nb_mode mode: manual rollback with neighbours online: only NARO commands, neighbour PIDs unchanged" "$c"
+
+    # B. unhealthy release -> automatic rollback (+ pm2 status / NARO-only logs)
+    nb_fresh; make_app; echo "$V2" > "$T/bad_sha"; before="$(neighbour_snap)"; nb_deploy; rc=$?
+    c=1; [ "$rc" = 1 ] && live_is "$V1" && nb_isolated "$before" && grep -qxF "$DIAG_LOGS" "$T/pm2_calls" \
+      && grep -q "Rollback COMPLETE and healthy" "$T/out" && c=0
+    flow_result "$nb_mode mode: automatic rollback with neighbours: NARO-only commands + NARO-only logs, neighbour PIDs unchanged" "$c"
+
+    # C. neighbours stopped / errored / restarting: deploy + rollback still work and leave them alone
+    nb_fresh; neighbours_down; make_app; before="$(neighbour_snap)"; nb_deploy; rc=$?
+    c=1; [ "$rc" = 0 ] && live_is "$V2" && nb_isolated "$before" && [ ! -d "$PROC/1010" ] && [ ! -d "$PROC/1005" ] && c=0
+    flow_result "$nb_mode mode: deploy while neighbours are stopped/errored/restarting: completes, they stay as they were" "$c"
+    clear_calls; before="$(neighbour_snap)"; nb_rollback; rc=$?
+    c=1; [ "$rc" = 0 ] && live_is "$V1" && nb_isolated "$before" && c=0
+    flow_result "$nb_mode mode: rollback while neighbours are down: completes, neighbours untouched" "$c"
+
+    # D. a neighbour restarts DURING the NARO deploy (its own deploy): no refusal
+    nb_fresh; make_app; mutate_at 2 "mv '$PROC/1010' '$PROC/1040'"; nb_deploy; rc=$?
+    c=1; [ "$rc" = 0 ] && live_is "$V2" && only_naro_cmds && homes_are "$NB_HOME" && [ -d "$PROC/1040" ] && c=0
+    flow_result "$nb_mode mode: a neighbour restarting mid-deploy does not fail the NARO deploy" "$c"
+  done
+  rm -f "$T/simulate"
+fi
+
+# ===========================================================================
 echo "4) static invariants:"
 # ===========================================================================
 if grep -vE '^[[:space:]]*#' "$GUARD" | grep -nE '(^|[;&|(`]|\$\()[[:space:]]*pm2[[:space:]]'; then
@@ -605,12 +988,28 @@ stray="$(awk '
   /^\}/ { fn = "" }
   /^[[:space:]]*#/ { next }
   /^[[:space:]]*(GIT_SHA="[^"]*"[[:space:]]+)?pm2[[:space:]]/ {
-    if (fn != "pm2_guarded" && fn != "pm2_diagnostics") print FILENAME ":" FNR ": " $0
+    if (fn != "pm2_guarded" && fn != "pm2_diagnostics" && fn != "naro_pm2") print FILENAME ":" FNR ": " $0
   }' "$REPO/deploy.sh" "$REPO/scripts/ops/deploy-lib.sh" "$REPO/scripts/ops/rollback.sh")"
 if [ -n "$stray" ]; then
   bad "unguarded pm2 call(s):"; printf '        %s\n' "$stray"
 else
   ok "every pm2 call in deploy.sh / deploy-lib.sh / rollback.sh is behind the guard"
+fi
+
+# naro_pm2 (the wrapper that runs pm2 for the NARO daemon) is called ONLY by
+# pm2_guarded / pm2_diagnostics, i.e. always after the guard.
+wraps="$(awk '
+  FNR == 1 { fn = "" }
+  /^[a-z_0-9]+\(\)[[:space:]]*\{/ { fn = $1; sub(/\(\).*/, "", fn) }
+  /^\}/ { fn = "" }
+  /^[[:space:]]*#/ { next }
+  /(^|[^a-z_])naro_pm2[[:space:]]/ && !/naro_pm2\(\)/ {
+    if (fn != "pm2_guarded" && fn != "pm2_diagnostics") print FILENAME ":" FNR ": " $0
+  }' "$REPO/deploy.sh" "$REPO/scripts/ops/deploy-lib.sh" "$REPO/scripts/ops/rollback.sh")"
+if [ -n "$wraps" ]; then
+  bad "naro_pm2 called outside pm2_guarded / pm2_diagnostics:"; printf '        %s\n' "$wraps"
+else
+  ok "naro_pm2 is only reached through the guard"
 fi
 
 # No pm2 command (guarded or not) may target 'all' — the daemon is shared.
@@ -631,6 +1030,35 @@ if [ -n "$subs" ]; then
 else
   ok "no command substitution inside unquoted heredocs in deploy/ops scripts"
 fi
+
+# Neighbour + recovery-access invariants of the deploy path (deploy.sh,
+# deploy-lib.sh, rollback.sh, pm2-guard.sh):
+DPATH=("$REPO/deploy.sh" "$REPO/scripts/ops/deploy-lib.sh" "$REPO/scripts/ops/rollback.sh" "$GUARD")
+# (a) the only pm2 subcommands are reload / restart / save / status / logs
+subcmds="$(for f in "${DPATH[@]}"; do grep -vE '^[[:space:]]*#' "$f"; done \
+  | grep -oE '(pm2_guarded|naro_pm2)[[:space:]]+[a-z]+' | awk '{print $2}' | sort -u | tr '\n' ' ')"
+badsub=""
+for s in $subcmds; do case "$s" in reload|restart|save|status|logs) ;; *) badsub+="$s " ;; esac; done
+if [ -z "$subcmds" ] || [ -n "$badsub" ]; then
+  bad "pm2 subcommands outside reload/restart/save/status/logs: '${badsub:-none found}'"
+else
+  ok "deploy path pm2 subcommands are only: ${subcmds% } (never resurrect / kill / update / delete / startup)"
+fi
+# (b) systemctl is only ever the guard's read-only 'show' (never start / stop /
+#     reload / restart / enable of pm2-root, pm2-kiuruwi or anything else)
+sysd="$(awk '
+  FNR == 1 { hd = "" }
+  hd != "" { if ($0 == hd) hd = ""; next }
+  /<<-?[[:space:]]*'\''?[A-Z_]+'\''?/ { match($0, /<<-?[[:space:]]*'\''?[A-Z_]+/); t = substr($0, RSTART, RLENGTH); gsub(/[<>\-'\'' ]/, "", t); hd = t }
+  /^[[:space:]]*#/ { next }
+  /^[[:space:]]*echo / { next }
+  /systemctl/ && !/_PG_SYSTEMCTL" show / && !/_PG_SYSTEMCTL="/ { print FILENAME ":" FNR ": " $0 }
+' "${DPATH[@]}")"
+if [ -n "$sysd" ]; then bad "systemctl used for more than the read-only 'show':"; printf '        %s\n' "$sysd"; else ok "systemctl is only the guard's read-only 'show' (no unit is started/stopped/reloaded)"; fi
+# (c) nothing touches SSH, sudoers, PAM, the firewall, passwords or accounts
+sens="$(grep -nE '(sshd|\.ssh/|authorized_keys|sudoers|visudo|/etc/pam|pam\.d|(^|[^a-z_])ufw([^a-z_]|$)|iptables|nft |chpasswd|passwd[[:space:]]|usermod|useradd|userdel|/etc/shadow|/etc/passwd)' "${DPATH[@]}" \
+  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#')"
+if [ -n "$sens" ]; then bad "deploy path touches recovery access:"; printf '        %s\n' "$sens"; else ok "deploy path never touches sshd / ~/.ssh / sudoers / PAM / ufw / passwords / accounts"; fi
 
 if grep -qxF 'unset PM2_GUARD_TEST' "$REPO/deploy.sh" && grep -qxF 'unset PM2_GUARD_TEST' "$REPO/scripts/ops/rollback.sh"; then
   ok "deploy.sh and rollback.sh unset PM2_GUARD_TEST (test overrides can't reach prod)"

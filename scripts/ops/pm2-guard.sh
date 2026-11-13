@@ -23,9 +23,21 @@
 #      held by that daemon
 #   6. no other root PM2 God Daemon is running anywhere
 #   7. whatever listens on each NARO port (from ecosystem.config.js) is the
-#      daemon or one of its descendants inside the unit's cgroup
+#      daemon itself (cluster mode) or that app's own process / a descendant
+#      of it, inside the unit's cgroup — never another app of the daemon.
+#      Neighbour apps (Jumuiya, Sportflow, logrotate, kiuruwi) are otherwise
+#      ignored: stopped, errored or restarting neighbours never fail the check.
 #   8. no NARO app process runs outside the unit's cgroup, and the daemon
 #      has no more direct children per app than ecosystem `instances`
+#
+# NARO OS-user mode (round 25F): when /etc/naro-pm2.env exists (root-owned,
+# not writable by group/others) it names a dedicated unprivileged account:
+#   NARO_PM2_USER=naro  NARO_PM2_HOME=/home/naro/.pm2  NARO_PM2_UNIT=pm2-naro.service
+# Then checks 2-5 run for BOTH units (the root daemon still hosts the other
+# VPS apps and must stay supervised), and checks 6-8 hold the NARO apps to the
+# naro daemon: inside its cgroup and tree, running as that user, ports held
+# there, no NARO app left in the root daemon, no second naro daemon. Without
+# the file the behaviour is exactly the root-only check above.
 #
 # Uses only systemctl (read-only `show`), ss, node (to read
 # ecosystem.config.js) and /proc. Overrides for the self-test
@@ -33,6 +45,7 @@
 # PM2_GUARD_TEST=1; deploy.sh and rollback.sh unset it.
 
 PM2_GUARD_UNIT="pm2-root.service"
+PM2_GUARD_NARO_CONF_DEFAULT="/etc/naro-pm2.env"
 
 _pm2g_setup() {
   if [ "${PM2_GUARD_TEST:-}" = "1" ]; then
@@ -49,9 +62,43 @@ _pm2g_setup() {
     _PG_SOCKFLAG="-S"
   fi
   _PG_APP_DIR="${APP_DIR:-/var/www/naro-fashion}"
+  _pm2g_naro_conf
   _PG_FAILS=0
   _PG_WARNS=0
   _PG_REPORT=""
+}
+
+# OS-user mode switch (see header). Sets _PG_NARO_MODE / _USER / _HOME / _UNIT /
+# _UID, and _PG_NARO_CONF_ERR when the switch itself is unsafe or incomplete.
+_pm2g_naro_conf() {
+  local conf="$PM2_GUARD_NARO_CONF_DEFAULT" meta mode
+  [ "${PM2_GUARD_TEST:-}" = "1" ] && conf="${PM2_GUARD_NARO_CONF:-$conf}"
+  _PG_NARO_MODE=0; _PG_NARO_USER=""; _PG_NARO_HOME=""; _PG_NARO_UNIT=""; _PG_NARO_UID=""; _PG_NARO_CONF_ERR=""; _PG_NARO_PATH=""
+  [ -f "$conf" ] || return 0
+  _PG_NARO_MODE=1
+  _PG_NARO_USER="$(sed -n 's/^NARO_PM2_USER=//p' "$conf" | head -1 | tr -d '"')"
+  _PG_NARO_HOME="$(sed -n 's/^NARO_PM2_HOME=//p' "$conf" | head -1 | tr -d '"')"
+  _PG_NARO_UNIT="$(sed -n 's/^NARO_PM2_UNIT=//p' "$conf" | head -1 | tr -d '"')"
+  _PG_NARO_USER="${_PG_NARO_USER:-naro}"
+  _PG_NARO_HOME="${_PG_NARO_HOME:-/home/${_PG_NARO_USER}/.pm2}"
+  _PG_NARO_HOME="${_PG_NARO_HOME%/}"
+  _PG_NARO_UNIT="${_PG_NARO_UNIT:-pm2-${_PG_NARO_USER}.service}"
+  _PG_NARO_PATH="$(sed -n 's/^NARO_PM2_PATH=//p' "$conf" | head -1 | tr -d '"')"
+  _PG_NARO_PATH="${_PG_NARO_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+  if [ "${PM2_GUARD_TEST:-}" = "1" ]; then
+    _PG_NARO_UID="${PM2_GUARD_NARO_UID:-}"
+  else
+    _PG_NARO_UID="$(id -u "$_PG_NARO_USER" 2>/dev/null || true)"
+    # the switch itself must be root's: nobody else may redirect pm2 commands
+    meta="$(stat -c '%u %a' "$conf" 2>/dev/null || true)"
+    mode="${meta##* }"
+    if [ "${meta%% *}" != "0" ] || ! [[ "$mode" =~ ^[0-7]+$ ]] || [ $(( 8#$mode & 8#022 )) -ne 0 ]; then
+      _PG_NARO_CONF_ERR="${conf} must be owned by root and not writable by group/others (got '${meta}')"
+    fi
+  fi
+  if ! [[ "$_PG_NARO_UID" =~ ^[1-9][0-9]*$ ]]; then
+    _PG_NARO_CONF_ERR="${_PG_NARO_CONF_ERR:+${_PG_NARO_CONF_ERR}; }account '${_PG_NARO_USER}' from ${conf} has no non-root uid ('${_PG_NARO_UID}')"
+  fi
 }
 
 _pm2g_add() { _PG_REPORT+="$1"$'\n'; }
@@ -94,23 +141,37 @@ _pm2g_descends_from() {
 
 _pm2g_pids_in() { grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u; }
 
-pm2_supervision_check() {
-  local quiet=0
-  [ "${1:-}" = "--quiet" ] && quiet=1
-  _pm2g_setup
+# _pm2g_proc_is_app <pid> <app>: the process's environment names it as that
+# PM2 app (fork mode: name=<app>; cluster mode: pm2_env={..."name":"<app>"...}).
+_pm2g_proc_is_app() {
+  local env_txt
+  env_txt="$(tr '\0' '\n' 2>/dev/null < "${_PG_PROC}/$1/environ")" || return 1
+  grep -qxF "name=$2" <<< "$env_txt" || grep -q "^pm2_env=.*\"name\":\"$2\"" <<< "$env_txt"
+}
 
-  local tool
-  for tool in "$_PG_SYSTEMCTL" "$_PG_SS" node awk sed grep tr; do
-    command -v "$tool" >/dev/null 2>&1 || _pm2g_fail "required tool '${tool}' not found — supervision is unverifiable"
+# _pm2g_held_by_app <listener pid> <daemon> <app>: the listener is the daemon
+# itself (cluster mode: the God Daemon holds the port) or the app's own process
+# or a descendant of it. Another app under the same daemon (e.g. a Jumuiya or
+# Sportflow process in the shared root daemon) holding a NARO port is NOT.
+_pm2g_held_by_app() {
+  local pid="$1" depth=0
+  [ "$pid" = "$2" ] && return 0
+  while [ -n "$pid" ] && [ "$pid" != "$2" ] && [ "$pid" != "0" ] && [ "$pid" != "1" ] && [ "$depth" -lt 64 ]; do
+    _pm2g_proc_is_app "$pid" "$3" && return 0
+    pid="$(_pm2g_ppid "$pid")"
+    depth=$((depth + 1))
   done
-  if [ ! -r "${_PG_PROC}/1/status" ]; then
-    _pm2g_fail "${_PG_PROC} is not readable — supervision is unverifiable"
-  fi
-  if [ "$_PG_FAILS" -gt 0 ]; then _pm2g_finish "$quiet"; return 1; fi
+  return 1
+}
 
+# _pm2g_check_unit <unit> <uid> <user> <default PM2_HOME>: checks 2-5 for one
+# supervising unit; results in _PGU_DAEMON / _PGU_CGROUP / _PGU_HOME.
+# Reads the unix-socket listing from $unix_out (set by the caller).
+_pm2g_check_unit() {
   # --- 2. systemd unit -------------------------------------------------------
+  local unit="$1" want_uid="$2" want_user="$3" default_home="$4"
   local show load active sub mainpid cgroup pidfile envline unit_user home
-  show="$("$_PG_SYSTEMCTL" show "$PM2_GUARD_UNIT" --no-pager \
+  show="$("$_PG_SYSTEMCTL" show "$unit" --no-pager \
     -p LoadState -p ActiveState -p SubState -p MainPID -p ControlGroup \
     -p PIDFile -p Environment -p User 2>/dev/null || true)"
   load="$(_pm2g_prop "$show" LoadState)"
@@ -123,36 +184,31 @@ pm2_supervision_check() {
   unit_user="$(_pm2g_prop "$show" User)"
 
   if [ "$load" != "loaded" ]; then
-    _pm2g_fail "${PM2_GUARD_UNIT} is not installed/loaded (LoadState='${load:-unknown}')"
+    _pm2g_fail "${unit} is not installed/loaded (LoadState='${load:-unknown}')"
   elif [ "$active" != "active" ] || [ "$sub" != "running" ]; then
-    _pm2g_fail "${PM2_GUARD_UNIT} is ${active:-unknown}/${sub:-unknown}, not active/running"
+    _pm2g_fail "${unit} is ${active:-unknown}/${sub:-unknown}, not active/running"
   else
-    _pm2g_ok "${PM2_GUARD_UNIT} active/running"
+    _pm2g_ok "${unit} active/running"
   fi
   if ! [[ "$mainpid" =~ ^[1-9][0-9]*$ ]]; then
-    _pm2g_fail "${PM2_GUARD_UNIT} has no MainPID ('${mainpid:-}') — no supervised daemon"
+    _pm2g_fail "${unit} has no MainPID ('${mainpid:-}') — no supervised daemon"
     mainpid=""
   fi
   if [ -z "$cgroup" ]; then
-    _pm2g_fail "${PM2_GUARD_UNIT} has no ControlGroup — cannot tie processes to it"
+    _pm2g_fail "${unit} has no ControlGroup — cannot tie processes to it"
   fi
-  if [ -n "$unit_user" ] && [ "$unit_user" != "root" ]; then
-    _pm2g_fail "${PM2_GUARD_UNIT} runs as User='${unit_user}', expected root"
+  if [ "$want_user" = "root" ]; then
+    if [ -n "$unit_user" ] && [ "$unit_user" != "root" ]; then
+      _pm2g_fail "${unit} runs as User='${unit_user}', expected root"
+    fi
+  elif [ "$unit_user" != "$want_user" ]; then
+    _pm2g_fail "${unit} runs as User='${unit_user:-root}', expected ${want_user}"
   fi
-
-  # --- 1. caller + PM2_HOME the CLI would use --------------------------------
   home="$(printf '%s\n' "$envline" | grep -oE '(^|[[:space:]])PM2_HOME=[^[:space:]]+' | head -1 | sed 's/.*PM2_HOME=//')"
-  [ -n "$home" ] || home="/root/.pm2"
+  [ -n "$home" ] || home="$default_home"
   home="${home%/}"
-  local cli_home="${PM2_HOME:-${HOME:-}/.pm2}"
-  cli_home="${cli_home%/}"
-  if [ "$_PG_UID" != "0" ]; then
-    _pm2g_fail "running as uid ${_PG_UID}, not root — pm2 here would talk to a different (or new) daemon"
-  fi
-  if [ "$cli_home" != "$home" ]; then
-    _pm2g_fail "pm2 CLI would use PM2_HOME='${cli_home}' but ${PM2_GUARD_UNIT} uses '${home}' — a pm2 call would start a second daemon"
-  else
-    _pm2g_ok "pm2 CLI targets the unit's PM2_HOME (${home})"
+  if [ "$want_user" != "root" ] && [ "$home" != "${default_home%/}" ]; then
+    _pm2g_fail "${unit} uses PM2_HOME '${home}', expected '${default_home%/}'"
   fi
 
   # --- 3. PID file ------------------------------------------------------------
@@ -168,7 +224,7 @@ pm2_supervision_check() {
       _pm2g_fail "${home}/pm2.pid holds '${daemon}', not a PID"
       daemon=""
     elif [ -n "$mainpid" ] && [ "$daemon" != "$mainpid" ]; then
-      _pm2g_fail "pm2.pid says ${daemon} but ${PM2_GUARD_UNIT} MainPID is ${mainpid} — the daemon PM2 uses is not the one systemd supervises"
+      _pm2g_fail "pm2.pid says ${daemon} but ${unit} MainPID is ${mainpid} — the daemon PM2 uses is not the one systemd supervises"
       daemon=""
     elif [ -n "$mainpid" ]; then
       _pm2g_ok "pm2.pid == MainPID (${daemon})"
@@ -185,7 +241,11 @@ pm2_supervision_check() {
       cmd="$(_pm2g_cmdline "$daemon")"
       duid="$(_pm2g_uid "$daemon")"
       dcg="$(_pm2g_cgroup "$daemon")"
-      [ "$duid" = "0" ] || _pm2g_fail "daemon ${daemon} runs as uid '${duid}', not root"
+      if [ "$want_user" = "root" ]; then
+        [ "$duid" = "0" ] || _pm2g_fail "daemon ${daemon} runs as uid '${duid}', not root"
+      else
+        [ "$duid" = "$want_uid" ] || _pm2g_fail "daemon ${daemon} runs as uid '${duid}', not ${want_user} (uid ${want_uid})"
+      fi
       if ! _pm2g_is_daemon_title "$cmd"; then
         _pm2g_fail "PID ${daemon} is not a PM2 God Daemon (cmdline: '${cmd:0:80}') — stale pid file / PID reuse?"
       else
@@ -197,17 +257,15 @@ pm2_supervision_check() {
         fi
       fi
       if [ -z "$dcg" ] || [ -z "$cgroup" ] || [ "$dcg" != "$cgroup" ]; then
-        _pm2g_fail "daemon ${daemon} is in cgroup '${dcg:-?}', not ${PM2_GUARD_UNIT} ('${cgroup:-?}') — it is NOT systemd-supervised"
+        _pm2g_fail "daemon ${daemon} is in cgroup '${dcg:-?}', not ${unit} ('${cgroup:-?}') — it is NOT systemd-supervised"
       else
-        _pm2g_ok "daemon ${daemon} is a root God Daemon inside ${cgroup}"
+        _pm2g_ok "daemon ${daemon} is a ${want_user} God Daemon inside ${cgroup}"
       fi
     fi
   fi
 
   # --- 5. control sockets -----------------------------------------------------
-  local unix_out sock lines pids
-  unix_out="$("$_PG_SS" -Hxlp 2>/dev/null)" || unix_out=""
-  [ -n "$unix_out" ] || _pm2g_fail "'ss -xlp' returned nothing — socket ownership is unverifiable"
+  local sock lines pids
   for sock in rpc.sock pub.sock; do
     if ! test "$_PG_SOCKFLAG" "${home}/${sock}"; then
       _pm2g_fail "${home}/${sock} is missing or not a socket"
@@ -225,6 +283,61 @@ pm2_supervision_check() {
       _pm2g_ok "${sock} held by daemon ${daemon}"
     fi
   done
+
+  _PGU_DAEMON="$daemon"; _PGU_CGROUP="$cgroup"; _PGU_HOME="$home"
+}
+
+pm2_supervision_check() {
+  local quiet=0
+  [ "${1:-}" = "--quiet" ] && quiet=1
+  _pm2g_setup
+
+  local tool
+  for tool in "$_PG_SYSTEMCTL" "$_PG_SS" node awk sed grep tr; do
+    command -v "$tool" >/dev/null 2>&1 || _pm2g_fail "required tool '${tool}' not found — supervision is unverifiable"
+  done
+  if [ ! -r "${_PG_PROC}/1/status" ]; then
+    _pm2g_fail "${_PG_PROC} is not readable — supervision is unverifiable"
+  fi
+  if [ "$_PG_FAILS" -gt 0 ]; then _pm2g_finish "$quiet"; return 1; fi
+
+  local unix_out
+  unix_out="$("$_PG_SS" -Hxlp 2>/dev/null)" || unix_out=""
+  [ -n "$unix_out" ] || _pm2g_fail "'ss -xlp' returned nothing — socket ownership is unverifiable"
+
+  # --- 2-5 for the root unit (it hosts the other VPS apps in every mode) -----
+  _pm2g_check_unit "$PM2_GUARD_UNIT" 0 root /root/.pm2
+  local root_daemon="$_PGU_DAEMON" root_cgroup="$_PGU_CGROUP" home="$_PGU_HOME"
+
+  # --- 1. caller + PM2_HOME the CLI would use --------------------------------
+  local cli_home="${PM2_HOME:-${HOME:-}/.pm2}"
+  cli_home="${cli_home%/}"
+  if [ "$_PG_UID" != "0" ]; then
+    _pm2g_fail "running as uid ${_PG_UID}, not root — pm2 here would talk to a different (or new) daemon"
+  fi
+  if [ "$cli_home" != "$home" ]; then
+    _pm2g_fail "pm2 CLI would use PM2_HOME='${cli_home}' but ${PM2_GUARD_UNIT} uses '${home}' — a pm2 call would start a second daemon"
+  else
+    _pm2g_ok "pm2 CLI targets the unit's PM2_HOME (${home})"
+  fi
+
+  # --- NARO daemon: the root one, or the dedicated account's (OS-user mode) ---
+  local daemon="$root_daemon" cgroup="$root_cgroup" naro_unit="$PM2_GUARD_UNIT" naro_uid=0
+  if [ "$_PG_NARO_MODE" = "1" ]; then
+    naro_unit="$_PG_NARO_UNIT"; naro_uid="$_PG_NARO_UID"
+    if [ -n "$_PG_NARO_CONF_ERR" ]; then
+      _pm2g_fail "OS-user mode: ${_PG_NARO_CONF_ERR}"
+      daemon=""; cgroup=""
+    else
+      _pm2g_ok "OS-user mode: NARO apps belong to ${naro_unit} (user ${_PG_NARO_USER}, uid ${naro_uid})"
+      _pm2g_check_unit "$naro_unit" "$naro_uid" "$_PG_NARO_USER" "$_PG_NARO_HOME"
+      daemon="$_PGU_DAEMON"; cgroup="$_PGU_CGROUP"
+      if [ -n "$daemon" ] && [ "$daemon" = "$root_daemon" ]; then
+        _pm2g_fail "${naro_unit} and ${PM2_GUARD_UNIT} report the same daemon ${daemon}"
+        daemon=""
+      fi
+    fi
+  fi
 
   # --- 6. second root daemon + 8. stray NARO processes ------------------------
   local apps_raw
@@ -250,14 +363,16 @@ pm2_supervision_check() {
   done <<< "$apps_raw"
 
   local -A direct_children=()
-  local p pid pcmd env_txt i extra_daemons=""
+  local p pid pcmd env_txt i extra_daemons="" extra_naro=""
   for p in "${_PG_PROC}"/[0-9]*; do
     pid="${p##*/}"
     [ -r "$p/cmdline" ] || continue
     pcmd="$(_pm2g_cmdline "$pid")"
-    if _pm2g_is_daemon_title "$pcmd" && [ "$pid" != "$daemon" ]; then
+    if _pm2g_is_daemon_title "$pcmd" && [ "$pid" != "$root_daemon" ] && [ "$pid" != "$daemon" ]; then
       if [ "$(_pm2g_uid "$pid")" = "0" ]; then
         extra_daemons+="${pid}[$(_pm2g_cgroup "$pid")] "
+      elif [ "$_PG_NARO_MODE" = "1" ] && [ "$(_pm2g_uid "$pid")" = "$naro_uid" ]; then
+        extra_naro+="${pid}[$(_pm2g_cgroup "$pid")] "
       else
         _pm2g_warn "non-root PM2 daemon pid ${pid} (uid $(_pm2g_uid "$pid")) — not NARO's, ignored"
       fi
@@ -271,7 +386,9 @@ pm2_supervision_check() {
       if grep -qxF "name=${name}" <<< "$env_txt" \
          || grep -q "^pm2_env=.*\"name\":\"${name}\"" <<< "$env_txt"; then
         if [ -z "$cgroup" ] || [ "$(_pm2g_cgroup "$pid")" != "$cgroup" ]; then
-          _pm2g_fail "${name} process ${pid} runs OUTSIDE ${PM2_GUARD_UNIT} (cgroup '$(_pm2g_cgroup "$pid")') — orphan from an unsupervised daemon?"
+          _pm2g_fail "${name} process ${pid} runs OUTSIDE ${naro_unit} (cgroup '$(_pm2g_cgroup "$pid")') — orphan from an unsupervised daemon?"
+        elif [ "$_PG_NARO_MODE" = "1" ] && [ "$(_pm2g_uid "$pid")" != "$naro_uid" ]; then
+          _pm2g_fail "${name} process ${pid} runs as uid '$(_pm2g_uid "$pid")', expected ${_PG_NARO_USER} (uid ${naro_uid})"
         elif [ -n "$daemon" ] && [ "$(_pm2g_ppid "$pid")" = "$daemon" ]; then
           direct_children[$name]=$(( ${direct_children[$name]:-0} + 1 ))
         fi
@@ -283,6 +400,13 @@ pm2_supervision_check() {
     _pm2g_fail "another root PM2 God Daemon is running: ${extra_daemons% }"
   else
     _pm2g_ok "no second root PM2 daemon"
+  fi
+  if [ "$_PG_NARO_MODE" = "1" ]; then
+    if [ -n "$extra_naro" ]; then
+      _pm2g_fail "another ${_PG_NARO_USER} PM2 God Daemon is running: ${extra_naro% }"
+    else
+      _pm2g_ok "no second ${_PG_NARO_USER} PM2 daemon"
+    fi
   fi
 
   # --- 7. NARO port listeners + instance counts -------------------------------
@@ -296,12 +420,14 @@ pm2_supervision_check() {
     else
       bad=""
       for lp in $lpids; do
-        if [ -z "$daemon" ] || [ "$(_pm2g_cgroup "$lp")" != "$cgroup" ] || ! _pm2g_descends_from "$lp" "$daemon"; then
+        if [ -z "$daemon" ] || [ "$(_pm2g_cgroup "$lp")" != "$cgroup" ] || ! _pm2g_descends_from "$lp" "$daemon" \
+           || ! _pm2g_held_by_app "$lp" "$daemon" "$name" \
+           || { [ "$_PG_NARO_MODE" = "1" ] && [ "$(_pm2g_uid "$lp")" != "$naro_uid" ]; }; then
           bad+="${lp}[$(_pm2g_cgroup "$lp")] "
         fi
       done
       if [ -n "$bad" ]; then
-        _pm2g_fail "${name}: :${port} is held by ${bad% }, outside the supervised daemon's tree"
+        _pm2g_fail "${name}: :${port} is held by ${bad% }, not by ${name} under the supervised daemon"
       else
         _pm2g_ok "${name}: :${port} served from the supervised daemon tree"
       fi
