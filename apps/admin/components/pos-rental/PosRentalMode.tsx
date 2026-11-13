@@ -155,7 +155,9 @@ export default function PosRentalMode({ sessionId, online, servicingOnly = false
                 {quote.available ? 'Available' : `Not available (${quote.reason})`}{quote.unitManaged ? ' · by physical unit' : ''}
               </div>
               <div>Rental fee {fmt(quote.rentalFee)} · down payment {fmt(quote.downPayment)} · balance {fmt(quote.balanceAfterDownPayment)}</div>
-              <div>Refundable deposit {fmt(quote.deposit)} · late fee {fmt(quote.lateFeePerDay)} a day</div>
+              <div>Refundable deposit {fmt(quote.deposit)}</div>
+              {/* LF-2026-11: the same sentence (incl. the cap) as the agreement and the storefront. */}
+              <div data-testid="rental-quote-late-fee">{quote.lateFee?.text?.en ?? `Late fee ${fmt(quote.lateFeePerDay)} a day`}</div>
               <div className="font-semibold">Due before handover: {fmt(quote.dueBeforeHandover)}</div>
             </div>
           )}
