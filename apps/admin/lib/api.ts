@@ -1146,17 +1146,28 @@ class AdminApiClient {
   getActiveChecklistTemplates() {
     return this.get<any[]>('/rental-checklists/templates/active');
   }
-  assignChecklist(rentalOrderId: string, templateId: string) {
-    return this.post<any>('/rental-checklists/assign', { rentalOrderId, templateId });
+  // R3 mandatory checklist (per-booking snapshot, append-only evidence).
+  // The v1 assign / check / uncheck routes are retired (410).
+  getChecklistState(rentalOrderId: string) {
+    return this.get<any>(`/rental-checklist/rentals/${rentalOrderId}`);
   }
-  getRentalChecklist(rentalOrderId: string) {
-    return this.get<any[]>(`/rental-checklists/rental/${rentalOrderId}`);
+  freezeChecklistAtDesk(rentalOrderId: string) {
+    return this.post<any>(`/rental-checklist/rentals/${rentalOrderId}/snapshot`, {});
   }
-  checkItem(entryId: string, notes?: string) {
-    return this.patch<any>(`/rental-checklists/entries/${entryId}/check`, { notes });
+  recordChecklist(rentalOrderId: string, body: { stage: 'HANDOVER' | 'RETURN'; entries: any[] }) {
+    return this.post<any>(`/rental-checklist/rentals/${rentalOrderId}/records`, body);
   }
-  uncheckItem(entryId: string) {
-    return this.patch<any>(`/rental-checklists/entries/${entryId}/uncheck`, {});
+  requestChecklistException(rentalOrderId: string, body: { kind: string; snapshotItemIds?: string[]; substituteNote?: string; reason: string }) {
+    return this.post<any>(`/rental-checklist/rentals/${rentalOrderId}/exceptions`, body);
+  }
+  approveChecklistException(id: string, note?: string) {
+    return this.patch<any>(`/rental-checklist/exceptions/${id}/approve`, { ...(note ? { note } : {}) });
+  }
+  rejectChecklistException(id: string, note?: string) {
+    return this.patch<any>(`/rental-checklist/exceptions/${id}/reject`, { ...(note ? { note } : {}) });
+  }
+  resolveDiscrepancy(id: string, body: { resolution: string; note: string }) {
+    return this.patch<any>(`/rental-checklist/discrepancies/${id}/resolve`, body);
   }
 
   // ===== Rental Policies =====
