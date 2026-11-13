@@ -1,4 +1,4 @@
-import { refundableNow, rentalBalances, RENTAL_COMPONENTS } from './rental-ledger';
+import { refundableNow, rentalBalances, RENTAL_COMPONENTS, overpaymentRefundableNow } from './rental-ledger';
 
 /**
  * Rental cancellation policy proposal (round 25C F, CANCELLATION_POLICY.md):
@@ -61,7 +61,7 @@ export async function requestCancellationRefunds(
   if (!rental || rental.status !== 'CANCELLED') return [];
   const [payments, requests] = await Promise.all([
     tx.payment.findMany({ where: { rentalOrderId, tenantId }, select: { amount: true, status: true, component: true } }),
-    tx.refundRequest.findMany({ where: { rentalOrderId, tenantId }, select: { component: true, amount: true, retainedAmount: true, status: true } }),
+    tx.refundRequest.findMany({ where: { rentalOrderId, tenantId }, select: { kind: true, component: true, amount: true, retainedAmount: true, status: true } }),
   ]);
   const balances = rentalBalances(rental, payments, requests);
   // PAYING counts as open too (a payout in progress already claims its amount).
@@ -83,6 +83,25 @@ export async function requestCancellationRefunds(
       },
     });
     created.push({ id: row.id, component, amount: room });
+  }
+  // Money paid beyond everything due (no component) is the customer's too:
+  // requested once, without a component, so its payout is taken off the
+  // surplus (round 25D E).
+  const surplus = overpaymentRefundableNow(balances, open);
+  if (surplus > 0) {
+    const row = await tx.refundRequest.create({
+      data: {
+        tenantId,
+        rentalOrderId,
+        kind: 'CANCELLATION',
+        component: null,
+        amount: surplus,
+        retainedAmount: 0,
+        reason: `Booking ${rental.rentalNumber} cancelled (${reason}): money paid beyond the fee and deposit, returned in full.`,
+        requestedById,
+      },
+    });
+    created.push({ id: row.id, component: 'OVERPAID', amount: surplus });
   }
   return created;
 }
