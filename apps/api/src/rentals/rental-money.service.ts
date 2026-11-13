@@ -61,7 +61,8 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
  * Rental money: the ledger view and the refund workflow (POS rental MVP, M1).
  *
  *   request (rentals:refund-request) → approve (refunds:approve, a DIFFERENT
- *   admin) → pay (payments:manage: records the manual payout) → or reject /
+ *   admin) → pay (refunds:payout or payments:manage: records the manual
+ *   payout, by a third person) → or reject /
  *   fail (payout bounced → the liability comes back).
  *
  * Money rules (all under the per-rental lock `refund:rental:<id>`):
