@@ -31,6 +31,9 @@ function makePrisma(overrides: Record<string, any> = {}) {
     },
     // Default: the rental's customer holds an approved National ID.
     customerIDDocument: { findFirst: jest.fn().mockResolvedValue({ id: 'doc1' }) },
+    // The rental roll-up decides + writes under the booking's money locks (round 25F).
+    $executeRaw: jest.fn().mockResolvedValue(1),
+    $transaction: jest.fn(async function (this: any, cb: any) { return cb(this); }),
     ...overrides,
   } as any;
 }
@@ -166,6 +169,28 @@ describe('PaymentSettlementService parent roll-up', () => {
       where: { id: 'r1', tenantId: 't1', status: 'ID_VERIFIED' },
       data: { status: 'DOWN_PAYMENT_PAID' },
     });
+  });
+
+  it('concurrent roll-ups (round 25F): the write is decided under the money locks from a FRESH read, so a stale snapshot never loses the complete roll-up', async () => {
+    // This settlement's unlocked snapshot: ID_VERIFIED + only the 100 down payment.
+    // Under the lock: the other settlement already wrote DOWN_PAYMENT_PAID and
+    // the balance (300) is committed → this one must write FULLY_PAID from
+    // DOWN_PAYMENT_PAID (before: CAS on the stale ID_VERIFIED → 0 rows, lost).
+    const prisma = makePrisma();
+    const order: string[] = [];
+    const base = { id: 'r1', rentalNumber: 'R1', userId: 'u1', downPaymentAmount: 100, totalRentalPrice: 400, damageDeposit: 200, lateFee: 0 };
+    let locked = false;
+    prisma.$executeRaw.mockImplementation(async () => { order.push('lock'); locked = true; return 1; });
+    prisma.rentalOrder.findFirst.mockImplementation(async () => { order.push(locked ? 'fresh-read' : 'read'); return { ...base, status: locked ? 'DOWN_PAYMENT_PAID' : 'ID_VERIFIED' }; });
+    prisma.payment.findMany = jest.fn(async () => (locked
+      ? [{ amount: 100, status: 'COMPLETED', component: null }, { amount: 300, status: 'COMPLETED', component: null }]
+      : [{ amount: 100, status: 'COMPLETED', component: null }]));
+    const svc = new PaymentSettlementService(prisma);
+    jest.spyOn(svc, 'sumCompleted').mockResolvedValue(100);
+    await svc.updateRentalPaymentStatus('r1', 't1');
+    const writes = prisma.rentalOrder.updateMany.mock.calls.map((c: any) => c[0]).filter((a: any) => a.data.status);
+    expect(writes).toEqual([{ where: { id: 'r1', tenantId: 't1', status: 'DOWN_PAYMENT_PAID' }, data: { status: 'FULLY_PAID' } }]);
+    expect(order.lastIndexOf('lock')).toBeLessThan(order.lastIndexOf('fresh-read'));
   });
 
   it('never confirms a paid ID_VERIFIED rental whose customer has no approved National ID', async () => {

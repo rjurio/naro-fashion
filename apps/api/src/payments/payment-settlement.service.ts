@@ -4,7 +4,7 @@ import { hasApprovedId } from '../id-verification/id-approval';
 import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { flagRefundDueIfHeld } from '../rentals/refund-due';
+import { flagRefundDueIfHeld, lockRentalMoney } from '../rentals/refund-due';
 
 /**
  * Single source of truth for applying a gateway-reported payment outcome
@@ -366,7 +366,6 @@ export class PaymentSettlementService {
       select: { amount: true, status: true, component: true },
     });
     const ledger = rentalBalances(rental, rows);
-    const feePaid = ledger.collected.RENTAL_FEE;
 
     // A booking that is (now) CANCELLED is never re-opened or advanced: money
     // on it is a REFUND_DUE liability (refund review). Round 25D E: the
@@ -385,15 +384,38 @@ export class PaymentSettlementService {
         return;
       }
       // The whole rental fee received → FULLY_PAID; else the down payment → DOWN_PAYMENT_PAID.
-      const target = ledger.feeFullyPaid ? 'FULLY_PAID' : 'DOWN_PAYMENT_PAID';
-      if (target === rental.status) return;
-      const res = await this.prisma.rentalOrder.updateMany({
-        where: { id: rentalOrderId, tenantId, status: rental.status },
-        data: { status: target },
+      if ((ledger.feeFullyPaid ? 'FULLY_PAID' : 'DOWN_PAYMENT_PAID') === rental.status) return;
+      // Round 25F (r1-integration): the reads above are unlocked. Two
+      // settlements of DIFFERENT payments of the same booking could each
+      // compute a target from their own snapshot; the one with the older
+      // snapshot (DOWN_PAYMENT_PAID) could write first and the complete one
+      // (FULLY_PAID) then lost its compare-and-swap on the old status — the
+      // booking stayed DOWN_PAYMENT_PAID with the fee fully paid. The
+      // decision and the write are therefore re-taken under the booking's
+      // money locks (same order as everywhere: payment:rental -> refund:rental)
+      // from a fresh read, so concurrent roll-ups serialise and the last one
+      // sees every committed payment and the status the others wrote.
+      const advanced = await this.prisma.$transaction(async (tx: any) => {
+        await lockRentalMoney(tx, rentalOrderId);
+        const fresh = await tx.rentalOrder.findFirst({ where: { id: rentalOrderId, tenantId } });
+        if (!fresh || !['ID_VERIFIED', 'DOWN_PAYMENT_PAID'].includes(fresh.status)) return null;
+        const freshRows = await tx.payment.findMany({
+          where: { rentalOrderId, tenantId },
+          select: { amount: true, status: true, component: true },
+        });
+        const now = rentalBalances(fresh, freshRows);
+        if (!now.downPaymentCovered) return null;
+        const target = now.feeFullyPaid ? 'FULLY_PAID' : 'DOWN_PAYMENT_PAID';
+        if (target === fresh.status) return null;
+        const res = await tx.rentalOrder.updateMany({
+          where: { id: rentalOrderId, tenantId, status: fresh.status },
+          data: { status: target },
+        });
+        return res.count > 0 ? { target, feePaid: now.collected.RENTAL_FEE } : null;
       });
-      if (res.count > 0) {
+      if (advanced) {
         this.logger.log(
-          `Rental ${rental.rentalNumber}: ${feePaid} TZS of the rental fee received (down payment ${downPaymentDue}) — advanced to ${target}`,
+          `Rental ${rental.rentalNumber}: ${advanced.feePaid} TZS of the rental fee received (down payment ${downPaymentDue}) — advanced to ${advanced.target}`,
         );
       }
     }
