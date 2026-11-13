@@ -136,4 +136,13 @@ The **migration itself** (rollout steps 3–4 and rollback steps 2 and 4) runs r
 3. Also record `sha256sum /etc/ssh/sshd_config /root/.ssh/authorized_keys`.
 4. **After the window**, compare all three: the other apps' PIDs and restart counts, both units' MainPID / NRestarts, and the checksums must be unchanged. Then check that `curl -sI` of Jumuiya, Sportflow and kiuruwi still answers, and that a **new** SSH login works before closing the kept session.
 
-Rehearsed on real systemd + pm2 6.0.14 with all of these decoys, in both modes, including the migration and its rollback.
+**Rehearsed** on real systemd + pm2 6.0.14 with all of these decoys (Jumuiya prod + staging, Sportflow, logrotate, a stopped app and an errored app in the root daemon, kiuruwi in its own account + unit). It ran in both modes, including the migration and its rollback: CI-only vehicle PR #51, run 43418141565, **37/37**.
+- The real `deploy.sh` (CI steps) and `rollback.sh` ran in root mode and in OS-user mode, then a root-mode deploy after the round trip.
+- Every pm2 call the scripts made was on the NARO allow-list. In OS-user mode all of them ran as naro against `/home/naro/.pm2`, and the root dump was never written.
+- These were unchanged over the whole run:
+  - neighbour PIDs, restart counts and status;
+  - both other daemons' MainPID / NRestarts;
+  - the pm2-root / pm2-kiuruwi unit files;
+  - `sshd_config`, root `authorized_keys`, sudoers, PAM and root's password hash.
+
+Side finding: a bare `pm2 --version` on the runner started a third, runner-owned daemon. Any pm2 CLI call does this.
