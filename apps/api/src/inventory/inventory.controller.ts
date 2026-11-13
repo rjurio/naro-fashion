@@ -1,6 +1,6 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Put, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
-import { AdjustStockDto } from './dto/adjust-stock.dto';
+import { AdjustStockDto, ApprovalThresholdsDto, DecideAdjustmentDto } from './dto/adjust-stock.dto';
 import { UpdateInventorySettingsDto } from './dto/update-inventory-settings.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
@@ -44,5 +44,44 @@ export class InventoryController {
   @Post('adjust')
   adjustStock(@Body() dto: AdjustStockDto, @CurrentUser('id') performedBy: string) {
     return this.service.adjustStock(dto, performedBy);
+  }
+
+  // Round 25F E: write-offs and stock decreases above the owner's threshold
+  // (every decrease while none is set) wait for a DIFFERENT approver.
+  @RequiresPermission('inventory:manage', 'inventory:approve')
+  @Get('adjustment-requests')
+  listRequests(@Query('status') status?: string) {
+    return this.service.listRequests(status);
+  }
+
+  @RequiresPermission('inventory:approve')
+  @Patch('adjustment-requests/:id/approve')
+  approveRequest(@Param('id') id: string, @Body() dto: DecideAdjustmentDto, @CurrentUser('id') actorId: string) {
+    return this.service.approveRequest(id, dto, actorId);
+  }
+
+  @RequiresPermission('inventory:approve')
+  @Patch('adjustment-requests/:id/reject')
+  rejectRequest(@Param('id') id: string, @Body() dto: DecideAdjustmentDto, @CurrentUser('id') actorId: string) {
+    return this.service.rejectRequest(id, dto, actorId);
+  }
+
+  @RequiresPermission('inventory:manage')
+  @Patch('adjustment-requests/:id/withdraw')
+  withdrawRequest(@Param('id') id: string, @CurrentUser('id') actorId: string) {
+    return this.service.withdrawRequest(id, actorId);
+  }
+
+  @RequiresPermission('inventory:manage', 'inventory:approve', 'settings:manage')
+  @Get('approval-thresholds')
+  getThresholds() {
+    return this.service.getThresholds();
+  }
+
+  /** Owner policy: changing what needs a second person is a settings decision (settings:manage), audited. */
+  @RequiresPermission('settings:manage')
+  @Put('approval-thresholds')
+  setThresholds(@Body() dto: ApprovalThresholdsDto, @CurrentUser('id') actorId: string) {
+    return this.service.setThresholds(dto, actorId);
   }
 }

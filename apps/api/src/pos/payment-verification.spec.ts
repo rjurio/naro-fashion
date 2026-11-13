@@ -256,8 +256,11 @@ describe('reversal of a manually confirmed payment', () => {
 });
 
 describe('route + permission wiring', () => {
-  it('the reversal route requires payments:reverse', () => {
-    expect(Reflect.getMetadata(PERMISSIONS_KEY, PosController.prototype.reversePayment)).toEqual(['payments:reverse']);
+  it('the reversal routes require payments:reverse (round 25F E: the old route now only REQUESTS)', () => {
+    for (const m of ['requestReversal', 'approveReversal', 'rejectReversal', 'withdrawReversal', 'listReversalRequests']) {
+      expect(Reflect.getMetadata(PERMISSIONS_KEY, (PosController.prototype as any)[m])).toEqual(['payments:reverse']);
+    }
+    expect((PosController.prototype as any).reversePayment).toBeUndefined();
   });
   it('defaults: nobody but SUPER_ADMIN may confirm or reverse until the owner grants it per person', () => {
     expect(MANAGER_DEFAULT_GRANTS).not.toContain('payments:confirm-manual');

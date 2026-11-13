@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -348,66 +349,238 @@ export class PosService {
   }
 
   /**
-   * Reverse a MANUALLY confirmed non-cash POS payment found invalid at
-   * reconciliation (e.g. the terminal settlement report doesn't show it).
-   * COMPLETED → REVERSED only (never cash, never provider-verified, never
-   * refunds). The order is flagged PAYMENT_REVERSED for follow-up; a layaway
-   * gets the amount back on its balance while still ACTIVE.
+   * Execute the reversal of a MANUALLY confirmed non-cash POS payment found
+   * invalid at reconciliation (e.g. the terminal settlement report doesn't
+   * show it). COMPLETED → REVERSED only (never cash, never provider-verified,
+   * never refunds, never rental payments). The order is flagged
+   * PAYMENT_REVERSED for follow-up; a layaway gets the amount back on its
+   * balance while still ACTIVE.
+   *
+   * Round 25F E: no route calls this directly any more — a reversal is
+   * REQUESTED (requestReversal) and runs only when a different holder of
+   * payments:reverse approves it (approveReversal).
    */
   async reversePayment(paymentId: string, reason: string, actorId: string) {
-    const tenantId = this.tenantContext.requireId;
     if (!reason || reason.trim().length < 5) {
       throw new BadRequestException('A reversal needs a reason (at least 5 characters).');
     }
-    const result = await this.prisma.$transaction(async (tx) => {
-      const p = await tx.payment.findFirst({ where: { id: paymentId, tenantId } });
-      if (!p) throw new NotFoundException('Payment not found.');
-      // A rental payment is never reversed here: dropping it from the rental
-      // ledger without the refund workflow would bypass approval and leave
-      // the booking marked paid. Corrections go through a rental refund
-      // request (or the owner-approved correction procedure).
-      if (p.rentalOrderId) {
-        throw new ConflictException({
-          statusCode: 409,
-          code: 'USE_REFUND_WORKFLOW',
-          message: 'Rental payments cannot be reversed from the POS. Use a rental refund request.',
-        });
-      }
-      const gr: any = p.gatewayResponse ?? {};
-      if (!isNonCash(p.method) || gr?.verification?.evidence !== 'manual') {
-        throw new BadRequestException('Only manually confirmed card / mobile-money POS payments can be reversed here.');
-      }
-      if (!canTransitionPayment(p.status, PAYMENT_STATES.REVERSED)) {
-        throw new ConflictException(`Payment is ${p.status}; only a COMPLETED payment can be reversed.`);
-      }
-      const claimed = await tx.payment.updateMany({
-        where: { id: p.id, tenantId, status: 'COMPLETED' },
-        data: {
-          status: PAYMENT_STATES.REVERSED,
-          gatewayResponse: { ...gr, reversal: { byAdminId: actorId, at: new Date().toISOString(), reason: reason.trim() } },
-        },
-      });
-      if (claimed.count !== 1) throw new ConflictException('Payment was changed by someone else — reload and try again.');
-      if (p.orderId) {
-        await tx.order.updateMany({ where: { id: p.orderId, tenantId }, data: { paymentStatus: 'PAYMENT_REVERSED' } });
-      }
-      if (p.layawayId) {
-        const lay = await tx.layaway.updateMany({
-          where: { id: p.layawayId, tenantId, status: 'ACTIVE' },
-          data: { depositPaid: { decrement: Number(p.amount) }, balanceDue: { increment: Number(p.amount) } },
-        });
-        if (lay.count !== 1) {
-          throw new ConflictException('The layaway is no longer active — reverse this payment manually with the manager.');
-        }
-      }
-      return { id: p.id, orderId: p.orderId, layawayId: p.layawayId, amount: Number(p.amount), method: p.method };
-    });
+    const result = await this.prisma.$transaction((tx) => this.reverseInTx(tx, paymentId, reason, actorId, {}));
     try {
       await this.audit?.log('PAYMENT_REVERSED', 'Payment', result.id, { ...result, reason: reason.trim() });
     } catch {
       /* never undo the reversal for an audit failure */
     }
     return { ...result, status: PAYMENT_STATES.REVERSED };
+  }
+
+  /** The checks a reversal needs, on a payment row (shared by request and execution). */
+  private assertReversible(p: any) {
+    // A rental payment is never reversed here: dropping it from the rental
+    // ledger without the refund workflow would bypass approval and leave
+    // the booking marked paid. Corrections go through a rental refund
+    // request (or the owner-approved correction procedure).
+    if (p.rentalOrderId) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'USE_REFUND_WORKFLOW',
+        message: 'Rental payments cannot be reversed from the POS. Use a rental refund request.',
+      });
+    }
+    const gr: any = p.gatewayResponse ?? {};
+    if (!isNonCash(p.method) || gr?.verification?.evidence !== 'manual') {
+      throw new BadRequestException('Only manually confirmed card / mobile-money POS payments can be reversed here.');
+    }
+    if (!canTransitionPayment(p.status, PAYMENT_STATES.REVERSED)) {
+      throw new ConflictException(`Payment is ${p.status}; only a COMPLETED payment can be reversed.`);
+    }
+  }
+
+  private async reverseInTx(tx: any, paymentId: string, reason: string, actorId: string, extra: Record<string, unknown>) {
+    const tenantId = this.tenantContext.requireId;
+    const p = await tx.payment.findFirst({ where: { id: paymentId, tenantId } });
+    if (!p) throw new NotFoundException('Payment not found.');
+    this.assertReversible(p);
+    const gr: any = p.gatewayResponse ?? {};
+    const claimed = await tx.payment.updateMany({
+      where: { id: p.id, tenantId, status: 'COMPLETED' },
+      data: {
+        status: PAYMENT_STATES.REVERSED,
+        gatewayResponse: { ...gr, reversal: { byAdminId: actorId, at: new Date().toISOString(), reason: reason.trim(), ...extra } },
+      },
+    });
+    if (claimed.count !== 1) throw new ConflictException('Payment was changed by someone else — reload and try again.');
+    if (p.orderId) {
+      await tx.order.updateMany({ where: { id: p.orderId, tenantId }, data: { paymentStatus: 'PAYMENT_REVERSED' } });
+    }
+    if (p.layawayId) {
+      const lay = await tx.layaway.updateMany({
+        where: { id: p.layawayId, tenantId, status: 'ACTIVE' },
+        data: { depositPaid: { decrement: Number(p.amount) }, balanceDue: { increment: Number(p.amount) } },
+      });
+      if (lay.count !== 1) {
+        throw new ConflictException('The layaway is no longer active — reverse this payment manually with the manager.');
+      }
+    }
+    return { id: p.id as string, orderId: p.orderId as string | null, layawayId: p.layawayId as string | null, amount: Number(p.amount), method: p.method as string };
+  }
+
+  // ============================================================
+  // PAYMENT REVERSAL — two steps (round 25F E)
+  // ============================================================
+
+  /** Open requests expire after this long (an operational limit, not a money threshold). */
+  static readonly REVERSAL_REQUEST_TTL_HOURS = 48;
+
+  async requestReversal(paymentId: string, reason: string, actorId: string) {
+    const tenantId = this.tenantContext.requireId;
+    if (!reason || reason.trim().length < 5) {
+      throw new BadRequestException('A reversal needs a reason (at least 5 characters).');
+    }
+    const request = await this.prisma.$transaction(async (tx: any) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'reversal:payment:' + paymentId}))`;
+      const p = await tx.payment.findFirst({ where: { id: paymentId, tenantId } });
+      if (!p) throw new NotFoundException('Payment not found.');
+      this.assertReversible(p);
+      const now = new Date();
+      await tx.paymentReversalRequest.updateMany({
+        where: { tenantId, paymentId, status: 'REQUESTED', expiresAt: { lte: now } },
+        data: { status: 'EXPIRED' },
+      });
+      const open = await tx.paymentReversalRequest.findFirst({ where: { tenantId, paymentId, status: 'REQUESTED' } });
+      if (open) {
+        throw new ConflictException({ statusCode: 409, code: 'REVERSAL_ALREADY_REQUESTED', message: 'A reversal of this payment is already waiting for approval.', requestId: open.id });
+      }
+      return tx.paymentReversalRequest.create({
+        data: {
+          tenantId, paymentId, reason: reason.trim(), requestedById: actorId,
+          expiresAt: new Date(now.getTime() + PosService.REVERSAL_REQUEST_TTL_HOURS * 3600e3),
+        },
+      });
+    });
+    await this.audit?.log('PAYMENT_REVERSAL_REQUESTED', 'Payment', paymentId, { requestId: request.id, reason: reason.trim() });
+    return { status: 'PENDING_APPROVAL', request };
+  }
+
+  async listReversalRequests(status?: string) {
+    return this.prisma.paymentReversalRequest.findMany({
+      where: { tenantId: this.tenantContext.requireId, ...(status ? { status } : {}) },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+  }
+
+  private async loadReversalRequest(id: string) {
+    const r = await this.prisma.paymentReversalRequest.findFirst({ where: { id, tenantId: this.tenantContext.requireId } });
+    if (!r) throw new NotFoundException('Reversal request not found.');
+    return r;
+  }
+
+  /** A DIFFERENT holder of payments:reverse approves; the reversal runs in the same transaction, once. */
+  async approveReversal(id: string, note: string | undefined, actorId: string) {
+    const tenantId = this.tenantContext.requireId;
+    const r = await this.loadReversalRequest(id);
+    if (r.requestedById === actorId) {
+      await this.audit?.log('PAYMENT_REVERSAL_DENIED', 'Payment', r.paymentId, { requestId: id, reason: 'SELF_APPROVAL' });
+      throw new ForbiddenException({ statusCode: 403, code: 'SELF_APPROVAL', message: 'A reversal must be approved by someone other than the person who asked for it.' });
+    }
+    if (r.status === 'REQUESTED' && r.expiresAt.getTime() <= Date.now()) {
+      await this.prisma.paymentReversalRequest.updateMany({ where: { id, tenantId, status: 'REQUESTED' }, data: { status: 'EXPIRED' } });
+      throw new ConflictException({ statusCode: 409, code: 'REVERSAL_EXPIRED', message: 'This reversal request has expired. Ask again if it is still needed.' });
+    }
+    if (r.status !== 'REQUESTED') throw new ConflictException({ statusCode: 409, code: 'NOT_PENDING', message: `The request is ${r.status}.` });
+    const result = await this.prisma.$transaction(async (tx: any) => {
+      const claim = await tx.paymentReversalRequest.updateMany({
+        where: { id, tenantId, status: 'REQUESTED', expiresAt: { gt: new Date() } },
+        data: { status: 'EXECUTED', decidedById: actorId, decidedAt: new Date(), decisionNote: note?.trim() || null },
+      });
+      if (claim.count !== 1) throw new ConflictException({ statusCode: 409, code: 'NOT_PENDING', message: 'The request was decided by someone else. Reload.' });
+      return this.reverseInTx(tx, r.paymentId, r.reason, actorId, { requestId: id, requestedByAdminId: r.requestedById, approvedByAdminId: actorId });
+    });
+    try {
+      await this.audit?.log('PAYMENT_REVERSED', 'Payment', result.id, { ...result, reason: r.reason, requestId: id, requestedBy: r.requestedById, approvedBy: actorId });
+    } catch {
+      /* never undo the reversal for an audit failure */
+    }
+    return { ...result, status: PAYMENT_STATES.REVERSED, requestId: id };
+  }
+
+  async rejectReversal(id: string, note: string | undefined, actorId: string) {
+    const r = await this.loadReversalRequest(id);
+    if (r.requestedById === actorId) throw new ForbiddenException({ statusCode: 403, code: 'SELF_DECISION', message: 'Withdraw your own request instead.' });
+    const res = await this.prisma.paymentReversalRequest.updateMany({
+      where: { id, tenantId: this.tenantContext.requireId, status: 'REQUESTED' },
+      data: { status: 'REJECTED', decidedById: actorId, decidedAt: new Date(), decisionNote: note?.trim() || null },
+    });
+    if (res.count !== 1) throw new ConflictException({ statusCode: 409, code: 'NOT_PENDING', message: 'The request is no longer pending.' });
+    await this.audit?.log('PAYMENT_REVERSAL_REJECTED', 'Payment', r.paymentId, { requestId: id, note: note ?? null });
+    return this.loadReversalRequest(id);
+  }
+
+  async withdrawReversal(id: string, actorId: string) {
+    const r = await this.loadReversalRequest(id);
+    if (r.requestedById !== actorId) throw new ForbiddenException({ statusCode: 403, code: 'NOT_REQUESTER', message: 'Only the person who asked can withdraw a request.' });
+    const res = await this.prisma.paymentReversalRequest.updateMany({
+      where: { id, tenantId: this.tenantContext.requireId, status: 'REQUESTED' },
+      data: { status: 'WITHDRAWN', decidedById: actorId, decidedAt: new Date() },
+    });
+    if (res.count !== 1) throw new ConflictException({ statusCode: 409, code: 'NOT_PENDING', message: 'The request is no longer pending.' });
+    await this.audit?.log('PAYMENT_REVERSAL_WITHDRAWN', 'Payment', r.paymentId, { requestId: id });
+    return this.loadReversalRequest(id);
+  }
+
+  // ============================================================
+  // MANUAL CONFIRMATION REVIEW (round 25F E) — detection, not blocking:
+  // a card / mobile-money payment confirmed by hand at the till is reviewed
+  // afterwards by a different person. Changes no money.
+  // ============================================================
+
+  async listManualConfirmations(filter: 'UNREVIEWED' | 'REVIEWED' | 'ALL' = 'UNREVIEWED') {
+    const tenantId = this.tenantContext.requireId;
+    const rows = await this.prisma.payment.findMany({
+      where: { tenantId, gatewayResponse: { path: ['verification', 'evidence'], equals: 'manual' } },
+      select: { id: true, amount: true, method: true, status: true, transactionRef: true, orderId: true, rentalOrderId: true, layawayId: true, createdAt: true, gatewayResponse: true },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+    const reviews = rows.length
+      ? await this.prisma.manualPaymentReview.findMany({ where: { tenantId, paymentId: { in: rows.map((r) => r.id) } } })
+      : [];
+    const byPayment = new Map(reviews.map((rv) => [rv.paymentId, rv]));
+    const out = rows.map((p) => {
+      const v: any = (p.gatewayResponse as any)?.verification ?? {};
+      return {
+        paymentId: p.id, amount: Number(p.amount), method: p.method, status: p.status, reference: p.transactionRef,
+        orderId: p.orderId, rentalOrderId: p.rentalOrderId, layawayId: p.layawayId, createdAt: p.createdAt,
+        confirmedById: v.confirmedByAdminId ?? null, confirmedAt: v.confirmedAt ?? null, approvalCode: v.approvalCode ?? null,
+        review: byPayment.get(p.id) ?? null,
+      };
+    });
+    return filter === 'ALL' ? out : out.filter((x) => (filter === 'REVIEWED' ? !!x.review : !x.review));
+  }
+
+  async reviewManualConfirmation(paymentId: string, outcome: string, note: string | undefined, actorId: string) {
+    const tenantId = this.tenantContext.requireId;
+    if (!['OK', 'QUERIED'].includes(outcome)) throw new BadRequestException('outcome must be OK or QUERIED.');
+    if (outcome === 'QUERIED' && (note ?? '').trim().length < 5) throw new BadRequestException('Say what is wrong (at least 5 characters).');
+    const p = await this.prisma.payment.findFirst({ where: { id: paymentId, tenantId }, select: { id: true, gatewayResponse: true } });
+    if (!p) throw new NotFoundException('Payment not found.');
+    const v: any = (p.gatewayResponse as any)?.verification;
+    if (v?.evidence !== 'manual') throw new BadRequestException('Only manually confirmed payments are reviewed here.');
+    const confirmedById = String(v.confirmedByAdminId ?? '');
+    if (!confirmedById || confirmedById === actorId) {
+      await this.audit?.log('MANUAL_PAYMENT_REVIEW_DENIED', 'Payment', paymentId, { reason: 'SELF_REVIEW' });
+      throw new ForbiddenException({ statusCode: 403, code: 'SELF_REVIEW', message: 'A manual confirmation is reviewed by someone other than the person who confirmed it.' });
+    }
+    try {
+      const review = await this.prisma.manualPaymentReview.create({
+        data: { tenantId, paymentId, confirmedById, reviewedById: actorId, outcome, note: note?.trim() || null },
+      });
+      await this.audit?.log('MANUAL_PAYMENT_REVIEWED', 'Payment', paymentId, { outcome, note: note ?? null, confirmedBy: confirmedById });
+      return review;
+    } catch (e: any) {
+      if (e?.code === 'P2002') throw new ConflictException({ statusCode: 409, code: 'ALREADY_REVIEWED', message: 'This payment was already reviewed.' });
+      throw e;
+    }
   }
 
   // ============================================================

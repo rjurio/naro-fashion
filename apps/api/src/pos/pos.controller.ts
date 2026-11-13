@@ -232,14 +232,59 @@ export class PosController {
   // by default (MANAGER excluded), audited.
   // ============================================================
 
+  // Round 25F E: this route now only REQUESTS the reversal; a different
+  // holder of payments:reverse approves it (and only then does it run).
   @Post('payments/:id/reverse')
   @RequiresPermission('payments:reverse')
-  reversePayment(
+  requestReversal(
     @Param('id') id: string,
     @Body('reason') reason: string,
     @CurrentUser('id') actorId: string,
   ) {
-    return this.posService.reversePayment(id, reason, actorId);
+    return this.posService.requestReversal(id, reason, actorId);
+  }
+
+  @Get('reversal-requests')
+  @RequiresPermission('payments:reverse')
+  listReversalRequests(@Query('status') status?: string) {
+    return this.posService.listReversalRequests(status);
+  }
+
+  @Patch('reversal-requests/:id/approve')
+  @RequiresPermission('payments:reverse')
+  approveReversal(@Param('id') id: string, @Body('note') note: string | undefined, @CurrentUser('id') actorId: string) {
+    return this.posService.approveReversal(id, note, actorId);
+  }
+
+  @Patch('reversal-requests/:id/reject')
+  @RequiresPermission('payments:reverse')
+  rejectReversal(@Param('id') id: string, @Body('note') note: string | undefined, @CurrentUser('id') actorId: string) {
+    return this.posService.rejectReversal(id, note, actorId);
+  }
+
+  @Patch('reversal-requests/:id/withdraw')
+  @RequiresPermission('payments:reverse')
+  withdrawReversal(@Param('id') id: string, @CurrentUser('id') actorId: string) {
+    return this.posService.withdrawReversal(id, actorId);
+  }
+
+  // Round 25F E: independent review of manual card / mobile-money
+  // confirmations (detection; changes no money). Managers hold reports:view.
+  @Get('manual-confirmations')
+  @RequiresPermission('reports:view')
+  listManualConfirmations(@Query('filter') filter?: 'UNREVIEWED' | 'REVIEWED' | 'ALL') {
+    return this.posService.listManualConfirmations(filter ?? 'UNREVIEWED');
+  }
+
+  @Post('manual-confirmations/:paymentId/review')
+  @RequiresPermission('reports:view')
+  reviewManualConfirmation(
+    @Param('paymentId') paymentId: string,
+    @Body('outcome') outcome: string,
+    @Body('note') note: string | undefined,
+    @CurrentUser('id') actorId: string,
+  ) {
+    return this.posService.reviewManualConfirmation(paymentId, outcome, note, actorId);
   }
 
   @Get('exchanges')
