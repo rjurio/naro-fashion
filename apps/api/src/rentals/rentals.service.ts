@@ -469,6 +469,10 @@ export class RentalsService {
       if ('error' in resolved) throw new BadRequestException(resolved.error);
       const returnedAt = resolved.at;
       data.actualReturnDate = returnedAt;
+      // Receipt of the item (who + when) is separate from the inspection
+      // (per-item RETURN records) and from the final decision (discrepancy
+      // reviews + closure).
+      if (user?.id) data.returnedByAdminId = user.id;
 
       // Late fee from the BOOKED return date (rental.returnDate), in whole
       // EAT days — see computeLateFee.
@@ -513,12 +517,12 @@ export class RentalsService {
         if (isRelease) {
           await lockChecklist(tx, id);
           usedExceptions = await assertChecklistReleasable(tx, tenantIdForClaim, rental, user?.id ?? null);
-          await declareGatePassed(tx, 'handover', id);
+          await declareGatePassed(tx, 'handover', id, user?.id ?? null);
         }
         if (status === 'CLOSED') {
           await lockChecklist(tx, id);
           await assertInspectionComplete(tx, tenantIdForClaim, id, 'CLOSE');
-          await declareGatePassed(tx, 'close', id);
+          await declareGatePassed(tx, 'close', id, user?.id ?? null);
         }
         if (status === 'CANCELLED') {
           // R1 (#37): REFUND_DUE decided under the booking's money locks, in

@@ -147,7 +147,21 @@ export class RentalChecklistV2Service {
         openDiscrepancies: inspection.open.map((d: any) => d.id),
       },
       people: Object.fromEntries(people.map((p: any) => [p.id, `${p.firstName ?? ''} ${p.lastName ?? ''}`.trim()])),
+      // Owner-authorised database gate overrides on this booking (read-only; see GATE_RECOVERY_PROCEDURE.md).
+      gateOverrides: this.prisma.rentalGateOverride?.findMany
+        ? await this.prisma.rentalGateOverride.findMany({ where: { rentalOrderId, rentalOrder: { tenantId: this.tenantId } }, orderBy: { createdAt: 'asc' } })
+        : [],
     };
+  }
+
+  /** Every owner-authorised gate override in this shop (read-only audit view). */
+  async gateOverrides() {
+    return this.prisma.rentalGateOverride.findMany({
+      where: { rentalOrder: { tenantId: this.tenantId } },
+      include: { rentalOrder: { select: { rentalNumber: true, status: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
   }
 
   /**

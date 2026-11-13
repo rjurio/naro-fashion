@@ -81,6 +81,7 @@ function fakeDb(seed: Partial<Record<string, any[]>> = {}) {
       },
     },
     adminUser: { findMany: async () => [] },
+    category: { findFirst: async ({ where }: any) => (t.category ?? []).find((c: any) => c.id === where.id) ?? null },
   };
   return db;
 }
@@ -302,14 +303,14 @@ describe('shape: the gates are in the write path, on every route (E13, F)', () =
   const svc = read('../rentals.service.ts');
   it('updateStatus checks the checklist and declares it to the database in the SAME transaction as the write', () => {
     const body = svc.slice(svc.indexOf('const write = async (tx: any) =>'), svc.indexOf('} catch (e: any) {', svc.indexOf('const write = async (tx: any) =>')));
-    expect(body).toMatch(/lockChecklist\(tx, id\);\s*usedExceptions = await assertChecklistReleasable\(tx,[^;]+;\s*await declareGatePassed\(tx, 'handover', id\)/);
-    expect(body).toMatch(/assertInspectionComplete\(tx, tenantIdForClaim, id, 'CLOSE'\);\s*await declareGatePassed\(tx, 'close', id\)/);
+    expect(body).toMatch(/lockChecklist\(tx, id\);\s*usedExceptions = await assertChecklistReleasable\(tx,[^;]+;\s*await declareGatePassed\(tx, 'handover', id, user\?\.id \?\? null\)/);
+    expect(body).toMatch(/assertInspectionComplete\(tx, tenantIdForClaim, id, 'CLOSE'\);\s*await declareGatePassed\(tx, 'close', id, user\?\.id \?\? null\)/);
     expect(body).toMatch(/rentalUnitId: rental\.rentalUnitId \?\? null/);
     expect(svc).toMatch(/isRelease \|\| status === 'CLOSED' \? await this\.prisma\.\$transaction\(write\)/);
   });
   it('the deposit return checks the inspection and declares it inside the request transaction', () => {
     const m = read('../rental-money.service.ts');
-    expect(m).toMatch(/await lockChecklist\(tx, rentalOrderId\);\s*await assertDepositSettleable\(tx, tenantId, rentalOrderId, retained\);\s*await declareGatePassed\(tx, 'deposit', rentalOrderId\)/);
+    expect(m).toMatch(/await lockChecklist\(tx, rentalOrderId\);\s*await assertDepositSettleable\(tx, tenantId, rentalOrderId, retained\);\s*await declareGatePassed\(tx, 'deposit', rentalOrderId, actor\.id\)/);
   });
   it('the migration installs the database triggers (fail closed for every build)', () => {
     const sql = readFileSync(join(__dirname, '../../../../../packages/database/prisma/migrations/20261115090000_rental_checklist_v2/migration.sql'), 'utf8');
@@ -320,6 +321,7 @@ describe('shape: the gates are in the write path, on every route (E13, F)', () =
   });
   it('the core sets exactly the settings the triggers read', () => {
     expect(read('checklist-core.ts')).toMatch(/const key = `naro\.r3_\$\{step\}`/);
+    expect(read('checklist-core.ts')).toMatch(/\$\{rentalOrderId\} \|\| ':' \|\| txid_current\(\)::text \|\| ':' \|\| \$\{actor\}/);
   });
   it('new permissions are seeded and never role defaults', () => {
     for (const c of ['rentals:checklist-verify', 'rentals:checklist-exception', 'rentals:checklist-templates']) {
@@ -333,5 +335,56 @@ describe('shape: the gates are in the write path, on every route (E13, F)', () =
     for (const route of ["@Post('templates')", "@Put('templates/:id')", "@Delete('templates/:id')", "@Patch('templates/:id/toggle-active')", "@Patch('templates/:id/restore')"]) {
       expect(c).toMatch(new RegExp(route.replace(/[()/:]/g, (m) => `\\${m}`) + "\\s*\\n\\s*@RequiresPermission\\('rentals:checklist-templates'\\)"));
     }
+  });
+});
+
+
+describe('round 25C B: what was physically issued is what must come back', () => {
+  const audit = { log: jest.fn() };
+  it('a category list is found through the parent categories (Wedding Dresses > Ball Gown)', async () => {
+    const db = fakeDb({
+      template: [{ id: 'wd', tenantId: T, isActive: true, deletedAt: null, productId: null, categoryId: 'wedding', items: [] }],
+      category: [{ id: 'ballgown', parentId: 'wedding' }, { id: 'wedding', parentId: null }],
+    } as any);
+    expect(await resolveTemplate(db, T, { id: 'p9', categoryId: 'ballgown' })).toMatchObject({ source: 'CATEGORY', template: { id: 'wd' } });
+  });
+
+  it('an accessory omitted under an approved exception: the original requirement stays, nothing is expected back, no discrepancy for not returning it', async () => {
+    const f = await frozen({ status: 'RETURNED' });
+    f.rec('Gown', 'HANDOVER');
+    f.rec('Garment bag', 'HANDOVER', { quantity: 1, condition: null });
+    f.db.t.exception.push({ id: 'e1', tenantId: T, rentalOrderId: 'r1', kind: 'MISSING', snapshotItemIds: [f.item('Veil').id], status: 'USED', decidedById: 'mgr' });
+    const svc = new RentalChecklistV2Service(f.db, { requireId: T } as any, audit as any);
+    const st: any = await svc.state('r1');
+    const veil = st.items.find((i: any) => i.label === 'Veil');
+    expect([veil.quantity, veil.isMandatory, veil.issuedQuantity, veil.expectedReturn, veil.exception?.kind]).toEqual([1, true, 0, 0, 'MISSING']);
+    expect(st.items.find((i: any) => i.label === 'Garment bag')).toMatchObject({ issuedQuantity: 1, expectedReturn: 1 });
+    expect(st.inspection.notInspected).not.toContain('Veil');
+    // Return what was issued: gown and bag back; the veil (never issued) is not asked for.
+    await svc.record('r1', { stage: 'RETURN', entries: [
+      { snapshotItemId: f.item('Gown').id, quantity: 1, condition: 'GOOD' },
+      { snapshotItemId: f.item('Garment bag').id, quantity: 1 },
+      { snapshotItemId: f.item('Cleaned by shop').id, quantity: 1, condition: 'GOOD' },
+    ] }, { id: 'inspector' });
+    expect(f.db.t.discrepancy).toHaveLength(0);
+    await expect(assertInspectionComplete(f.db, T, 'r1', 'CLOSE')).resolves.toBeTruthy();
+  });
+
+  it('an ISSUED accessory that does not come back opens a MISSING discrepancy for that item only', async () => {
+    const f = await frozen({ status: 'RETURNED' });
+    f.rec('Gown', 'HANDOVER'); f.rec('Veil', 'HANDOVER'); f.rec('Garment bag', 'HANDOVER', { condition: null });
+    const svc = new RentalChecklistV2Service(f.db, { requireId: T } as any, audit as any);
+    await svc.record('r1', { stage: 'RETURN', entries: [
+      { snapshotItemId: f.item('Gown').id, quantity: 1, condition: 'GOOD' },
+      { snapshotItemId: f.item('Veil').id, quantity: 0, condition: 'MISSING' },
+      { snapshotItemId: f.item('Garment bag').id, quantity: 1 },
+    ] }, { id: 'inspector' });
+    expect(f.db.t.discrepancy.map((d: any) => [d.kind, d.quantity, d.snapshotItemId])).toEqual([['MISSING', 1, f.item('Veil').id]]);
+  });
+
+  it('application code never writes gate overrides (they are created only by the owner recovery procedure)', () => {
+    const { execSync } = require('child_process');
+    const hits = execSync('git grep -n "rentalGateOverride\.\(create\|update\|upsert\|delete\)" -- "apps/api/src/*.ts" || true', { cwd: join(__dirname, '../../../../..'), encoding: 'utf8' }).trim();
+    expect(hits).toBe('');
   });
 });
