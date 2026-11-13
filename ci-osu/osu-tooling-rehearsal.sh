@@ -11,7 +11,7 @@ PM2BIN="$(command -v pm2)"; NODEDIR="$(dirname "$(command -v node)")"
 results=(); fails=0
 pass() { results+=("PASS  $1"); echo "  ✔ $1"; }
 fail() { results+=("FAIL  $1"); fails=$((fails + 1)); echo "  ✖ $1"; }
-check() { if eval "$2" >/dev/null 2>&1; then pass "$1"; else fail "$1"; fi; }
+check() { if eval "$2" >/dev/null 2>&1; then pass "$1"; else fail "$1"; [ -s /tmp/guard.out ] && sed "s/^/      | /" /tmp/guard.out | tail -25; fi; }
 refused() { if eval "$2" >/dev/null 2>&1; then fail "$1 (ALLOWED)"; else pass "$1"; fi; }
 guard() { (cd "$APP" && bash scripts/ops/pm2-guard.sh) > /tmp/guard.out 2>&1; }
 guard_says() { guard; grep -qF -- "$1" /tmp/guard.out; }
@@ -25,7 +25,7 @@ lib() { (cd "$APP" && . scripts/ops/deploy-lib.sh && "$@"); }
 npm2() { sudo -u naro -H env PATH="$NODEDIR:/usr/local/bin:/usr/bin:/bin" PM2_HOME="$NHOME/.pm2" "$PM2BIN" "$@"; }
 
 echo "== 0. the VPS today: NARO apps + another app under a systemd-supervised ROOT daemon"
-rm -rf "$APP" /var/www/other-app && mkdir -p /var/www && cp -a "$REPO" "$APP"
+rm -rf "$APP" /var/www/other-app && mkdir -p /var/www && cp -a "$REPO" "$APP" && chown -R root:root "$APP"   # as on the VPS: code root-owned
 for f in "$APP/.env" "$APP/apps/api/.env" "$APP/packages/database/.env"; do
   printf 'DATABASE_URL="%s"\nJWT_SECRET=rehearsal-only-jwt-secret-0123456789abcdef0123456789abcdef\nJWT_REFRESH_SECRET=rehearsal-only-refresh-secret-0123456789abcdef0123456789\n' "$DATABASE_URL" > "$f"
   chown root:root "$f"; chmod 600 "$f"
@@ -75,7 +75,8 @@ printf 'setInterval(() => {}, 1e9);
 check "a NARO-named app in the ROOT daemon → refused" '! guard && grep -q "runs OUTSIDE pm2-naro.service" /tmp/guard.out'
 (cd "$APP" && "$PM2BIN" delete naro-admin >/dev/null 2>&1; "$PM2BIN" save >/dev/null)
 check "after removing it → passes again" 'guard'
-sudo -u naro -H env PATH="$NODEDIR:/usr/bin:/bin" PM2_HOME=/tmp/naro-stray "$PM2BIN" ping >/dev/null 2>&1
+sudo -u naro -H env PATH="$NODEDIR:/usr/bin:/bin" PM2_HOME=/tmp/naro-stray "$PM2BIN" ping >/dev/null 2>&1; sleep 2
+check "the stray naro daemon really runs (set-up)" 'pgrep -u naro -f "God Daemon \(/tmp/naro-stray\)"'
 check "a second naro daemon → refused" '! guard && grep -q "another naro PM2 God Daemon" /tmp/guard.out'
 sudo -u naro -H env PATH="$NODEDIR:/usr/bin:/bin" PM2_HOME=/tmp/naro-stray "$PM2BIN" kill >/dev/null 2>&1
 check "after killing it → passes again" 'guard'
