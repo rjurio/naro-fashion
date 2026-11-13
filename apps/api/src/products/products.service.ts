@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { userHasPermission } from '../auth/util/permission-check';
+import { BadRequestException, Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
@@ -327,8 +328,21 @@ export class ProductsService {
     throw err;
   }
 
-  async create(dto: CreateProductDto) {
+  /** The admin making the current request (request-scoped service). */
+  private currentActor: any = undefined;
+
+  private async assertInventoryPermission(actor: any, what: string) {
+    if (await userHasPermission(this.prisma as any, actor, 'inventory:manage')) return;
+    throw new ForbiddenException({
+      statusCode: 403, code: 'INVENTORY_PERMISSION_REQUIRED',
+      message: `Setting ${what} needs the inventory:manage permission. Create it with 0 and use Inventory → Adjust stock, or ask someone who has it.`,
+    });
+  }
+
+  async create(dto: CreateProductDto, actor?: any) {
     const tenantId = this.tenantContext.requireId;
+    // Security fix (PR #42): opening stock is an inventory movement (inventory:manage).
+    if ((dto.variants ?? []).some((v: any) => Number(v.stock ?? 0) > 0)) await this.assertInventoryPermission(actor, 'opening stock');
     const slug = await this.uniqueSlugForCreate(tenantId, dto.slug, dto.name);
 
     await this.assertProductRefs(tenantId, { categoryId: dto.categoryId, sizeGuideId: dto.sizeGuideId });
@@ -450,7 +464,7 @@ export class ProductsService {
     });
   }
 
-  async bulkImport(fileBuffer: Buffer) {
+  async bulkImport(fileBuffer: Buffer, actor?: any) {
     const tenantId = this.tenantContext.requireId;
     const rows = this.parseCsv(fileBuffer);
 
@@ -566,7 +580,7 @@ export class ProductsService {
           dto.images = imagesRaw.split(';').map((u) => u.trim()).filter(Boolean);
         }
 
-        await this.create(dto);
+        await this.create(dto, actor);
 
         if (sku) existingSkus.add(sku.toLowerCase());
         created++;
@@ -583,7 +597,11 @@ export class ProductsService {
     };
   }
 
-  async update(id: string, dto: UpdateProductDto, performedBy?: string) {
+  async update(id: string, dto: UpdateProductDto, actor?: any) {
+    // PR #42: the full actor (permission check for a new size's opening
+    // stock); a bare id string is still accepted for the ledger attribution.
+    this.currentActor = typeof actor === 'string' ? undefined : actor;
+    const performedBy: string | undefined = typeof actor === 'string' ? actor : actor?.id;
     const tenantId = this.tenantContext.requireId;
     const expectedUpdatedAt = parseExpectedUpdatedAt(dto.expectedUpdatedAt);
     const product = await this.prisma.product.findFirst({ where: { id, tenantId } });
@@ -738,6 +756,11 @@ export class ProductsService {
       where: { productId: product.id, tenantId },
       select: { id: true, sku: true, stock: true },
     });
+    // PR #42 + #11: an existing size's stock is refused below (STOCK_EDIT_NOT_ALLOWED);
+    // opening stock of a NEW size needs inventory:manage.
+    if (variants.some((v) => !(v.id && existing.some((e) => e.id === v.id)) && Number(v.stock ?? 0) > 0)) {
+      await this.assertInventoryPermission(this.currentActor, 'opening stock of a new size');
+    }
     const existingById = new Map(existing.map((v) => [v.id, v]));
 
     // Refuse any stock change on an existing variant BEFORE writing anything.

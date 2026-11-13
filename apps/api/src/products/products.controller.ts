@@ -58,8 +58,8 @@ export class ProductsController {
 
   @UseGuards(JwtAuthGuard, AdminGuard)
   @Post()
-  create(@Body() dto: CreateProductDto) {
-    return this.productsService.create(dto);
+  create(@Body() dto: CreateProductDto, @CurrentUser() user: any) {
+    return this.productsService.create(dto, user);
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
@@ -67,19 +67,19 @@ export class ProductsController {
   @UseInterceptors(FileInterceptor('file', {
     limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   }))
-  async bulkImport(@UploadedFile() file: Express.Multer.File) {
+  async bulkImport(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: any) {
     if (!file) throw new BadRequestException('No file uploaded');
     const name = (file.originalname || '').toLowerCase();
     if (!name.endsWith('.csv')) {
       throw new BadRequestException('Only .csv files are accepted');
     }
-    return this.productsService.bulkImport(file.buffer);
+    return this.productsService.bulkImport(file.buffer, user);
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateProductDto, @CurrentUser('id') performedBy?: string) {
-    return this.productsService.update(id, dto, performedBy);
+  update(@Param('id') id: string, @Body() dto: UpdateProductDto, @CurrentUser() user: any) {
+    return this.productsService.update(id, dto, user);
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)

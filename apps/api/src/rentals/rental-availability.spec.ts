@@ -131,8 +131,18 @@ function makeDb(opts: FakeOpts = {}) {
         else otherVariant.stock += data.stock.increment;
         return {};
       }),
+      // PR #42 port: inventory writes are a guarded updateMany (never below 0).
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const cur = where.id === 'v1' ? state.stock : otherVariant.stock;
+        if (typeof where.stock === 'number' && where.stock !== cur) return { count: 0 };
+        if (where.stock?.gte !== undefined && cur < where.stock.gte) return { count: 0 };
+        state.writes += 1;
+        const next = typeof data.stock === 'number' ? data.stock : cur + data.stock.increment;
+        if (where.id === 'v1') state.stock = next; else otherVariant.stock = next;
+        return { count: 1 };
+      }),
     },
-    product: { update: jest.fn(async () => ({})) },
+    product: { update: jest.fn(async () => ({})), updateMany: jest.fn(async () => ({ count: 1 })) },
     inventoryTransaction: {
       ...reads.inventoryTransaction,
       create: jest.fn(async ({ data }: any) => {

@@ -1,4 +1,4 @@
-import { IsString, IsInt, IsOptional, IsPositive, IsIn, MaxLength } from 'class-validator';
+import { IsString, IsInt, IsOptional, IsPositive, IsIn, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export const ADJUST_STOCK_TYPES = ['RESTOCK', 'ADJUSTMENT', 'DAMAGE'];
@@ -32,4 +32,11 @@ export class AdjustStockDto {
   @IsOptional()
   @IsString()
   reference?: string;
+
+  /** Optional: the stock the caller saw. If it changed meanwhile → 409 STALE_STOCK, nothing written. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Type(() => Number)
+  expectedStock?: number;
 }
