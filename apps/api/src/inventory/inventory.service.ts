@@ -198,35 +198,57 @@ export class InventoryService {
   }
 
   /**
-   * One stock change, atomically: read the stock inside the transaction,
-   * compare-and-swap it (still equal to what was read — and, for a request
-   * being approved, equal to what the requester saw), and write the ledger
-   * row with the real before / after.
+   * One stock change, atomically, inside a transaction (the caller's, or a
+   * new one):
+   *  - a REQUEST being approved (expectedBefore set) is a compare-and-swap on
+   *    the stock the requester saw — any movement since makes it stale;
+   *  - a direct change (expectedBefore null) is PR #42's guarded update: a
+   *    decrease only matches while stock >= quantity, so concurrent write-offs
+   *    serialise on the row lock instead of failing, and stock never goes
+   *    below 0.
+   * The ledger's before / after are read inside the same transaction.
    */
   private async applyChange(c: {
     productId: string; variantId: string; type: string; direction: 'INCREASE' | 'DECREASE'; quantity: number;
     expectedBefore: number | null; staleCode?: 'STOCK_CHANGED' | 'STALE_STOCK'; unitCost: number; note?: string | null; reference?: string | null; performedBy?: string | null;
-  }) {
+  }, txIn?: any) {
     const tenantId = this.tenantContext.requireId;
     const quantityChange = (c.direction === 'DECREASE' ? -1 : 1) * c.quantity;
-    return this.prisma.$transaction(async (tx: any) => {
-      const v = await tx.productVariant.findFirst({ where: { id: c.variantId, tenantId }, select: { stock: true } });
-      if (!v) throw new NotFoundException('Variant not found');
-      if (c.expectedBefore != null && v.stock !== c.expectedBefore) {
-        throw new ConflictException(c.staleCode === 'STALE_STOCK'
-          ? { statusCode: 409, code: 'STALE_STOCK', current: v.stock, message: `Stock changed meanwhile (now ${v.stock}). Reload and try again.` }
-          : { statusCode: 409, code: 'STOCK_CHANGED', message: `Stock changed since the request (${c.expectedBefore} → ${v.stock}). Ask for a new count.`, current: v.stock });
+    const run = async (tx: any) => {
+      let quantityBefore: number;
+      let quantityAfter: number;
+      if (c.expectedBefore != null) {
+        const v = await tx.productVariant.findFirst({ where: { id: c.variantId, tenantId }, select: { stock: true } });
+        if (!v) throw new NotFoundException('Variant not found');
+        if (v.stock !== c.expectedBefore) {
+          throw new ConflictException(c.staleCode === 'STALE_STOCK'
+            ? { statusCode: 409, code: 'STALE_STOCK', current: v.stock, message: `Stock changed meanwhile (now ${v.stock}). Reload and try again.` }
+            : { statusCode: 409, code: 'STOCK_CHANGED', message: `Stock changed since the request (${c.expectedBefore} → ${v.stock}). Ask for a new count.`, current: v.stock });
+        }
+        quantityBefore = v.stock;
+        quantityAfter = quantityBefore + quantityChange;
+        if (quantityAfter < 0) {
+          throw new ConflictException({ statusCode: 409, code: 'INSUFFICIENT_STOCK', message: `Only ${quantityBefore} in stock.` });
+        }
+        const cas = await tx.productVariant.updateMany({
+          where: { id: c.variantId, tenantId, stock: quantityBefore },
+          data: { stock: quantityAfter },
+        });
+        if (cas.count !== 1) throw new ConflictException({ statusCode: 409, code: c.staleCode ?? 'STOCK_CHANGED', message: 'Stock changed while saving. Reload and try again.' });
+      } else {
+        const res = await tx.productVariant.updateMany({
+          where: { id: c.variantId, tenantId, ...(quantityChange < 0 ? { stock: { gte: -quantityChange } } : {}) },
+          data: { stock: { increment: quantityChange } },
+        });
+        if (res.count !== 1) {
+          const now = await tx.productVariant.findFirst({ where: { id: c.variantId, tenantId }, select: { stock: true } });
+          if (!now) throw new NotFoundException('Variant not found');
+          throw new ConflictException({ statusCode: 409, code: 'INSUFFICIENT_STOCK', current: now.stock, message: `Only ${now.stock} in stock.` });
+        }
+        const after = await tx.productVariant.findFirst({ where: { id: c.variantId, tenantId }, select: { stock: true } });
+        quantityAfter = after!.stock;
+        quantityBefore = quantityAfter - quantityChange;
       }
-      const quantityBefore = v.stock;
-      const quantityAfter = quantityBefore + quantityChange;
-      if (quantityAfter < 0) {
-        throw new ConflictException({ statusCode: 409, code: 'INSUFFICIENT_STOCK', message: `Only ${quantityBefore} in stock.` });
-      }
-      const cas = await tx.productVariant.updateMany({
-        where: { id: c.variantId, tenantId, stock: quantityBefore },
-        data: { stock: quantityAfter },
-      });
-      if (cas.count !== 1) throw new ConflictException({ statusCode: 409, code: 'STOCK_CHANGED', message: 'Stock changed while saving. Reload and try again.' });
       if (c.type === 'RESTOCK') {
         await tx.product.updateMany({ where: { id: c.productId, tenantId }, data: { lastRestockedAt: new Date() } });
       }
@@ -239,7 +261,8 @@ export class InventoryService {
           note: c.note ?? null, reference: c.reference ?? null, performedBy: c.performedBy ?? null,
         },
       });
-    });
+    };
+    return txIn ? run(txIn) : this.prisma.$transaction(run);
   }
 
   // ---------------------------------------------------------------- thresholds (owner-set, no default)
@@ -300,35 +323,42 @@ export class InventoryService {
       throw new ForbiddenException({ statusCode: 403, code: 'SELF_APPROVAL', message: 'A write-off or stock decrease must be approved by someone other than the person who asked for it.' });
     }
     if (r.status !== 'REQUESTED') throw new ConflictException({ statusCode: 409, code: 'NOT_PENDING', message: `The request is ${r.status}.` });
-    // Claim first so two approvers can't both apply it.
-    const claim = await this.prisma.inventoryAdjustmentRequest.updateMany({
-      where: { id, tenantId, status: 'REQUESTED' },
-      data: { status: 'APPLIED', decidedById: actorId, decidedAt: new Date(), decisionNote: dto.note?.trim() || null },
-    });
-    if (claim.count !== 1) throw new ConflictException({ statusCode: 409, code: 'NOT_PENDING', message: 'The request was decided by someone else. Reload.' });
     const product = await this.prisma.product.findFirst({ where: { id: r.productId, tenantId }, select: { purchasePrice: true } });
+    // One transaction: claim the request (so two approvers can't both apply
+    // it), apply the change against the stock the requester saw, link the
+    // ledger row. A failure rolls the claim back — a request is never left
+    // APPLIED without its stock change.
     let txRow: any;
     try {
-      txRow = await this.applyChange({
-        productId: r.productId, variantId: r.variantId, type: r.type, direction: r.direction as 'INCREASE' | 'DECREASE', quantity: r.quantity,
-        expectedBefore: r.stockAtRequest, unitCost: Number(product?.purchasePrice ?? 0),
-        note: [r.note, `approved by ${actorId}`].filter(Boolean).join(' — '),
-        reference: `ADJ-REQ:${r.id}`, performedBy: r.requestedById,
+      txRow = await this.prisma.$transaction(async (tx: any) => {
+        const claim = await tx.inventoryAdjustmentRequest.updateMany({
+          where: { id, tenantId, status: 'REQUESTED' },
+          data: { status: 'APPLIED', decidedById: actorId, decidedAt: new Date(), decisionNote: dto.note?.trim() || null },
+        });
+        if (claim.count !== 1) throw new ConflictException({ statusCode: 409, code: 'NOT_PENDING', message: 'The request was decided by someone else. Reload.' });
+        const row = await this.applyChange({
+          productId: r.productId, variantId: r.variantId, type: r.type, direction: r.direction as 'INCREASE' | 'DECREASE', quantity: r.quantity,
+          expectedBefore: r.stockAtRequest, unitCost: Number(product?.purchasePrice ?? 0),
+          note: [r.note, `approved by ${actorId}`].filter(Boolean).join(' — '),
+          reference: `ADJ-REQ:${r.id}`, performedBy: r.requestedById,
+        }, tx);
+        await tx.inventoryAdjustmentRequest.updateMany({ where: { id, tenantId, status: 'APPLIED' }, data: { transactionId: row.id } });
+        return row;
       });
     } catch (e: any) {
-      // Not applied: STALE when the stock moved since the request, otherwise back to the queue.
+      // Not applied (rolled back). STALE when the stock moved since the request.
       const code = e?.getResponse?.()?.code;
-      const stale = code === 'STOCK_CHANGED' || code === 'INSUFFICIENT_STOCK';
-      await this.prisma.inventoryAdjustmentRequest.updateMany({
-        where: { id, tenantId, status: 'APPLIED', transactionId: null },
-        data: stale ? { status: 'STALE' } : { status: 'REQUESTED', decidedById: null, decidedAt: null, decisionNote: null },
-      });
-      if (stale) {
-        await this.auditService.log('INVENTORY_ADJUSTMENT_STALE', 'Inventory', r.productId, { requestId: id, stockAtRequest: r.stockAtRequest, by: actorId });
+      if (code === 'STOCK_CHANGED' || code === 'INSUFFICIENT_STOCK') {
+        const marked = await this.prisma.inventoryAdjustmentRequest.updateMany({
+          where: { id, tenantId, status: 'REQUESTED' },
+          data: { status: 'STALE', decidedById: actorId, decidedAt: new Date() },
+        });
+        if (marked.count === 1) {
+          await this.auditService.log('INVENTORY_ADJUSTMENT_STALE', 'Inventory', r.productId, { requestId: id, stockAtRequest: r.stockAtRequest, by: actorId });
+        }
       }
       throw e;
     }
-    await this.prisma.inventoryAdjustmentRequest.updateMany({ where: { id, tenantId }, data: { transactionId: txRow.id } });
     await this.auditService.log('INVENTORY_ADJUSTMENT_APPROVED', 'Inventory', r.productId, {
       requestId: id, type: r.type, direction: r.direction, quantity: r.quantity, variantId: r.variantId,
       requestedBy: r.requestedById, approvedBy: actorId,
