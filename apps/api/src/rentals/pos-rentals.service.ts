@@ -337,11 +337,14 @@ export class PosRentalsService {
     const canConfirmManually = nonCash ? await userHasPermission(this.prisma as any, actor, CONFIRM_MANUAL_PERMISSION) : false;
     const verified = verifyTenders(dto.tenders as any, { canConfirmManually, actorAdminId: actor.id });
     const hasCash = dto.tenders.some((t) => !isNonCash(t.method));
+    // Cash needs the cashier's own OPEN shift. Non-cash money is tagged with
+    // that shift too when one is given (R4 reconciliation itemises it); it
+    // never changes the drawer's expected cash, which counts CASH only.
     let sessionId: string | null = null;
-    if (hasCash) {
+    if (hasCash || dto.sessionId) {
       const s = await this.prisma.posSession.findFirst({ where: { id: dto.sessionId ?? '', tenantId, adminUserId: actor.id, status: 'OPEN' }, select: { id: true } });
-      if (!s) throw new BadRequestException('Cash needs your OPEN POS shift (sessionId). Open a shift first.');
-      sessionId = s.id;
+      if (!s && hasCash) throw new BadRequestException('Cash needs your OPEN POS shift (sessionId). Open a shift first.');
+      sessionId = s?.id ?? null;
     }
     const refs = verified.map((v) => v.transactionRef).filter(Boolean) as string[];
     if (refs.length) {
@@ -381,7 +384,7 @@ export class PosRentalsService {
                 gatewayResponse: {
                   kind: 'POS_RENTAL_PAYMENT',
                   recordedByAdminId: actor.id,
-                  ...(sessionId && !isNonCash(t.method) ? { posSessionId: sessionId } : {}),
+                  ...(sessionId ? { posSessionId: sessionId } : {}),
                   ...(v.verification ? { verification: v.verification as any } : {}),
                 },
               },

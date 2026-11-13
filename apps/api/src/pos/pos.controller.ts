@@ -61,6 +61,14 @@ export class PosController {
     return this.posService.getSessions(page ? +page : 1, limit ? +limit : 20);
   }
 
+  // R4 shift reconciliation (read-only, financial): owners/managers review a
+  // shift's drawer, money by category and the shop's open liabilities.
+  @Get('sessions/:id/reconciliation')
+  @RequiresPermission('reports:view')
+  getSessionReconciliation(@Param('id') id: string) {
+    return this.posService.getSessionReconciliation(id);
+  }
+
   @Get('sessions/:id/summary')
   getSessionSummary(@Param('id') id: string) {
     return this.posService.getSessionSummary(id);
