@@ -1,3 +1,4 @@
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { RolesService } from './roles.service';
 import { CreateRoleDto } from './dto/create-role.dto';
@@ -47,8 +48,8 @@ export class RolesController {
 
   @Patch(':id/restore')
   @RequiresPermission('roles:manage')
-  restore(@Param('id') id: string) {
-    return this.rolesService.restore(id);
+  restore(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.rolesService.restore(id, user);
   }
 
   @Get(':id/permissions')
@@ -59,8 +60,8 @@ export class RolesController {
 
   @Post(':id/permissions')
   @RequiresPermission('roles:manage')
-  addPermissions(@Param('id') id: string, @Body() body: { permissionIds: string[] }) {
-    return this.rolesService.addPermissions(id, body.permissionIds);
+  addPermissions(@Param('id') id: string, @Body() body: { permissionIds: string[] }, @CurrentUser() user: any) {
+    return this.rolesService.addPermissions(id, body.permissionIds, user);
   }
 
   @Delete(':roleId/permissions/:permissionId')
