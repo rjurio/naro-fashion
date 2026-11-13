@@ -306,7 +306,7 @@ describe('shape: the gates are in the write path, on every route (E13, F)', () =
     expect(body).toMatch(/lockChecklist\(tx, id\);\s*usedExceptions = await assertChecklistReleasable\(tx,[^;]+;\s*await declareGatePassed\(tx, 'handover', id, user\?\.id \?\? null\)/);
     expect(body).toMatch(/assertInspectionComplete\(tx, tenantIdForClaim, id, 'CLOSE'\);\s*await declareGatePassed\(tx, 'close', id, user\?\.id \?\? null\)/);
     expect(body).toMatch(/rentalUnitId: rental\.rentalUnitId \?\? null/);
-    expect(svc).toMatch(/isRelease \|\| status === 'CLOSED' \? await this\.prisma\.\$transaction\(write\)/);
+    expect(svc).toMatch(/isRelease \|\| status === 'CLOSED' \|\| status === 'CANCELLED' \? await this\.prisma\.\$transaction\(write\)/);
   });
   it('the deposit return checks the inspection and declares it inside the request transaction', () => {
     const m = read('../rental-money.service.ts');
