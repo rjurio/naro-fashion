@@ -30,12 +30,14 @@ describe('policy: which stock changes need a second person', () => {
 function world(opts: { stock?: number; thresholds?: Record<string, string> } = {}) {
   const state = { stock: opts.stock ?? 10, requests: [] as any[], txns: [] as any[] };
   const audit = { log: jest.fn(async () => undefined) };
+  let lock: Promise<unknown> = Promise.resolve();
   const tx: any = {
     productVariant: {
       findFirst: jest.fn(async () => ({ stock: state.stock })),
       updateMany: jest.fn(async ({ where, data }: any) => {
-        if (where.stock !== state.stock) return { count: 0 };
-        state.stock = data.stock;
+        if (typeof where.stock === 'number' && where.stock !== state.stock) return { count: 0 };
+        if (where.stock?.gte !== undefined && state.stock < where.stock.gte) return { count: 0 };
+        state.stock = typeof data.stock === 'number' ? data.stock : state.stock + data.stock.increment;
         return { count: 1 };
       }),
     },
@@ -56,8 +58,26 @@ function world(opts: { stock?: number; thresholds?: Record<string, string> } = {
         return { count: 1 };
       }),
     },
-    $transaction: jest.fn(async (cb: any) => cb(tx)),
+    // Emulates the database: transactions on the same row run one after the
+    // other (row locks), and a failure inside the callback rolls back.
+    $transaction: jest.fn((cb: any) => {
+      const run = async () => {
+        const snap = JSON.stringify({ stock: state.stock, requests: state.requests, txns: state.txns });
+        try { return await cb(tx); } catch (e) {
+          const o = JSON.parse(snap);
+          state.stock = o.stock;
+          state.requests.splice(0, state.requests.length, ...o.requests);
+          state.txns.splice(0, state.txns.length, ...o.txns);
+          throw e;
+        }
+      };
+      const p = lock.then(run, run);
+      lock = p.catch(() => undefined);
+      return p;
+    }),
   };
+  // The approval's claim + ledger link run on the transaction client.
+  tx.inventoryAdjustmentRequest = prisma.inventoryAdjustmentRequest;
   return { state, audit, svc: new InventoryService(prisma, { requireId: 't1' } as any, audit as any) };
 }
 
@@ -101,6 +121,20 @@ describe('InventoryService: requests, approvals, stale stock', () => {
     w.state.stock = 9; // a sale happened meanwhile
     await expect(w.svc.approveRequest(r.request.id, {}, 'manager')).rejects.toMatchObject({ response: { code: 'STOCK_CHANGED' } });
     expect([w.state.stock, w.state.requests[0].status, w.state.txns.length]).toEqual([9, 'STALE', 0]);
+  });
+  it('two approvals at once → exactly one applies the change (one ledger row)', async () => {
+    const w = world();
+    const r: any = await w.svc.adjustStock({ productId: 'p1', variantId: 'v1', type: 'DAMAGE', quantity: 2, note: 'torn hem, not repairable' } as any, 'cashier');
+    const out = await Promise.all(['m1', 'm2'].map((a) => w.svc.approveRequest(r.request.id, {}, a).then(() => 'OK', (e: any) => e.getResponse().code)));
+    expect(out.sort()).toEqual(['NOT_PENDING', 'OK']);
+    expect([w.state.stock, w.state.txns.length]).toEqual([8, 1]);
+  });
+  it('a failure after the claim rolls the claim back: the request is never APPLIED without its stock change', async () => {
+    const w = world();
+    const r: any = await w.svc.adjustStock({ productId: 'p1', variantId: 'v1', type: 'DAMAGE', quantity: 2, note: 'torn hem, not repairable' } as any, 'cashier');
+    (w.svc as any).prisma.$transaction.mockImplementationOnce(async () => { throw new Error('db connection lost'); });
+    await expect(w.svc.approveRequest(r.request.id, {}, 'manager')).rejects.toThrow('db connection lost');
+    expect([w.state.stock, w.state.requests[0].status, w.state.txns.length]).toEqual([10, 'REQUESTED', 0]);
   });
   it('withdraw (requester only) and reject (someone else) close the request', async () => {
     const w = world();
