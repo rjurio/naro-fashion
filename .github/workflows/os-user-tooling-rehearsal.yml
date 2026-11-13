@@ -1,0 +1,42 @@
+# CI VEHICLE — never merged (round 25F F): the PM2 guard + deploy-lib
+# OS-user mode against REAL systemd units and REAL pm2 6.0.14 on a disposable
+# runner (root daemon with another app, NARO apps moved to user naro and
+# pm2-naro.service, broken states, reboot-style restart, rollback).
+# Pull requests only; read-only token; no secrets; nothing touches the VPS.
+name: OS-user tooling rehearsal (CI only)
+on:
+  pull_request:
+    branches: [ops/naro-os-user]
+permissions:
+  contents: read
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: naro_fashion
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @naro/database exec prisma generate
+      - name: Database schema (throwaway service)
+        run: pnpm --filter @naro/database exec prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://postgres:ci@localhost:5432/naro_fashion?schema=public
+      - run: pnpm --filter api build && test -f apps/api/dist/main.js
+      - name: PM2 (the VPS runs pm2 6.0.14)
+        run: npm i -g pm2@6.0.14 && pm2 --version
+      - name: Rehearse the OS-user tooling end to end
+        run: sudo -E env PATH="$PATH" REPO="$GITHUB_WORKSPACE" DATABASE_URL="postgresql://postgres:ci@localhost:5432/naro_fashion?schema=public" bash ci-osu/osu-tooling-rehearsal.sh
