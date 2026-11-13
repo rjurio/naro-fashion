@@ -37,6 +37,7 @@ import {
 } from './payment-verification';
 import { withConfirmation } from '../payments/payment-confirmation';
 import { OPEN_REFUND_STATUSES, openClaimedAmount, openClaimedQuantities, REFUND_KINDS } from '../refunds/refund-rules';
+import { assertWithinApproved } from '../refunds/payout-controls';
 export interface PosActor {
   id: string;
   role?: string;
@@ -1344,7 +1345,15 @@ export class PosService {
    * logic — atomic per-line claims, restock, cumulative caps — paid out of the
    * PAYER's own open shift and linked to the request.
    */
-  async executeSaleRefund(orderId: string, dto: PosRefundDto, cashierId: string, refundRequestId: string, reference?: string | null) {
+  /**
+   * `maxAmount` = the APPROVED amount of the refund request: the return is
+   * re-valued here (net of discounts, already-refunded units) and may never pay
+   * out more than was approved — 409 PAYOUT_EXCEEDS_APPROVED, the whole
+   * transaction (unit claims, restocks) rolls back.
+   */
+  async executeSaleRefund(
+    orderId: string, dto: PosRefundDto, cashierId: string, refundRequestId: string, reference?: string | null, maxAmount?: number | null,
+  ) {
     const tenantId = this.tenantContext.requireId;
     const isFullRefund = !dto.items || dto.items.length === 0;
 
@@ -1365,6 +1374,10 @@ export class PosService {
     // refunds of the same line can't both pass: the loser's updateMany
     // matches 0 rows and the whole transaction rolls back (restocks included).
     return this.prisma.$transaction(async (tx) => {
+      // Same per-sale lock as every other payout of this sale (exchange
+      // differences: RefundRequestsService.moneyOnlyPayout), so two payouts of
+      // different requests can't both pass the cash cap below.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`refund:order:${orderId}`}))`;
       const order = await tx.order.findFirst({
         where: { id: orderId, tenantId },
         include: { items: true, payments: true },
@@ -1466,6 +1479,7 @@ export class PosService {
         throw new BadRequestException('Refund would exceed the amount paid for this sale.');
       }
       refundAmount = Math.min(refundAmount, Math.max(0, remainingPaid));
+      if (maxAmount != null) assertWithinApproved(refundAmount, round2(Number(maxAmount)));
 
       const paymentRow = await tx.payment.create({
         data: {
@@ -1479,6 +1493,8 @@ export class PosService {
           gatewayResponse: {
             posSessionId: session?.id ?? null,
             cashierId,
+            paidByAdminId: cashierId,
+            refundRequestId,
             reason: dto.reason ?? null,
             kind: REFUND_KINDS.POS_RETURN,
           },
