@@ -57,14 +57,20 @@ An unsafe or incomplete switch file is a refusal.
    systemctl start pm2-naro.service
    ```
    The first command creates and enables `pm2-naro.service`.
-4. **Move the apps:**
-   - As root (guarded; never `all`):
+4. **Move the apps** (from `/var/www/naro-fashion`):
+   - **File modes first**, so the apps can read `.env` as naro the moment they start (root still reads them; `<PRIVATE_UPLOAD_DIR>` from `apps/api/.env`, default `apps/api/private-uploads`):
+     ```sh
+     chown root:naro .env apps/api/.env packages/database/.env
+     chmod 640 .env apps/api/.env packages/database/.env
+     chown -R naro:naro apps/api/uploads <PRIVATE_UPLOAD_DIR> && chmod 700 <PRIVATE_UPLOAD_DIR>
+     ```
+   - As root (guarded; only the three NARO names, never `all`):
      ```sh
      bash scripts/ops/pm2-guard.sh && pm2 delete naro-api naro-storefront naro-admin && pm2 save
      ```
-   - Then, from `/var/www/naro-fashion`, start them under naro:
+   - Then start them under naro, with the live commit for `/health`:
      ```sh
-     sudo -u naro -H env PM2_HOME=/home/naro/.pm2 pm2 start ecosystem.config.js
+     sudo -u naro -H env PM2_HOME=/home/naro/.pm2 GIT_SHA="$(cat .deploy/current_sha)" pm2 start ecosystem.config.js
      sudo -u naro -H env PM2_HOME=/home/naro/.pm2 pm2 save
      ```
    - Rehearsed downtime: about 1.4 s per app.
@@ -73,7 +79,7 @@ An unsafe or incomplete switch file is a refusal.
    install -m 644 -o root -g root naro-pm2.env /etc/naro-pm2.env
    ```
    Then run `bash scripts/ops/pm2-guard.sh`; it must PASS in OS-user mode.
-6. **Apply the file modes once:** a normal deploy does it, or source `scripts/ops/deploy-lib.sh` from `/var/www/naro-fashion` and run `naro_fs_modes`.
+6. **Re-assert the file modes** (also covers the Next caches): a normal deploy does it, or source `scripts/ops/deploy-lib.sh` from `/var/www/naro-fashion` and run `naro_fs_modes`.
 7. **Verify:**
    - `/api/v1/health`, the storefront, admin login, an image upload;
    - logs in `/home/naro/.pm2/logs`;
@@ -93,10 +99,41 @@ An unsafe or incomplete switch file is a refusal.
 3. `.env` ×3 back to `root:root 600`. Uploads can stay naro-owned, because root can write them.
 4. Start the apps in the root daemon again (guarded):
    ```sh
-   bash scripts/ops/pm2-guard.sh && pm2 start ecosystem.config.js && pm2 save
+   bash scripts/ops/pm2-guard.sh && GIT_SHA="$(cat .deploy/current_sha)" pm2 start ecosystem.config.js && pm2 save
    ```
 5. Verify as in rollout step 7.
 
 The account `naro` can stay.
 
 **Never** `systemctl reload pm2-root` (its ExecReload is `pm2 reload all`), and never a bare pm2 command without the guard.
+
+## Neighbour apps and recovery access
+
+The VPS is shared: the root daemon (`pm2-root.service`) also runs Jumuiya (prod and staging), sportflow-web (:3200) and pm2-logrotate; kiuruwi has its own account and `pm2-kiuruwi.service`.
+
+**What the NARO tooling touches** (deploy.sh, rollback.sh, deploy-lib.sh, pm2-guard.sh; both modes):
+- pm2 commands: only `reload ecosystem.config.js --only naro-api`, `restart ecosystem.config.js --only naro-storefront,naro-admin`, `save`, and, on a failed deploy, `status` + `logs` of the three NARO apps. Every one runs behind the guard.
+- **Root mode**: those commands go to the root daemon. `pm2 save` rewrites `/root/.pm2/dump.pm2`, which also records the other apps' current state, as their own deploys' `pm2 save` does.
+- **OS-user mode**: they go only to the naro daemon, as user naro. NARO sends **no** command to the root daemon, and its dump is never written.
+- `systemctl`: only the guard's read-only `systemctl show`.
+- Files: the NARO tree only (`.env` ×3, uploads, private uploads and Next caches in OS-user mode).
+
+**What it never touches:** any other app by name, `all`, `pm2 resurrect / kill / update / delete / startup`, `systemctl` start/stop/reload/restart/enable of `pm2-root` or `pm2-kiuruwi`, the kiuruwi daemon, sshd or its config, `/root/.ssh` / `authorized_keys`, PAM, sudoers, ufw, root's password, and user accounts. The self-test enforces this statically. It also runs deploy, rollback and automatic rollback in both modes with neighbour decoys online, stopped, errored and restarting, and fails if any neighbour PID changes.
+
+**The guard and the neighbours:**
+- Stopped, errored or restarting neighbours never fail it.
+- Kiuruwi's daemon is a warning ("not NARO's, ignored").
+- Look-alike names (for example `naro-admin-preview`) are not counted as NARO.
+- A neighbour listening on :3200 or another port is not read as a NARO listener.
+- It refuses only when something other than the NARO app holds a NARO port (4000 / 3000 / 3001), or when the root daemon itself is unsupervised. A broken root daemon therefore still blocks NARO deploys in OS-user mode: fail-safe, by design.
+- Limit (root mode only): a neighbour in **cluster mode** on a NARO port can't be told apart, because the God Daemon holds every cluster port. OS-user mode removes this limit.
+
+The **migration itself** (rollout steps 3–4 and rollback steps 2 and 4) runs root pm2 commands: `pm2 startup systemd -u naro`, then `pm2 delete` / `pm2 start` of the three NARO apps and `pm2 save`. They name only NARO apps or the naro unit. The `naro` account (`--shell /usr/sbin/nologin`, no password, no `~/.ssh`) adds no login path. Root runs `sudo -u naro` with the default sudoers, which doesn't change.
+
+**Pre-window checks** (the window operator):
+1. **Recovery access first.** Open a **second SSH session as root** from a trusted network (not the office network: it intercepts SSH) and keep it open, untouched, until the end. Know the way into the **Vultr web console** (my.vultr.com → the server → View Console) as the last resort if SSH is lost.
+2. **Record the neighbours before:** `pm2 jlist` filtered to the other apps (name, pid, `restart_time`, status), the kiuruwi daemon's list (`sudo -u kiuruwi -H env PM2_HOME=/home/kiuruwi/.pm2 pm2 jlist`), and `systemctl show pm2-root.service pm2-kiuruwi.service -p MainPID -p NRestarts`. Run `pm2` as root only after `bash scripts/ops/pm2-guard.sh` passes, as always.
+3. Also record `sha256sum /etc/ssh/sshd_config /root/.ssh/authorized_keys`.
+4. **After the window**, compare all three: the other apps' PIDs and restart counts, both units' MainPID / NRestarts, and the checksums must be unchanged. Then check that `curl -sI` of Jumuiya, Sportflow and kiuruwi still answers, and that a **new** SSH login works before closing the kept session.
+
+Rehearsed on real systemd + pm2 6.0.14 with all of these decoys, in both modes, including the migration and its rollback.

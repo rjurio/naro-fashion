@@ -23,7 +23,10 @@
 #      held by that daemon
 #   6. no other root PM2 God Daemon is running anywhere
 #   7. whatever listens on each NARO port (from ecosystem.config.js) is the
-#      daemon or one of its descendants inside the unit's cgroup
+#      daemon itself (cluster mode) or that app's own process / a descendant
+#      of it, inside the unit's cgroup — never another app of the daemon.
+#      Neighbour apps (Jumuiya, Sportflow, logrotate, kiuruwi) are otherwise
+#      ignored: stopped, errored or restarting neighbours never fail the check.
 #   8. no NARO app process runs outside the unit's cgroup, and the daemon
 #      has no more direct children per app than ecosystem `instances`
 #
@@ -137,6 +140,29 @@ _pm2g_descends_from() {
 }
 
 _pm2g_pids_in() { grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u; }
+
+# _pm2g_proc_is_app <pid> <app>: the process's environment names it as that
+# PM2 app (fork mode: name=<app>; cluster mode: pm2_env={..."name":"<app>"...}).
+_pm2g_proc_is_app() {
+  local env_txt
+  env_txt="$(tr '\0' '\n' 2>/dev/null < "${_PG_PROC}/$1/environ")" || return 1
+  grep -qxF "name=$2" <<< "$env_txt" || grep -q "^pm2_env=.*\"name\":\"$2\"" <<< "$env_txt"
+}
+
+# _pm2g_held_by_app <listener pid> <daemon> <app>: the listener is the daemon
+# itself (cluster mode: the God Daemon holds the port) or the app's own process
+# or a descendant of it. Another app under the same daemon (e.g. a Jumuiya or
+# Sportflow process in the shared root daemon) holding a NARO port is NOT.
+_pm2g_held_by_app() {
+  local pid="$1" depth=0
+  [ "$pid" = "$2" ] && return 0
+  while [ -n "$pid" ] && [ "$pid" != "$2" ] && [ "$pid" != "0" ] && [ "$pid" != "1" ] && [ "$depth" -lt 64 ]; do
+    _pm2g_proc_is_app "$pid" "$3" && return 0
+    pid="$(_pm2g_ppid "$pid")"
+    depth=$((depth + 1))
+  done
+  return 1
+}
 
 # _pm2g_check_unit <unit> <uid> <user> <default PM2_HOME>: checks 2-5 for one
 # supervising unit; results in _PGU_DAEMON / _PGU_CGROUP / _PGU_HOME.
@@ -395,12 +421,13 @@ pm2_supervision_check() {
       bad=""
       for lp in $lpids; do
         if [ -z "$daemon" ] || [ "$(_pm2g_cgroup "$lp")" != "$cgroup" ] || ! _pm2g_descends_from "$lp" "$daemon" \
+           || ! _pm2g_held_by_app "$lp" "$daemon" "$name" \
            || { [ "$_PG_NARO_MODE" = "1" ] && [ "$(_pm2g_uid "$lp")" != "$naro_uid" ]; }; then
           bad+="${lp}[$(_pm2g_cgroup "$lp")] "
         fi
       done
       if [ -n "$bad" ]; then
-        _pm2g_fail "${name}: :${port} is held by ${bad% }, outside the supervised daemon's tree"
+        _pm2g_fail "${name}: :${port} is held by ${bad% }, not by ${name} under the supervised daemon"
       else
         _pm2g_ok "${name}: :${port} served from the supervised daemon tree"
       fi

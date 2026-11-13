@@ -345,9 +345,11 @@ rollback_incomplete_notice() {
 pm2_diagnostics() {
   # `pm2 status` + recent logs for failure output — only when supervision is
   # verified (these read-only commands would also spawn a daemon). Never fails.
+  # Logs of the NARO apps ONLY: a bare `pm2 logs` means 'all', which in root
+  # mode would copy Jumuiya / Sportflow log lines into NARO's deploy output.
   if pm2_supervision_check --quiet 2>/dev/null; then
     naro_pm2 status || true
-    naro_pm2 logs --nostream --lines 40 || true
+    naro_pm2 logs '/^naro-(api|storefront|admin)$/' --nostream --lines 40 || true
   else
     warn "skipping 'pm2 status' / 'pm2 logs': PM2 supervision is not verified (running pm2 now could start an unsupervised daemon)"
     pm2_supervision_check >/dev/null || true   # print the reason on stderr
