@@ -111,6 +111,41 @@ describe('PaymentSettlementService.applyGatewayResult', () => {
     expect(prisma.order.findFirst).not.toHaveBeenCalled();
   });
 
+  it('self-healing (round 25G): a repeated COMPLETED for an already-COMPLETED payment re-runs the idempotent roll-up; anything else does not', async () => {
+    // Already COMPLETED in the DB → the CAS matches nothing; the roll-up runs again.
+    const prisma = makePrisma();
+    prisma.payment.updateMany.mockResolvedValue({ count: 0 });
+    prisma.payment.findFirst = jest.fn().mockResolvedValue({ status: 'COMPLETED' });
+    prisma.order.findFirst.mockResolvedValue({ id: 'o1', orderNumber: 'N1', status: 'PENDING', paymentStatus: 'PENDING', total: 50000 });
+    prisma.payment.aggregate.mockResolvedValue({ _sum: { amount: 50000 } });
+    const svc = new PaymentSettlementService(prisma);
+    const res = await svc.applyGatewayResult({
+      payment: { ...basePayment, status: 'COMPLETED' }, tenantId: 't1', status: 'COMPLETED', reportedAmount: 50000, source: 'test',
+    });
+    expect(res.applied).toBe(false);
+    expect(prisma.payment.findFirst).toHaveBeenCalledWith({ where: { id: 'p1', tenantId: 't1' }, select: { status: true } });
+    expect(prisma.order.updateMany).toHaveBeenCalledWith({ where: { id: 'o1', tenantId: 't1' }, data: { paymentStatus: 'PAID' } });
+
+    // REFUNDED in the DB → no roll-up (a refunded payment never re-confirms its parent).
+    const p2 = makePrisma();
+    p2.payment.updateMany.mockResolvedValue({ count: 0 });
+    p2.payment.findFirst = jest.fn().mockResolvedValue({ status: 'REFUNDED' });
+    await new PaymentSettlementService(p2).applyGatewayResult({
+      payment: { ...basePayment, status: 'REFUNDED' }, tenantId: 't1', status: 'COMPLETED', reportedAmount: 50000, source: 'test',
+    });
+    expect(p2.order.findFirst).not.toHaveBeenCalled();
+
+    // A short amount never re-runs the roll-up.
+    const p3 = makePrisma();
+    p3.payment.updateMany.mockResolvedValue({ count: 0 });
+    p3.payment.findFirst = jest.fn().mockResolvedValue({ status: 'COMPLETED' });
+    await new PaymentSettlementService(p3).applyGatewayResult({
+      payment: { ...basePayment, status: 'COMPLETED' }, tenantId: 't1', status: 'COMPLETED', reportedAmount: 10, source: 'test',
+    });
+    expect(p3.payment.findFirst).not.toHaveBeenCalled();
+    expect(p3.order.findFirst).not.toHaveBeenCalled();
+  });
+
   it('unknown status is ignored — no status write at all', async () => {
     const prisma = makePrisma();
     const svc = new PaymentSettlementService(prisma);

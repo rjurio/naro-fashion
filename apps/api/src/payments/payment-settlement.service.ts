@@ -251,6 +251,21 @@ export class PaymentSettlementService {
           data: args.extraData,
         });
       }
+      // Round 25G (self-healing): a repeated confirmation of a payment that is
+      // ALREADY COMPLETED re-runs the parent roll-up. The roll-up is idempotent
+      // (fresh read under the money locks, compare-and-swap writes, refund
+      // requests deduplicated), so this only repairs a roll-up that failed after
+      // the payment itself was marked COMPLETED (e.g. a transaction timeout) —
+      // the gateway's next confirmation finishes the job instead of being a no-op.
+      if (effectiveStatus === 'COMPLETED' && !amountShort) {
+        const current = await this.prisma.payment.findFirst({
+          where: { id: payment.id, tenantId },
+          select: { status: true },
+        });
+        if (current?.status === 'COMPLETED') {
+          await this.settleParents(payment, tenantId);
+        }
+      }
       return { applied: false, status: payment.status, amountShort };
     }
 
