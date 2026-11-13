@@ -485,7 +485,8 @@ if (process.env.IT_REFUND_CONTROLS === '1') {
     eq(sql(`SELECT count(*)||'|'||min(status) FROM "Payment" WHERE "refundRequestId" = '${rq}'`), '1|REFUNDED', 'one linked payout row');
     eq(sql(`SELECT "requestedById" <> "paidById" FROM "RentalRefundRequest" WHERE id = '${rq}'`), 't', 'payer ≠ requester');
   });
-  await check('rental deposit returns are part of the unified list (/refund-requests, subject RENTAL) with their real status', async () => {
+  // IT_NO_UNIFIED=1: a build before R1b (#30) has no unified /refund-requests list.
+  if (process.env.IT_NO_UNIFIED !== '1') await check('rental deposit returns are part of the unified list (/refund-requests, subject RENTAL) with their real status', async () => {
     const list = await call('GET', '/refund-requests?subject=RENTAL', { token: tok.super });
     eq(list.status, 200, 'list');
     const dep = list.data.find((r) => r.id === depReq.id);

@@ -66,7 +66,7 @@ jobs:
           test -f apps/api/dist/main.js
 
       - name: Run the suites
-        run: WT="$GITHUB_WORKSPACE" SUITES="$GITHUB_WORKSPACE/ci-integration" LOGS="$RUNNER_TEMP/it-logs" SUITE_GROUPS="pos-rental r1-accounting" POS_FLAGS="IT_REFUND_CONTROLS=1" bash ci-integration/run-linux.sh
+        run: WT="$GITHUB_WORKSPACE" SUITES="$GITHUB_WORKSPACE/ci-integration" LOGS="$RUNNER_TEMP/it-logs" SUITE_GROUPS="pos-rental r1-accounting" POS_FLAGS="IT_REFUND_CONTROLS=1 IT_NO_UNIFIED=1" bash ci-integration/run-linux.sh
 
       - name: Keep the logs
         if: always()
