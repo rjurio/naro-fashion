@@ -7,13 +7,24 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { CreateTemplateDto } from './dto/create-template.dto';
 import { UpdateTemplateDto } from './dto/update-template.dto';
+import { AuditService } from '../audit/audit.service';
+import { assertSameTenant } from '../products/util/tenant-ownership';
 
 @Injectable()
 export class RentalChecklistsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantContext: TenantContext,
+    private readonly audit: AuditService,
   ) {}
+
+  /** R3 scope: a product OR a category (not both), each from this shop. */
+  private async checkScope(productId?: string | null, categoryId?: string | null) {
+    if (productId && categoryId) throw new BadRequestException('A checklist applies to a product OR a category, not both.');
+    const tenantId = this.tenantContext.requireId;
+    await assertSameTenant(this.prisma.product as any, productId, tenantId, 'Product');
+    await assertSameTenant(this.prisma.category as any, categoryId, tenantId, 'Category');
+  }
 
   async getTemplates() {
     return this.prisma.rentalChecklistTemplate.findMany({
@@ -35,23 +46,34 @@ export class RentalChecklistsService {
   }
 
   async createTemplate(dto: CreateTemplateDto) {
-    return this.prisma.rentalChecklistTemplate.create({
+    await this.checkScope(dto.productId, dto.categoryId);
+    const created = await this.prisma.rentalChecklistTemplate.create({
       data: {
         tenantId: this.tenantContext.requireId,
         name: dto.name,
         description: dto.description,
         isDefault: dto.isDefault ?? false,
+        productId: dto.productId || null,
+        categoryId: dto.categoryId || null,
         items: {
           create: dto.items.map((item, index) => ({
             label: item.label,
             labelSwahili: item.labelSwahili,
             itemType: item.itemType,
             sortOrder: item.sortOrder ?? index,
+            quantity: item.quantity ?? 1,
+            isMandatory: item.isMandatory ?? true,
+            requiresCondition: item.requiresCondition ?? true,
+            instructions: item.instructions ?? null,
           })),
         },
       },
       include: { items: { orderBy: { sortOrder: 'asc' } } },
     });
+    await this.audit.log('CHECKLIST_TEMPLATE_CREATED', 'RentalChecklistTemplate', created.id, {
+      productId: created.productId, categoryId: created.categoryId, items: created.items.length,
+    });
+    return created;
   }
 
   async updateTemplate(id: string, dto: UpdateTemplateDto) {
@@ -67,27 +89,44 @@ export class RentalChecklistsService {
     if (dto.description !== undefined) data.description = dto.description;
     if (dto.isDefault !== undefined) data.isDefault = dto.isDefault;
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
-
-    if (dto.items !== undefined) {
-      // Delete existing items and recreate
-      await this.prisma.rentalChecklistTemplateItem.deleteMany({
-        where: { templateId: id },
-      });
-      data.items = {
-        create: dto.items.map((item, index) => ({
-          label: item.label,
-          labelSwahili: item.labelSwahili,
-          itemType: item.itemType,
-          sortOrder: item.sortOrder ?? index,
-        })),
-      };
+    if (dto.productId !== undefined || dto.categoryId !== undefined) {
+      const productId = dto.productId !== undefined ? dto.productId || null : template.productId;
+      const categoryId = dto.categoryId !== undefined ? dto.categoryId || null : template.categoryId;
+      await this.checkScope(productId, categoryId);
+      data.productId = productId;
+      data.categoryId = categoryId;
     }
 
-    return this.prisma.rentalChecklistTemplate.update({
-      where: { id },
-      data,
-      include: { items: { orderBy: { sortOrder: 'asc' } } },
+    // R3: bookings keep the snapshot frozen at their confirmation, so editing
+    // a template (items replaced, version bumped) only affects bookings
+    // confirmed afterwards.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (dto.items !== undefined) {
+        await tx.rentalChecklistTemplateItem.deleteMany({ where: { templateId: id } });
+        data.items = {
+          create: dto.items.map((item, index) => ({
+            label: item.label,
+            labelSwahili: item.labelSwahili,
+            itemType: item.itemType,
+            sortOrder: item.sortOrder ?? index,
+            quantity: item.quantity ?? 1,
+            isMandatory: item.isMandatory ?? true,
+            requiresCondition: item.requiresCondition ?? true,
+            instructions: item.instructions ?? null,
+          })),
+        };
+      }
+      data.version = { increment: 1 };
+      return tx.rentalChecklistTemplate.update({
+        where: { id },
+        data,
+        include: { items: { orderBy: { sortOrder: 'asc' } } },
+      });
     });
+    await this.audit.log('CHECKLIST_TEMPLATE_UPDATED', 'RentalChecklistTemplate', id, {
+      version: updated.version, productId: updated.productId, categoryId: updated.categoryId, items: updated.items.length,
+    });
+    return updated;
   }
 
   async deleteTemplate(id: string) {

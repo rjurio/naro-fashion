@@ -29,7 +29,9 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
  *    endpoint (cms:manage) can't touch it, and the public settings list can't
  *    show it.
  */
-export const CHECKLIST_ENFORCEMENT_AVAILABLE = false; // R3 sets true together with its checklist gate
+// R3: this build has the mandatory checklist gate (rentals/checklist/), which
+// applies to every hand-over unconditionally — not because of this switch.
+export const CHECKLIST_ENFORCEMENT_AVAILABLE = true;
 
 export const HANDOVER_REQUIRES_CHECKLIST_BUILD = 'HANDOVER_REQUIRES_CHECKLIST_BUILD';
 /**
@@ -64,6 +66,20 @@ export async function assertHandoverSafeguard(db: any, tenantId: string, buildHa
       statusCode: 422, code: HANDOVER_REQUIRES_CHECKLIST_BUILD,
       message: 'Hand-overs need the mandatory checklist, which this version of the system does not have (it was rolled back). Nothing can be handed over until the checklist version is restored or the owner records an exception.',
     });
+  }
+  if (buildHasChecklist && !row?.checklistRequired && db.rentalHandoverSafeguard?.upsert) {
+    // R3: a shop created after boot (the boot seeder missed it) gets the
+    // switch on at its first hand-over. Best effort: the R3 marker table and
+    // the database trigger protect a rollback without this row.
+    try {
+      await db.rentalHandoverSafeguard.upsert({
+        where: { tenantId },
+        create: { tenantId, checklistRequired: true, reason: 'R3 mandatory checklist build: switched on at first hand-over', changedAt: new Date() },
+        update: { checklistRequired: true, reason: 'R3 mandatory checklist build: switched on at first hand-over', changedAt: new Date() },
+      });
+    } catch {
+      /* never blocks the hand-over; next hand-over retries */
+    }
   }
 }
 
@@ -106,6 +122,14 @@ export class HandoverSafeguardService {
   async set(dto: SetHandoverSafeguardDto, actor: { id: string }) {
     const tenantId = this.tenantContext.requireId;
     const before = await this.prisma.rentalHandoverSafeguard.findFirst({ where: { tenantId } });
+    if (CHECKLIST_ENFORCEMENT_AVAILABLE && !dto.checklistRequired) {
+      // In a checklist build the switch only protects a future rollback;
+      // turning it off would weaken that and change nothing here.
+      throw new UnprocessableEntityException({
+        statusCode: 422, code: 'SAFEGUARD_LOCKED_ON',
+        message: 'The checklist is mandatory in this version; the safety switch stays on.',
+      });
+    }
     if (before && before.checklistRequired === dto.checklistRequired) {
       return this.get();
     }

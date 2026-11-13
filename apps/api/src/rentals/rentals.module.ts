@@ -10,11 +10,14 @@ import { PosRentalsController } from './pos-rentals.controller';
 import { PosRentalsService } from './pos-rentals.service';
 import { IdVerificationModule } from '../id-verification/id-verification.module';
 import { PaymentsModule } from '../payments/payments.module';
+import { RentalChecklistV2Controller } from './checklist/checklist.controller';
+import { RentalChecklistV2Service } from './checklist/checklist.service';
+import { ChecklistSafeguardSeeder } from './checklist/checklist-safeguard.seeder';
 
 @Module({
   imports: [IdVerificationModule, PaymentsModule],
-  controllers: [RentalsController, RentalMoneyController, RentalUnitsController, PosRentalsController, HandoverSafeguardController],
-  providers: [RentalsService, RentalMoneyService, RentalUnitsService, PosRentalsService, HandoverSafeguardService],
+  controllers: [RentalsController, RentalMoneyController, RentalUnitsController, PosRentalsController, HandoverSafeguardController, RentalChecklistV2Controller],
+  providers: [RentalsService, RentalMoneyService, RentalUnitsService, PosRentalsService, HandoverSafeguardService, RentalChecklistV2Service, ChecklistSafeguardSeeder],
   exports: [RentalsService, RentalMoneyService, RentalUnitsService],
 })
 export class RentalsModule {}
