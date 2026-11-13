@@ -76,7 +76,7 @@ export default function PhysicalGownsPage() {
       <div className={card}>
         <div className="flex gap-2">
           <input data-testid="gown-product-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a rental item" className={`${inputCls} flex-1`} />
-          <Btn data-testid="gown-product-find" busy={busy === 'find'} onClick={() => run('find', async () => setProducts(await adminApi.posRentalCatalog(q)))}>
+          <Btn data-testid="gown-product-find" busy={busy === 'find'} onClick={() => run('find', async () => setProducts(await adminApi.rentalUnitCatalog(q)))}>
             <Search className="w-4 h-4" /> Find
           </Btn>
         </div>

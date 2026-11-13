@@ -1065,6 +1065,10 @@ class AdminApiClient {
     return this.post<any>(`/rental-money/rentals/${rentalId}/refund-requests`, body);
   }
   // ----- Physical gowns (R2): per-gown tracking only after an independently approved count
+  /** Rental items for the Physical gowns screen (not the walk-in POS catalog). */
+  rentalUnitCatalog(q?: string) {
+    return this.get<any[]>('/rental-units/catalog', q ? { params: { q } } : undefined);
+  }
   rentalUnits(productId: string) {
     return this.get<any[]>('/rental-units', { params: { productId } });
   }

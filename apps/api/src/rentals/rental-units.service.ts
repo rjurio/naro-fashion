@@ -68,6 +68,37 @@ export class RentalUnitsService {
     return this.tenantContext.requireId;
   }
 
+  /** Active rental items (RENTAL_ONLY / BOTH) by name, SKU, barcode or gown tag. Read-only. */
+  async catalog(q?: string) {
+    const term = (q ?? '').trim();
+    const products = await this.prisma.product.findMany({
+      where: {
+        tenantId: this.tenantId,
+        isActive: true,
+        deletedAt: null,
+        archivedAt: null,
+        availabilityMode: { in: ['RENTAL_ONLY', 'BOTH'] },
+        ...(term
+          ? {
+              OR: [
+                { name: { contains: term, mode: 'insensitive' } },
+                { variants: { some: { OR: [{ sku: { contains: term, mode: 'insensitive' } }, { barcode: term }] } } },
+                { rentalUnits: { some: { code: term } } },
+              ],
+            }
+          : {}),
+      },
+      select: {
+        id: true, name: true, slug: true, availabilityMode: true,
+        variants: { where: { isActive: true }, select: { id: true, name: true, sku: true } },
+        _count: { select: { rentalUnits: true } },
+      },
+      orderBy: { name: 'asc' },
+      take: 50,
+    });
+    return products.map((p) => ({ ...p, unitCount: p._count.rentalUnits }));
+  }
+
   async list(productId?: string) {
     return this.prisma.rentalUnit.findMany({
       where: { tenantId: this.tenantId, ...(productId ? { productId } : {}) },

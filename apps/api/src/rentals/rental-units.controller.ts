@@ -35,6 +35,16 @@ export class RentalUnitsController {
     return this.units.list(productId);
   }
 
+  /**
+   * Rental items to manage gowns for (Physical gowns screen). Separate from the
+   * walk-in /pos-rentals/catalog, which is not released before R5.
+   */
+  @Get('catalog')
+  @RequiresPermission('rentals:manage-inventory', 'rentals:approve-unit-tracking', 'rentals:view')
+  catalog(@Query('q') q?: string) {
+    return this.units.catalog(q);
+  }
+
   @Get('by-code/:code')
   @RequiresPermission('rentals:view')
   byCode(@Param('code') code: string) {
