@@ -1,0 +1,41 @@
+# CI VEHICLE — never merged (round 25E C): REHEARSAL of moving the NARO API
+# from the shared root PM2 daemon to a dedicated unprivileged OS account with
+# its own systemd-supervised PM2 daemon, and the rollback. Disposable runner
+# only; production code 3d95365; no secrets.
+name: OS-user isolation rehearsal (CI only)
+on:
+  pull_request:
+    branches: [base/prod-3d95365]
+permissions:
+  contents: read
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: naro_fashion
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @naro/database exec prisma generate
+      - name: Database schema (throwaway service)
+        run: pnpm --filter @naro/database exec prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://postgres:ci@localhost:5432/naro_fashion?schema=public
+      - run: pnpm --filter api build && test -f apps/api/dist/main.js
+      - name: PM2 (the VPS runs pm2 6.0.14)
+        run: npm i -g pm2@6.0.14 && pm2 --version
+      - name: Rehearse the move and the rollback
+        run: sudo -E env PATH="$PATH" REPO="$GITHUB_WORKSPACE" DATABASE_URL="postgresql://postgres:ci@localhost:5432/naro_fashion?schema=public" bash ci-os-user/os-user-rehearsal.sh
