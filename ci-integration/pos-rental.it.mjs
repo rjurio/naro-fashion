@@ -326,9 +326,11 @@ await check('late fee paid as its own component', async () => {
 });
 if (R3) {
   // R3: the inspection records the stain; a reviewer (not the inspector) resolves it as deducted.
+  // Round 25F: the checklist reviewer decides the deduction, so the SUPER_ADMIN who later approves
+  // the deposit refund is independent of it (refund separation of duties, G3).
   const ins = await r3Record(b1.id, 'RETURN', 'DAMAGED', 'Hem stain');
   const d = ins.discrepancies.find((x) => x.kind === 'DAMAGED');
-  const res = await call('PATCH', `/rental-checklist/discrepancies/${d.id}/resolve`, { token: tok.super, body: { resolution: 'RESOLVED_DEDUCTED', note: 'cleaning + repair' } });
+  const res = await call('PATCH', `/rental-checklist/discrepancies/${d.id}/resolve`, { token: tok.checker ?? tok.super, body: { resolution: 'RESOLVED_DEDUCTED', note: 'cleaning + repair' } });
   if (res.status !== 200) throw new Error(`R3 resolve ${res.status}`);
 }
 let depReq;
