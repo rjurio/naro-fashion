@@ -17,6 +17,8 @@ export const MANAGER_EXCLUDED = [
   'payments:confirm-manual',
   // POS rental MVP: refund approval is the second-person finance control.
   'refunds:approve',
+  // Round 25F E: approving stock write-offs / decreases is the second-person inventory control.
+  'inventory:approve',
   // POS rental MVP (owner decision 2026-11-12): every new rental control is
   // granted per designated person, never by role default — not even to
   // MANAGER on a fresh database.

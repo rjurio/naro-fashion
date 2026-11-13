@@ -30,42 +30,69 @@ describe('routes: every inventory write needs inventory:manage', () => {
 });
 
 describe('adjustStock: atomic, tenant-scoped, never negative, accurate ledger, before/after audit', () => {
-  function make(opts: { count?: number; after?: number; now?: number } = {}) {
+  // PR #42 port, adapted to the approval workflow on this branch: a decrease
+  // applies in one step only within an owner-set threshold (none set → it
+  // becomes an approval request); every applied change is a compare-and-swap
+  // on the stock read inside the transaction.
+  function make(opts: { pre?: number; inTx?: number; count?: number; maxUnits?: string } = {}) {
     const tx: any = {
       productVariant: {
+        findFirst: jest.fn(async () => ({ stock: opts.inTx ?? opts.pre ?? 10 })),
         updateMany: jest.fn(async () => ({ count: opts.count ?? 1 })),
-        findFirst: jest.fn(async () => ({ stock: opts.count === 0 ? (opts.now ?? 2) : (opts.after ?? 7) })),
       },
       product: { updateMany: jest.fn(async () => ({ count: 1 })) },
       inventoryTransaction: { create: jest.fn(async ({ data }: any) => ({ id: 'tx1', ...data })) },
     };
     const prisma: any = {
-      product: { findFirst: jest.fn(async () => ({ id: 'p1', purchasePrice: 0 })) },
-      productVariant: { findFirst: jest.fn(async () => ({ id: 'v1', productId: 'p1' })), findMany: jest.fn(async () => [{ id: 'v1' }]) },
+      product: { findFirst: jest.fn(async () => ({ id: 'p1', purchasePrice: 0, availabilityMode: 'PURCHASE_ONLY' })) },
+      productVariant: { findFirst: jest.fn(async () => ({ id: 'v1', productId: 'p1', stock: opts.pre ?? 10 })), findMany: jest.fn(async () => [{ id: 'v1' }]) },
+      siteSetting: { findMany: jest.fn(async () => (opts.maxUnits ? [{ key: 'inventory_decrease_auto_max_units', value: opts.maxUnits }] : [])) },
+      inventoryAdjustmentRequest: { create: jest.fn(async ({ data }: any) => ({ id: 'req1', status: 'REQUESTED', ...data })) },
       $transaction: jest.fn(async (cb: any) => cb(tx)),
     };
     const audit: any = { log: jest.fn(async () => undefined) };
     const svc = new InventoryService(prisma, { requireId: 't1' } as any, audit);
-    return { svc, tx, audit };
+    return { svc, tx, prisma, audit };
   }
-  it('a decrease is guarded (stock >= quantity) and tenant-scoped; ledger before/after come from inside the transaction', async () => {
-    const { svc, tx, audit } = make({ after: 7 });
-    const r: any = await svc.adjustStock({ productId: 'p1', variantId: 'v1', type: 'DAMAGE', quantity: 3 } as any, 'admin-1');
-    expect(tx.productVariant.updateMany.mock.calls[0][0]).toEqual({ where: { id: 'v1', tenantId: 't1', stock: { gte: 3 } }, data: { stock: { increment: -3 } } });
+  it('a decrease within the owner threshold is a tenant-scoped compare-and-swap; ledger before/after come from inside the transaction', async () => {
+    const { svc, tx, audit } = make({ maxUnits: '5' });
+    const r: any = await svc.adjustStock({ productId: 'p1', variantId: 'v1', type: 'DAMAGE', quantity: 3, note: 'torn hem, unsellable' } as any, 'admin-1');
+    expect(tx.productVariant.updateMany.mock.calls[0][0]).toEqual({ where: { id: 'v1', tenantId: 't1', stock: 10 }, data: { stock: 7 } });
     expect([r.quantityBefore, r.quantityChange, r.quantityAfter]).toEqual([10, -3, 7]);
-    expect(audit.log).toHaveBeenCalledWith('ADJUST_STOCK', 'Inventory', 'p1', expect.objectContaining({ before: 10, after: 7, quantityChange: -3, variantId: 'v1' }));
+    expect(audit.log).toHaveBeenCalledWith('ADJUST_STOCK', 'Inventory', 'p1', expect.objectContaining({ before: 10, after: 7, quantityChange: -3, variantId: 'v1', approval: 'WITHIN_THRESHOLD' }));
+  });
+  it('a decrease with NO threshold set is only requested — nothing written', async () => {
+    const { svc, tx, prisma } = make();
+    const r: any = await svc.adjustStock({ productId: 'p1', variantId: 'v1', type: 'DAMAGE', quantity: 1, note: 'torn hem, unsellable' } as any, 'admin-1');
+    expect(r.status).toBe('PENDING_APPROVAL');
+    expect(prisma.inventoryAdjustmentRequest.create).toHaveBeenCalledTimes(1);
+    expect(tx.productVariant.updateMany).not.toHaveBeenCalled();
+    expect(tx.inventoryTransaction.create).not.toHaveBeenCalled();
   });
   it('not enough stock → 409 INSUFFICIENT_STOCK, nothing ledgered', async () => {
-    const { svc, tx } = make({ count: 0, now: 2 });
-    const e: any = await svc.adjustStock({ productId: 'p1', variantId: 'v1', type: 'DAMAGE', quantity: 3 } as any, 'a').catch((x) => x);
+    const { svc, tx } = make({ pre: 2, maxUnits: '5' });
+    const e: any = await svc.adjustStock({ productId: 'p1', variantId: 'v1', type: 'DAMAGE', quantity: 3, note: 'torn hem, unsellable' } as any, 'a').catch((x) => x);
     expect(e.getResponse().code).toBe('INSUFFICIENT_STOCK');
     expect(tx.inventoryTransaction.create).not.toHaveBeenCalled();
   });
   it('expectedStock that no longer matches → 409 STALE_STOCK, nothing written', async () => {
-    const { svc, tx } = make({ count: 0, now: 9 });
+    const { svc, tx } = make({ pre: 9 });
     const e: any = await svc.adjustStock({ productId: 'p1', variantId: 'v1', type: 'RESTOCK', quantity: 5, expectedStock: 10 } as any, 'a').catch((x) => x);
     expect(e.getResponse().code).toBe('STALE_STOCK');
-    expect(tx.productVariant.updateMany.mock.calls[0][0].where).toEqual({ id: 'v1', tenantId: 't1', stock: 10 });
+    expect(tx.productVariant.updateMany).not.toHaveBeenCalled();
+    expect(tx.inventoryTransaction.create).not.toHaveBeenCalled();
+  });
+  it('stock moved between the read and the transaction (expectedStock given) → 409 STALE_STOCK, nothing written', async () => {
+    const { svc, tx } = make({ pre: 10, inTx: 9 });
+    const e: any = await svc.adjustStock({ productId: 'p1', variantId: 'v1', type: 'RESTOCK', quantity: 5, expectedStock: 10 } as any, 'a').catch((x) => x);
+    expect(e.getResponse().code).toBe('STALE_STOCK');
+    expect(tx.productVariant.updateMany).not.toHaveBeenCalled();
+    expect(tx.inventoryTransaction.create).not.toHaveBeenCalled();
+  });
+  it('a lost compare-and-swap (concurrent writer) → 409 STOCK_CHANGED, nothing ledgered', async () => {
+    const { svc, tx } = make({ count: 0 });
+    const e: any = await svc.adjustStock({ productId: 'p1', variantId: 'v1', type: 'RESTOCK', quantity: 5 } as any, 'a').catch((x) => x);
+    expect(e.getResponse().code).toBe('STOCK_CHANGED');
     expect(tx.inventoryTransaction.create).not.toHaveBeenCalled();
   });
 });

@@ -2264,3 +2264,66 @@ model RentalGateOverride {
   @@index([tenantId])
   @@index([rentalOrderId, step])
 }
+
+// Round 25F E: independent approval for high-risk stock decreases (write-offs
+// and decreasing adjustments). The request records the stock seen at request
+// time; the approval refuses if the variant changed since (stale stock).
+model InventoryAdjustmentRequest {
+  id             String    @id @default(cuid())
+  tenantId       String?
+  productId      String
+  variantId      String
+  type           String    // DAMAGE | ADJUSTMENT
+  direction      String    // DECREASE (only decreases need approval)
+  quantity       Int       // always positive
+  stockAtRequest Int
+  note           String?
+  reference      String?
+  status         String    @default("REQUESTED") // REQUESTED | APPLIED | REJECTED | WITHDRAWN | STALE
+  requestedById  String
+  decidedById    String?
+  decidedAt      DateTime?
+  decisionNote   String?
+  transactionId  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([tenantId, status])
+  @@index([variantId])
+}
+
+// Round 25F E: a payment reversal is requested by one person and executed only
+// when a DIFFERENT holder of payments:reverse approves it.
+model PaymentReversalRequest {
+  id            String    @id @default(cuid())
+  tenantId      String?
+  paymentId     String
+  reason        String
+  status        String    @default("REQUESTED") // REQUESTED | EXECUTED | REJECTED | WITHDRAWN | EXPIRED
+  requestedById String
+  decidedById   String?
+  decidedAt     DateTime?
+  decisionNote  String?
+  expiresAt     DateTime
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([tenantId, status])
+  @@index([paymentId])
+}
+
+// Round 25F E: independent after-the-fact review of a manually confirmed
+// card / mobile-money payment (detection; changes no money).
+model ManualPaymentReview {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  paymentId     String
+  confirmedById String
+  reviewedById  String
+  outcome       String   // OK | QUERIED
+  note          String?
+  reviewedAt    DateTime @default(now())
+
+  @@unique([paymentId])
+  @@index([tenantId])
+}

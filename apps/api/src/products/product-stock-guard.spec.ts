@@ -207,7 +207,8 @@ describe('product form never overwrites stock (API-level guard)', () => {
 
   it('the authorised path is unchanged: Inventory → adjust still writes stock atomically with a ledger row', () => {
     const inv = readFileSync(join(__dirname, '..', 'inventory', 'inventory.service.ts'), 'utf8');
-    expect(inv).toMatch(/stock: \{ increment: quantityChange \}/);
+    // Round 25F E: a compare-and-swap on the stock read inside the transaction.
+    expect(inv).toMatch(/productVariant\.updateMany\(\{\s*where: \{ id: c\.variantId, tenantId, stock: quantityBefore \}/);
     expect(inv).toMatch(/inventoryTransaction\.create/);
   });
 });
