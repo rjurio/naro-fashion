@@ -1,0 +1,136 @@
+# CI VEHICLE — never merged (round 25F E, PR #52): inventory / payment
+# approvals on the rental stack, API as the RESTRICTED role naro_app. Runs, on
+# Linux, the approvals real-database suite plus the db-roles, inventory
+# authorization (approval-aware: IT_APPROVALS=1), separation-of-duties, refund
+# and POS-rental regressions against a throwaway Postgres 16 (production's
+# major version), plus production builds. Pull requests only; no secrets; no
+# deploy job.
+name: Approvals vehicle — real-database suites as naro_app + production builds (CI only)
+
+on:
+  pull_request:
+    branches: [feat/inventory-payment-approvals]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: approvals-vehicle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  realdb:
+    name: Real-database suites (Postgres 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PSQL: psql
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @naro/database exec prisma generate
+
+      - name: Database roles as in production (owner naro_admin, NOT a superuser)
+        run: |
+          PGPASSWORD=ci psql -h localhost -U postgres -X -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE naro_admin LOGIN PASSWORD 'Admin123' NOSUPERUSER NOCREATEDB NOCREATEROLE" \
+            -c "CREATE DATABASE naro_fashion OWNER naro_admin"
+          psql --version
+
+      - name: Build API (head)
+        run: |
+          pnpm --filter api build
+          test -f apps/api/dist/main.js
+
+      - name: Run the suites
+        run: >-
+          WT="$GITHUB_WORKSPACE" SUITES="$GITHUB_WORKSPACE/ci-integration" LOGS="$RUNNER_TEMP/it-logs"
+          ROLE_SEPARATION=1 DB_ROLES_DIR="$GITHUB_WORKSPACE/ci-integration/db-roles"
+          IT_APPROVALS=1
+          SUITE_GROUPS="approvals db-roles inventory-sec sod refunds pos-rental"
+          POS_FLAGS="IT_R3=1 IT_UNIT_TRACKING=1 IT_REFUND_CONTROLS=1" REFUND_FLAGS="IT_R3=1"
+          bash ci-integration/run-linux.sh
+
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: approvals-vehicle-logs
+          path: ${{ runner.temp }}/it-logs
+          retention-days: 7
+
+  build:
+    name: Production builds (api, storefront, admin)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: '1'
+      NEXT_PUBLIC_API_URL: https://api.build-check.invalid/api/v1
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @naro/database exec prisma generate
+
+      - name: Build API (nest build)
+        run: |
+          pnpm --filter api build
+          test -f apps/api/dist/main.js
+
+      - name: Build storefront (next build, standalone)
+        run: pnpm --filter storefront build
+
+      - name: Build admin (next build, standalone)
+        run: pnpm --filter admin build
+
+      - name: Check standalone output
+        run: |
+          for app in storefront admin; do
+            d="apps/${app}/.next"
+            for f in BUILD_ID routes-manifest.json; do
+              test -s "${d}/${f}" || { echo "::error::${app}: ${d}/${f} missing"; exit 1; }
+            done
+            test -f "${d}/standalone/apps/${app}/server.js" || { echo "::error::${app}: standalone server.js missing"; exit 1; }
+            test -d "${d}/static" || { echo "::error::${app}: .next/static missing"; exit 1; }
+            echo "${app}: BUILD_ID $(cat "${d}/BUILD_ID") ok"
+          done
