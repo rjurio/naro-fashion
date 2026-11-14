@@ -1170,6 +1170,10 @@ class AdminApiClient {
       bufferDays: raw.bufferDaysBetweenRentals,
       downPaymentPercent: raw.defaultDownPaymentPct,
       lateFeePerDay: raw.lateFeePerDay != null ? Number(raw.lateFeePerDay) : undefined,
+      // LF-2026-11 (null = the approved defaults: 10 %, cap 100 %, no fee on free rentals)
+      lateFeePct: raw.defaultLateFeePct != null ? Number(raw.defaultLateFeePct) : 10,
+      lateFeeCapPct: raw.lateFeeCapPct != null ? Number(raw.lateFeeCapPct) : 100,
+      freeRentalLateFeePerDay: raw.freeRentalLateFeePerDay != null ? Number(raw.freeRentalLateFeePerDay) : 0,
       maxRentalDuration: raw.maxRentalDurationDays,
       preparationReminder: raw.advancePreparationReminderDays,
     };
@@ -1179,6 +1183,9 @@ class AdminApiClient {
       bufferDaysBetweenRentals: data.bufferDays,
       defaultDownPaymentPct: data.downPaymentPercent,
       lateFeePerDay: data.lateFeePerDay,
+      defaultLateFeePct: data.lateFeePct,
+      lateFeeCapPct: data.lateFeeCapPct,
+      freeRentalLateFeePerDay: data.freeRentalLateFeePerDay,
       maxRentalDurationDays: data.maxRentalDuration,
       advancePreparationReminderDays: data.preparationReminder,
     });

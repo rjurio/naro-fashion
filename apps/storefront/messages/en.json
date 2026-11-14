@@ -445,7 +445,7 @@
     "perDay": "/ day",
     "perRental": "/ rental (up to {max} days)",
     "rentalFeeFlat": "Rental fee (up to {max} days)",
-    "lateFeeWarning": "Keeping it longer than {max} days adds a late fee per extra day.",
+    "lateFeeWarning": "This item can be rented for at most {max} days.",
     "requestBooking": "Request booking",
     "noOnlinePaymentNote": "No payment is taken online. After you book, the store will contact you to arrange the {amount} down payment. Unpaid bookings are released after a short hold period.",
     "selectDatesToContinue": "Choose your pickup and return dates to continue",

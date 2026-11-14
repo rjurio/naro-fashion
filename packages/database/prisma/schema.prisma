@@ -1011,6 +1011,12 @@ model RentalOrder {
   @@index([productId, startDate, returnDate])
   @@index([status, holdExpiresAt])
   @@index([rentalUnitId])
+  // The late-fee terms agreed at booking (null: booked before LF-2026-11 →
+  // the legacy rule) and the part of the late fee waived after an
+  // independent approval (RentalLateFeeWaiver).
+  lateFeeTerms   Json?
+  lateFeeWaived  Decimal @default(0) @db.Decimal(12, 2)
+  lateFeeWaivers RentalLateFeeWaiver[]
 }
 
 /// One physical item that can be rented (POS rental MVP, M2): a gown, a
@@ -1142,6 +1148,12 @@ model RentalPolicy {
   updatedAt                    DateTime @updatedAt
 
   @@index([tenantId])
+  // Late-fee rules for NEW bookings (LF-2026-11; rentals/late-fee.ts). Null =
+  // the approved defaults (10 % a day, capped at 100 % of the rental fee, no
+  // charge on free rentals). lateFeePerDay above is legacy (old bookings only).
+  defaultLateFeePct       Decimal? @db.Decimal(5, 2)
+  lateFeeCapPct           Decimal? @db.Decimal(5, 2)
+  freeRentalLateFeePerDay Decimal? @db.Decimal(12, 2)
 }
 
 // ============================================================
@@ -2058,4 +2070,26 @@ model RentalHandoverSafeguard {
   changedAt         DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
+}
+
+/// Waiving part or all of a late fee: a documented reason and approval by a
+/// different person (rentals:waive-late-fee). Never automatic.
+model RentalLateFeeWaiver {
+  id            String    @id @default(cuid())
+  tenantId      String?
+  rentalOrderId String
+  amount        Decimal   @db.Decimal(12, 2)
+  reason        String
+  status        String    @default("REQUESTED") // REQUESTED | APPROVED | REJECTED
+  requestedById String
+  decidedById   String?
+  decidedAt     DateTime?
+  decisionNote  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  rentalOrder RentalOrder @relation(fields: [rentalOrderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@index([rentalOrderId])
 }

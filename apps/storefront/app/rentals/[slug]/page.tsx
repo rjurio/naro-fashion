@@ -37,7 +37,7 @@ export default function RentalDetailPage() {
   const slug = params.slug as string;
   const router = useRouter();
   const toast = useToast();
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { isAuthenticated } = useAuth();
 
   const [product, setProduct] = useState<any>(null);
@@ -439,6 +439,11 @@ export default function RentalDetailPage() {
                 <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
                   <AlertTriangle className="h-3 w-3" />
                   {t('rentals.lateFeeWarning').replace('{max}', String(maxRentalDays))}
+                </p>
+              )}
+              {quote?.lateFeeText && (
+                <p className="text-xs text-muted-foreground mt-1" data-testid="rental-late-fee">
+                  {locale === 'sw' ? quote.lateFeeText.sw : quote.lateFeeText.en}
                 </p>
               )}
               {available === true && (

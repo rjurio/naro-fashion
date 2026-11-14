@@ -30,6 +30,8 @@ export interface LedgerRental {
   damageDeposit: unknown;
   lateFee: unknown;
   downPaymentAmount: unknown;
+  /** Part of the late fee waived after an independent approval. */
+  lateFeeWaived?: unknown;
 }
 
 export interface LedgerPayment {
@@ -84,7 +86,7 @@ export function rentalBalances(
   const due: ComponentAmounts = {
     RENTAL_FEE: Math.max(0, c(rental.totalRentalPrice)),
     DEPOSIT: Math.max(0, c(rental.damageDeposit)),
-    LATE_FEE: Math.max(0, c(rental.lateFee)),
+    LATE_FEE: Math.max(0, c(rental.lateFee) - c(rental.lateFeeWaived)),
   };
   const collected = z();
   let unallocated = 0;

@@ -155,7 +155,9 @@ export default function PosRentalMode({ sessionId, online, servicingOnly = false
                 {quote.available ? 'Available' : `Not available (${quote.reason})`}{quote.unitManaged ? ' · by physical unit' : ''}
               </div>
               <div>Rental fee {fmt(quote.rentalFee)} · down payment {fmt(quote.downPayment)} · balance {fmt(quote.balanceAfterDownPayment)}</div>
-              <div>Refundable deposit {fmt(quote.deposit)} · late fee {fmt(quote.lateFeePerDay)} a day</div>
+              <div>Refundable deposit {fmt(quote.deposit)}</div>
+              {/* LF-2026-11: the same sentence (incl. the cap) as the agreement and the storefront. */}
+              <div data-testid="rental-quote-late-fee">{quote.lateFee?.text?.en ?? `Late fee ${fmt(quote.lateFeePerDay)} a day`}</div>
               <div className="font-semibold">Due before handover: {fmt(quote.dueBeforeHandover)}</div>
             </div>
           )}
@@ -279,7 +281,8 @@ function BookingCard({ rental, sessionId, busy, run, refresh, servicingOnly = fa
         <p><b>${esc(a.customer.name)}</b> · ${esc(a.customer.phone)} · ${esc(a.customer.email ?? '')}<br>${esc(a.customer.address ?? 'Address: to be added before handover')}<br>National ID approved: ${a.customer.nationalIdApproved ? 'yes' : 'no'}</p>
         <p>${esc(a.item.product)} · size ${esc(a.item.size)} · unit ${esc(a.item.unit ?? '—')}</p>
         <p>Collect ${esc(String(a.dates.pickupDate).slice(0, 10))} · return ${esc(String(a.dates.returnDate).slice(0, 10))}</p>
-        <p>Rental fee ${fmt(a.amounts.rentalFee)} · down payment ${fmt(a.amounts.downPayment)} · refundable deposit ${fmt(a.amounts.refundableDeposit)}${a.amounts.lateFeePercentPerDay != null ? ` · late fee ${esc(a.amounts.lateFeePercentPerDay)}% of the fee per day` : ''}</p>
+        <p>Rental fee ${fmt(a.amounts.rentalFee)} · down payment ${fmt(a.amounts.downPayment)} · refundable deposit ${fmt(a.amounts.refundableDeposit)}</p>
+        <p>${esc(a.amounts.lateFeeText?.en ?? (a.amounts.lateFeePercentPerDay != null ? `Late fee: ${a.amounts.lateFeePercentPerDay}% of the fee per day` : ''))}<br>${esc(a.amounts.lateFeeText?.sw ?? '')}</p>
         <ol>${a.terms.map((t: string) => `<li>${esc(t)}</li>`).join('')}</ol>
         <p style="margin-top:40px">Customer signature ____________________ &nbsp; Staff ____________________</p>`);
       w.document.close();

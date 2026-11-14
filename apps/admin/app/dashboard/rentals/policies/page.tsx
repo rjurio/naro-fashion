@@ -11,6 +11,9 @@ interface PolicyValues {
   bufferDays: number;
   downPaymentPercent: number;
   lateFeePerDay: number;
+  lateFeePct: number;
+  lateFeeCapPct: number;
+  freeRentalLateFeePerDay: number;
   maxRentalDuration: number;
   preparationReminder: number;
 }
@@ -18,7 +21,10 @@ interface PolicyValues {
 const defaultValues: PolicyValues = {
   bufferDays: 7,
   downPaymentPercent: 25,
-  lateFeePerDay: 15000,
+  lateFeePerDay: 10000,
+  lateFeePct: 10,
+  lateFeeCapPct: 100,
+  freeRentalLateFeePerDay: 0,
   maxRentalDuration: 30,
   preparationReminder: 8,
 };
@@ -26,7 +32,10 @@ const defaultValues: PolicyValues = {
 const fields: { key: keyof PolicyValues; label: string; description: string; suffix: string; defaultVal: number }[] = [
   { key: 'bufferDays', label: 'Buffer Days Between Rentals', description: 'Minimum number of days required between the return of one rental and the start of the next for the same item.', suffix: 'days', defaultVal: 7 },
   { key: 'downPaymentPercent', label: 'Down Payment Percentage', description: 'Default down payment (% of the rental fee, not the deposit) for products set to "Inherit shop default". Products with a custom percentage keep theirs. Changes apply to new bookings only; existing bookings keep their amounts.', suffix: '%', defaultVal: 25 },
-  { key: 'lateFeePerDay', label: 'Late Return Fee Per Day', description: 'Daily fee charged when a rental item is returned after the agreed return date.', suffix: 'TZS / day', defaultVal: 15000 },
+  { key: 'lateFeePct', label: 'Late Fee (% of the rental fee per late day)', description: 'Shop default for items without their own late-fee %. Each whole day after the agreed return date. An item set to 0 % has NO late fee. New bookings store the terms they were made under.', suffix: '% / day', defaultVal: 10 },
+  { key: 'lateFeeCapPct', label: 'Maximum Late Fee (% of the rental fee)', description: 'The accumulated late fee never exceeds this share of the rental fee (100 % = at most the rental fee itself).', suffix: '% max', defaultVal: 100 },
+  { key: 'freeRentalLateFeePerDay', label: 'Late Fee for Free Rentals', description: 'Items rented at no charge have NO late fee unless you set an explicit daily amount here (0 = none).', suffix: 'TZS / day', defaultVal: 0 },
+  { key: 'lateFeePerDay', label: 'Legacy Fixed Late Fee (old bookings only)', description: 'Used only for bookings made before the November 2026 late-fee rules, as they were agreed. New bookings never use it.', suffix: 'TZS / day', defaultVal: 10000 },
   { key: 'maxRentalDuration', label: 'Maximum Rental Duration', description: 'The longest period a customer can rent a single item in one transaction.', suffix: 'days', defaultVal: 30 },
   { key: 'preparationReminder', label: 'Advance Preparation Reminder', description: 'System will send daily reminders starting this many days before pickup.', suffix: 'days before pickup', defaultVal: 8 },
 ];
@@ -47,6 +56,9 @@ export default function RentalPoliciesPage() {
           bufferDays: data.bufferDays ?? defaultValues.bufferDays,
           downPaymentPercent: data.downPaymentPercent ?? defaultValues.downPaymentPercent,
           lateFeePerDay: data.lateFeePerDay ?? defaultValues.lateFeePerDay,
+          lateFeePct: data.lateFeePct ?? defaultValues.lateFeePct,
+          lateFeeCapPct: data.lateFeeCapPct ?? defaultValues.lateFeeCapPct,
+          freeRentalLateFeePerDay: data.freeRentalLateFeePerDay ?? defaultValues.freeRentalLateFeePerDay,
           maxRentalDuration: data.maxRentalDuration ?? defaultValues.maxRentalDuration,
           preparationReminder: data.preparationReminder ?? defaultValues.preparationReminder,
         };
