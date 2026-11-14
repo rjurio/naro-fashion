@@ -1,0 +1,167 @@
+# CI VEHICLE — never merged (round 25J). It covers the first three security
+# release artifacts:
+#   W1 e195425 (#21), W2 8f441cb (#25 + #26), W3 994cf61 (#42).
+# It runs:
+#   - Linux production builds of each artifact;
+#   - the security real-database suites against W3, with W2 as the rollback
+#     target (throwaway Postgres 16 = production's major version);
+#   - a rehearsal of the live probes along the real release and rollback order.
+# Pull requests only. No secrets, no deploy job.
+name: Security release vehicle — builds W1/W2/W3 + real-database suites (CI only)
+
+on:
+  pull_request:
+    branches: [release/sec-inventory-42]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec-release-vehicle-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASE_SHA: 3d95365a55646f223143c0cca287b1990367384f
+  W1_SHA: e195425ecb96bebe09e20fd579cc6b6e554b6594
+  W2_SHA: 8f441cb4315d1ef367f351254920985989ac8d9c
+  W3_SHA: 994cf61f67ebbd8e9a3f67a91ed6454221bee750
+
+jobs:
+  build:
+    name: Production builds ${{ matrix.window }} (api, storefront, admin)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { window: W1, sha: e195425ecb96bebe09e20fd579cc6b6e554b6594 }
+          - { window: W2, sha: 8f441cb4315d1ef367f351254920985989ac8d9c }
+          - { window: W3, sha: 994cf61f67ebbd8e9a3f67a91ed6454221bee750 }
+    env:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: '1'
+      NEXT_PUBLIC_API_URL: https://api.build-check.invalid/api/v1
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.sha }}
+
+      - name: Confirm the exact artifact
+        run: test "$(git rev-parse HEAD)" = "${{ matrix.sha }}" && git log --oneline -1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @naro/database exec prisma generate
+
+      - name: Build API (nest build)
+        run: |
+          pnpm --filter api build
+          test -f apps/api/dist/main.js
+
+      - name: Build storefront (next build, standalone)
+        run: pnpm --filter storefront build
+
+      - name: Build admin (next build, standalone)
+        run: pnpm --filter admin build
+
+      - name: Check standalone output
+        run: |
+          for app in storefront admin; do
+            d="apps/${app}/.next"
+            for f in BUILD_ID routes-manifest.json; do
+              test -s "${d}/${f}" || { echo "::error::${app}: ${d}/${f} missing"; exit 1; }
+            done
+            test -f "${d}/standalone/apps/${app}/server.js" || { echo "::error::${app}: standalone server.js missing"; exit 1; }
+            test -d "${d}/static" || { echo "::error::${app}: .next/static missing"; exit 1; }
+            echo "${{ matrix.window }} ${app}: BUILD_ID $(cat "${d}/BUILD_ID") ok"
+          done
+
+  realdb:
+    name: Real-database suites on W3 + probe rehearsal (Postgres 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PSQL: psql
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Database roles as in production (owner naro_admin, NOT a superuser)
+        run: |
+          PGPASSWORD=ci psql -h localhost -U postgres -X -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE naro_admin LOGIN PASSWORD 'Admin123' NOSUPERUSER NOCREATEDB NOCREATEROLE" \
+            -c "CREATE DATABASE naro_fashion OWNER naro_admin"
+          psql --version
+
+      # The vehicle head = W3 + ci-integration/ + this workflow only. The app
+      # code under test is checked out at the exact artifact SHAs.
+      - name: Check out and build the API of 3d95365, W1, W2, W3
+        run: |
+          set -e
+          for pair in "base $BASE_SHA" "w1 $W1_SHA" "w2 $W2_SHA" "w3 $W3_SHA"; do
+            set -- $pair
+            git worktree add --detach "$RUNNER_TEMP/$1" "$2"
+            ( cd "$RUNNER_TEMP/$1"
+              test "$(git rev-parse HEAD)" = "$2"
+              pnpm install --frozen-lockfile > /dev/null
+              pnpm --filter @naro/database exec prisma generate > /dev/null
+              pnpm --filter api build > /dev/null
+              test -f apps/api/dist/main.js
+              echo "$1 $(git log --oneline -1) — api built" )
+          done
+          test -z "$(git diff --name-only "$W3_SHA" HEAD -- apps packages)" || { echo "::error::vehicle head changes app code"; exit 1; }
+
+      - name: Security suites on W3 (OLD_WT = W2, the rollback target)
+        run: >-
+          WT="$RUNNER_TEMP/w3" OLD_WT="$RUNNER_TEMP/w2" SUITES="$GITHUB_WORKSPACE/ci-integration" LOGS="$RUNNER_TEMP/it-logs"
+          SUITE_GROUPS="inventory-sec escalation manager-compat r42-rollback sec"
+          bash ci-integration/run-linux.sh
+
+      - name: Live-probe rehearsal (3d95365 → W1 → W2 → W3 → W2 → W1)
+        if: always()
+        run: >-
+          BASE_WT="$RUNNER_TEMP/base" W1_WT="$RUNNER_TEMP/w1" W2_WT="$RUNNER_TEMP/w2" W3_WT="$RUNNER_TEMP/w3"
+          PROBES="$GITHUB_WORKSPACE/ci-integration/probes" SUITES="$GITHUB_WORKSPACE/ci-integration" LOGS="$RUNNER_TEMP/it-logs"
+          bash ci-integration/probe-rehearsal.sh
+
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sec-release-vehicle-logs
+          path: ${{ runner.temp }}/it-logs
+          retention-days: 7
