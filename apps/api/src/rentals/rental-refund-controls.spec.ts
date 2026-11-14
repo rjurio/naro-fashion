@@ -107,7 +107,7 @@ describe('fresh database: no role gets the rental controls by default', () => {
   const CONTROL_CODES = [
     'rentals:create', 'rentals:record-payment', 'rentals:release', 'rentals:refund-request',
     'rentals:manage-inventory', 'refunds:approve', 'id-verification:review', 'payments:confirm-manual',
-    'payments:reverse', 'payments:manage',
+    'payments:reverse', 'payments:manage', 'rentals:approve-unit-tracking',
   ];
 
   it('MANAGER_EXCLUDED lists every rental / refund control', () => {

@@ -25,6 +25,7 @@ export const MANAGER_EXCLUDED = [
   'rentals:release',
   'rentals:refund-request',
   'rentals:manage-inventory',
+  'rentals:approve-unit-tracking',
 ];
 
 export const STAFF_CODES = [
