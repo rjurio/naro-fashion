@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { userHasPermission } from '../auth/util/permission-check';
+import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
@@ -308,8 +309,21 @@ export class ProductsService {
     throw err;
   }
 
-  async create(dto: CreateProductDto) {
+  /** The admin making the current request (request-scoped service). */
+  private currentActor: any = undefined;
+
+  private async assertInventoryPermission(actor: any, what: string) {
+    if (await userHasPermission(this.prisma as any, actor, 'inventory:manage')) return;
+    throw new ForbiddenException({
+      statusCode: 403, code: 'INVENTORY_PERMISSION_REQUIRED',
+      message: `Setting ${what} needs the inventory:manage permission. Create it with 0 and use Inventory → Adjust stock, or ask someone who has it.`,
+    });
+  }
+
+  async create(dto: CreateProductDto, actor?: any) {
     const tenantId = this.tenantContext.requireId;
+    // Security fix: opening stock is an inventory movement (inventory:manage).
+    if ((dto.variants ?? []).some((v: any) => Number(v.stock ?? 0) > 0)) await this.assertInventoryPermission(actor, 'opening stock');
     const slug = dto.slug || this.generateSlug(dto.name);
 
     await this.assertProductRefs(tenantId, { categoryId: dto.categoryId, sizeGuideId: dto.sizeGuideId });
@@ -428,7 +442,7 @@ export class ProductsService {
     });
   }
 
-  async bulkImport(fileBuffer: Buffer) {
+  async bulkImport(fileBuffer: Buffer, actor?: any) {
     const tenantId = this.tenantContext.requireId;
     const rows = this.parseCsv(fileBuffer);
 
@@ -544,7 +558,7 @@ export class ProductsService {
           dto.images = imagesRaw.split(';').map((u) => u.trim()).filter(Boolean);
         }
 
-        await this.create(dto);
+        await this.create(dto, actor);
 
         if (sku) existingSkus.add(sku.toLowerCase());
         created++;
@@ -561,7 +575,8 @@ export class ProductsService {
     };
   }
 
-  async update(id: string, dto: UpdateProductDto) {
+  async update(id: string, dto: UpdateProductDto, actor?: any) {
+    this.currentActor = actor;
     const tenantId = this.tenantContext.requireId;
     const expectedUpdatedAt = parseExpectedUpdatedAt(dto.expectedUpdatedAt);
     const product = await this.prisma.product.findFirst({ where: { id, tenantId } });
@@ -570,6 +585,19 @@ export class ProductsService {
     }
 
     await this.assertProductRefs(tenantId, { categoryId: dto.categoryId, sizeGuideId: dto.sizeGuideId });
+
+    // Security fix: the inventory settings (cost price, low-stock threshold,
+    // supplier) are gated by inventory:manage on PATCH /inventory/:id/settings;
+    // this route must not be a way round it. Values re-sent unchanged pass.
+    const num = (x: any) => (x === undefined || x === null || x === '' ? null : Number(x));
+    const str = (x: any) => (x === undefined || x === null ? '' : String(x));
+    const settingsChanged = (['purchasePrice', 'minimumStock', 'supplierName', 'supplierContact'] as const).filter((k) => {
+      const next: any = (dto as any)[k];
+      if (next === undefined) return false;
+      const cur: any = (product as any)[k];
+      return k === 'purchasePrice' || k === 'minimumStock' ? num(cur) !== num(next) : str(cur) !== str(next);
+    });
+    if (settingsChanged.length) await this.assertInventoryPermission(actor, `inventory settings (${settingsChanged.join(', ')})`);
 
     const data: any = {};
     if (dto.name !== undefined) {
@@ -675,8 +703,30 @@ export class ProductsService {
   ) {
     const existing = await tx.productVariant.findMany({
       where: { productId: product.id, tenantId },
-      select: { id: true, sku: true },
+      select: { id: true, sku: true, stock: true },
     });
+    // Security fix: the product form can't change an existing variant's stock
+    // (it re-sent the stock the page had loaded, silently overwriting sales
+    // and adjustments, with no ledger row and no permission check). Stock
+    // changes go through Inventory → Adjust (inventory:manage, ledgered).
+    for (const v of variants) {
+      const cur = v.id ? existing.find((e) => e.id === v.id) : undefined;
+      if (cur && v.stock !== undefined && Number(v.stock) !== cur.stock) {
+        throw new ConflictException({
+          statusCode: 409, code: 'STOCK_EDIT_NOT_ALLOWED', variantId: cur.id, current: cur.stock,
+          message: 'Stock is changed in Inventory → Adjust stock (recorded in the stock ledger), not in the product form.',
+        });
+      }
+    }
+    if (variants.some((v) => !(v.id && existing.some((e) => e.id === v.id)) && Number(v.stock ?? 0) > 0)) {
+      await this.assertInventoryPermission(this.currentActor, 'opening stock of a new size');
+    }
+    // Removing a size that still holds stock deletes (or takes out of sale)
+    // that stock with no ledger row — an inventory movement too.
+    const payloadIds = new Set(variants.map((v) => v.id).filter(Boolean));
+    if (existing.some((e) => !payloadIds.has(e.id) && e.stock > 0)) {
+      await this.assertInventoryPermission(this.currentActor, 'removal of a size that still has stock');
+    }
     const existingById = new Map(existing.map((v) => [v.id, v]));
     const keep = new Set<string>();
     const summary = { updated: 0, created: 0, deleted: 0, disabled: 0 };

@@ -25,7 +25,8 @@ describe('AdminUsersService — escalation guards', () => {
         update: jest.fn().mockResolvedValue({ id: 'x' }),
         create: jest.fn().mockResolvedValue({ id: 'new', email: 'n@x.tz', role: 'STAFF' }),
       },
-      adminUserRole: { create: jest.fn().mockResolvedValue({}), delete: jest.fn() },
+      adminUserRole: { create: jest.fn().mockResolvedValue({}), delete: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+      rolePermission: { findMany: jest.fn().mockResolvedValue([]) },
       role: { findFirst: jest.fn() },
     };
     // isSuperActor reads the performer row; return role by id.

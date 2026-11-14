@@ -5,11 +5,13 @@ import { UpdateInventorySettingsDto } from './dto/update-inventory-settings.dto'
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @Controller('inventory')
-@UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard)
+@UseGuards(JwtAuthGuard, AdminGuard, ModuleGuard, PermissionGuard)
 @RequiresModule('inventory')
 export class InventoryController {
   constructor(private readonly service: InventoryService) {}
@@ -30,11 +32,15 @@ export class InventoryController {
     return this.service.getTransactions(productId, { page: page ? +page : 1, limit: limit ? +limit : 50, type });
   }
 
+  // Security fix: every inventory WRITE needs inventory:manage (before, any
+  // admin account — STAFF included — could change stock).
+  @RequiresPermission('inventory:manage')
   @Patch(':productId/settings')
   updateSettings(@Param('productId') productId: string, @Body() dto: UpdateInventorySettingsDto) {
     return this.service.updateSettings(productId, dto);
   }
 
+  @RequiresPermission('inventory:manage')
   @Post('adjust')
   adjustStock(@Body() dto: AdjustStockDto, @CurrentUser('id') performedBy: string) {
     return this.service.adjustStock(dto, performedBy);
