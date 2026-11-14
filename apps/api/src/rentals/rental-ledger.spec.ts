@@ -139,3 +139,19 @@ describe('RentalMoneyService (refund workflow)', () => {
     expect(audit.log).toHaveBeenCalledWith('REFUND_FAILED', 'RentalRefundRequest', 'q1', { reason: 'Mobile money reversed' });
   });
 });
+
+describe('round 25D E (R1): overpayment claims are claims on the surplus, not on a component', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { rentalBalances, refundableNow, overpaymentRefundableNow } = require('./rental-ledger');
+  const rental = { totalRentalPrice: 400000, damageDeposit: 200000, lateFee: 0, downPaymentAmount: 100000 };
+  const pays = [{ amount: 100000, status: 'COMPLETED', component: 'RENTAL_FEE' }, { amount: 600000, status: 'COMPLETED', component: null }];
+  it('an open OVERPAYMENT request leaves the fee fully refundable and claims the surplus once', () => {
+    const b = rentalBalances(rental, pays);
+    const open = [{ kind: 'OVERPAYMENT', component: 'RENTAL_FEE', amount: 100000, retainedAmount: 0, status: 'APPROVED' }];
+    expect([b.overpaid, refundableNow(b, 'RENTAL_FEE', open), overpaymentRefundableNow(b, open), overpaymentRefundableNow(b, [])]).toEqual([100000, 400000, 0, 100000]);
+  });
+  it('an overpayment payout without a component comes off the surplus, not the fee held', () => {
+    const b = rentalBalances(rental, [...pays, { amount: 100000, status: 'REFUNDED', component: null }]);
+    expect([b.held.RENTAL_FEE, b.held.DEPOSIT, b.overpaid]).toEqual([400000, 200000, 0]);
+  });
+});

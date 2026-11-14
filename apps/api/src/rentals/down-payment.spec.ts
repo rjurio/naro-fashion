@@ -97,6 +97,9 @@ describe('settlement with the stored whole-shilling amount (partial payments)', 
     },
     // National ID (PR #16): settlement confirms only a customer with an approved ID.
     customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'doc1' })) },
+    // The roll-up decides + writes under the booking's money locks (round 25F).
+    $executeRaw: jest.fn(async () => 1),
+    $transaction: jest.fn(async function (this: any, cb: any) { return cb(this); }),
   });
 
   it.each([
@@ -131,6 +134,9 @@ describe('cancellations, refunds, deposits and the payment cap', () => {
     },
     // National ID (PR #16): settlement confirms only a customer with an approved ID.
     customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'doc1' })) },
+    // The roll-up decides + writes under the booking's money locks (round 25F).
+    $executeRaw: jest.fn(async () => 1),
+    $transaction: jest.fn(async function (this: any, cb: any) { return cb(this); }),
   });
 
   it('a CANCELLED booking never advances, even if enough was paid; its stored amount is untouched', async () => {

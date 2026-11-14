@@ -1692,7 +1692,7 @@ class AdminApiClient {
   }
   /** P0c: what this operator may confirm (cached by the POS for offline). */
   posGetCapabilities() {
-    return this.get<{ canConfirmManualPayments: boolean; canReversePayments: boolean }>('/pos/capabilities');
+    return this.get<{ canConfirmManualPayments: boolean; canReversePayments: boolean; posRentalsReleased?: boolean; posRentalServicing?: boolean }>('/pos/capabilities');
   }
   posLookupBarcode(code: string) {
     return this.get<any>(`/pos/products/barcode/${code}`);

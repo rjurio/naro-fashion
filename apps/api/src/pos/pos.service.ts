@@ -36,6 +36,7 @@ import {
   verifyTenders,
 } from './payment-verification';
 import { withConfirmation } from '../payments/payment-confirmation';
+import { posRentalsEnabled } from '../rentals/pos-rental-release';
 export interface PosActor {
   id: string;
   role?: string;
@@ -338,7 +339,11 @@ export class PosService {
       userHasPermission(this.prisma as any, actor, CONFIRM_MANUAL_PERMISSION),
       userHasPermission(this.prisma as any, actor, 'payments:reverse'),
     ]);
-    return { canConfirmManualPayments: confirm, canReversePayments: reverse };
+    // posRentalsReleased: the POS page shows the walk-in Rental mode only when
+    // the SERVER says it is released (pos-rental-release.ts; false until R5).
+    // posRentalServicing: before R5 the POS offers only "open an existing
+    // (online) booking" — payments, hand-over, return (pos-rental-release.ts).
+    return { canConfirmManualPayments: confirm, canReversePayments: reverse, posRentalsReleased: posRentalsEnabled(), posRentalServicing: true };
   }
 
   /**

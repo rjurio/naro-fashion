@@ -1,3 +1,4 @@
+import { lockRentalMoney, netHeld } from './refund-due';
 import {
   Injectable,
   Logger,
@@ -49,6 +50,7 @@ import { findRentalAvailability, findRentalAvailabilityBlock, RentalBlockReason 
 import { customerIdState, hasApprovedId, lockCustomerIdState } from '../id-verification/id-approval';
 import { decideHold, MAX_STAFF_EXTENSION_DAYS, pickupCutoff, pickupExpiryAt } from './rental-hold';
 import { rentalBalances } from './rental-ledger';
+import { assertPosRentalsReleased } from './pos-rental-release';
 import { userHasPermission } from '../auth/util/permission-check';
 
 /** Statuses that mean the item has been handed over. */
@@ -118,6 +120,10 @@ export class RentalsService {
     opts: { channel?: 'ONLINE' | 'POS'; createdByAdminId?: string; termsAccepted?: boolean } = {},
   ) {
     const channel = opts.channel ?? 'ONLINE';
+    // Walk-in POS rentals are not released until R5 (pos-rental-release.ts):
+    // a POS booking is refused here too, before anything is read or written,
+    // whatever route or role reached this shared path.
+    if (channel !== 'ONLINE') assertPosRentalsReleased();
     // Verify customer profile completeness before rental
     const tenantId = this.tenantContext.requireId;
     const user = await this.prisma.user.findUnique({
@@ -431,17 +437,11 @@ export class RentalsService {
         decideHold({ idState: 'APPROVED', downPaymentAmount: Number(rental.downPaymentAmount), at: new Date() }),
       );
     }
-    if (status === 'CANCELLED') {
-      // Money still held on a cancelled booking is flagged REFUND_DUE: an
-      // outstanding liability, never forfeited and never treated as refunded.
-      // Recording the payout belongs to the rental refund ledger (proposed
-      // release after P0c), not to this flag.
-      const held = await this.netPaid(rental.id);
-      if (held > 0) {
-        data.holdState = 'REFUND_DUE';
-        data.holdExpiresAt = null;
-      }
-    }
+    // CANCELLED: money still held is flagged REFUND_DUE (an outstanding
+    // liability, never forfeited, never treated as refunded). Round 25D E:
+    // decided inside the status-write transaction, under the booking's money
+    // locks, so a payment confirmed concurrently can't slip between the
+    // money check and the write (see rentals/refund-due.ts).
     if (status === 'RETURNED') {
       // Offline replays carry the real return time (validated, ≤30 days old).
       const resolved = resolveReturnedAt(returnedAtRaw, new Date());
@@ -472,10 +472,17 @@ export class RentalsService {
 
     // Compare-and-swap on the status we validated against, so two admins
     // can't both apply transitions computed from the same stale read.
-    const claim = await this.prisma.rentalOrder.updateMany({
-      where: { id, tenantId: this.tenantContext.requireId, status: rental.status },
-      data,
-    });
+    const casWhere = { id, tenantId: this.tenantContext.requireId, status: rental.status };
+    const claim = status === 'CANCELLED'
+      ? await this.prisma.$transaction(async (tx: any) => {
+          await lockRentalMoney(tx, id);
+          if ((await netHeld(tx, this.tenantContext.requireId, id)) > 0) {
+            data.holdState = 'REFUND_DUE';
+            data.holdExpiresAt = null;
+          }
+          return tx.rentalOrder.updateMany({ where: casWhere, data });
+        })
+      : await this.prisma.rentalOrder.updateMany({ where: casWhere, data });
     if (claim.count === 0) {
       if (expectedStatus !== undefined) throw await staleConflict();
       throw new ConflictException('Rental status changed concurrently. Reload and try again.');

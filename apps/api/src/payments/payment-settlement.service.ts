@@ -4,6 +4,7 @@ import { hasApprovedId } from '../id-verification/id-approval';
 import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { flagRefundDueIfHeld, lockRentalMoney } from '../rentals/refund-due';
 
 /**
  * Single source of truth for applying a gateway-reported payment outcome
@@ -250,6 +251,21 @@ export class PaymentSettlementService {
           data: args.extraData,
         });
       }
+      // Round 25G (self-healing): a repeated confirmation of a payment that is
+      // ALREADY COMPLETED re-runs the parent roll-up. The roll-up is idempotent
+      // (fresh read under the money locks, compare-and-swap writes, refund
+      // requests deduplicated), so this only repairs a roll-up that failed after
+      // the payment itself was marked COMPLETED (e.g. a transaction timeout) —
+      // the gateway's next confirmation finishes the job instead of being a no-op.
+      if (effectiveStatus === 'COMPLETED' && !amountShort) {
+        const current = await this.prisma.payment.findFirst({
+          where: { id: payment.id, tenantId },
+          select: { status: true },
+        });
+        if (current?.status === 'COMPLETED') {
+          await this.settleParents(payment, tenantId);
+        }
+      }
       return { applied: false, status: payment.status, amountShort };
     }
 
@@ -335,6 +351,20 @@ export class PaymentSettlementService {
    * the customer paid before verification, the payment is recorded and an
    * admin advances the rental after approving the ID.
    */
+  /** True when the booking is CANCELLED (decided under the money locks); flags REFUND_DUE if money is held. */
+  private async flagLateMoneyOnCancelled(rental: any, tenantId: string): Promise<boolean> {
+    try {
+      const out = await this.prisma.$transaction((tx: any) => flagRefundDueIfHeld(tx, tenantId, rental.id));
+      if (out.cancelled && out.held > 0) {
+        this.logger.warn(`REVIEW: rental ${rental.rentalNumber} is CANCELLED but holds ${out.held} TZS of payments — refund review (REFUND_DUE).`);
+      }
+      return out.cancelled;
+    } catch (e: any) {
+      this.logger.error(`Rental ${rental.rentalNumber}: could not check the cancelled booking's money: ${e?.message ?? e}`);
+      return rental.status === 'CANCELLED';
+    }
+  }
+
   async updateRentalPaymentStatus(rentalOrderId: string, tenantId: string) {
     const rental = await this.prisma.rentalOrder.findFirst({
       where: { id: rentalOrderId, tenantId },
@@ -351,26 +381,12 @@ export class PaymentSettlementService {
       select: { amount: true, status: true, component: true },
     });
     const ledger = rentalBalances(rental, rows);
-    const feePaid = ledger.collected.RENTAL_FEE;
 
-    if (rental.status === 'CANCELLED' && totalPaid > 0) {
-      // e.g. a gateway payment that completed after the booking was released
-      // by the hold expiry job. Never re-opened automatically: refund review.
-      this.logger.warn(
-        `REVIEW: rental ${rental.rentalNumber} is CANCELLED but has ${totalPaid} TZS of COMPLETED payments — refund review.`,
-      );
-      // Flag it for finance (REFUND_DUE): money that arrived on a released booking.
-      await this.prisma.rentalOrder.updateMany({
-        where: {
-          id: rentalOrderId,
-          tenantId,
-          status: 'CANCELLED',
-          OR: [{ holdState: null }, { holdState: { not: 'REFUND_DUE' } }],
-        },
-        data: { holdState: 'REFUND_DUE', holdExpiresAt: null },
-      });
-      return;
-    }
+    // A booking that is (now) CANCELLED is never re-opened or advanced: money
+    // on it is a REFUND_DUE liability (refund review). Round 25D E: the
+    // status read above may be stale while a cancellation commits, so the
+    // decision is taken under the booking's money locks with a fresh read.
+    if (await this.flagLateMoneyOnCancelled(rental, tenantId)) return;
 
     const confirmable = ['ID_VERIFIED', 'DOWN_PAYMENT_PAID'].includes(rental.status);
     if (confirmable && ledger.downPaymentCovered) {
@@ -383,15 +399,38 @@ export class PaymentSettlementService {
         return;
       }
       // The whole rental fee received → FULLY_PAID; else the down payment → DOWN_PAYMENT_PAID.
-      const target = ledger.feeFullyPaid ? 'FULLY_PAID' : 'DOWN_PAYMENT_PAID';
-      if (target === rental.status) return;
-      const res = await this.prisma.rentalOrder.updateMany({
-        where: { id: rentalOrderId, tenantId, status: rental.status },
-        data: { status: target },
+      if ((ledger.feeFullyPaid ? 'FULLY_PAID' : 'DOWN_PAYMENT_PAID') === rental.status) return;
+      // Round 25F (r1-integration): the reads above are unlocked. Two
+      // settlements of DIFFERENT payments of the same booking could each
+      // compute a target from their own snapshot; the one with the older
+      // snapshot (DOWN_PAYMENT_PAID) could write first and the complete one
+      // (FULLY_PAID) then lost its compare-and-swap on the old status — the
+      // booking stayed DOWN_PAYMENT_PAID with the fee fully paid. The
+      // decision and the write are therefore re-taken under the booking's
+      // money locks (same order as everywhere: payment:rental -> refund:rental)
+      // from a fresh read, so concurrent roll-ups serialise and the last one
+      // sees every committed payment and the status the others wrote.
+      const advanced = await this.prisma.$transaction(async (tx: any) => {
+        await lockRentalMoney(tx, rentalOrderId);
+        const fresh = await tx.rentalOrder.findFirst({ where: { id: rentalOrderId, tenantId } });
+        if (!fresh || !['ID_VERIFIED', 'DOWN_PAYMENT_PAID'].includes(fresh.status)) return null;
+        const freshRows = await tx.payment.findMany({
+          where: { rentalOrderId, tenantId },
+          select: { amount: true, status: true, component: true },
+        });
+        const now = rentalBalances(fresh, freshRows);
+        if (!now.downPaymentCovered) return null;
+        const target = now.feeFullyPaid ? 'FULLY_PAID' : 'DOWN_PAYMENT_PAID';
+        if (target === fresh.status) return null;
+        const res = await tx.rentalOrder.updateMany({
+          where: { id: rentalOrderId, tenantId, status: fresh.status },
+          data: { status: target },
+        });
+        return res.count > 0 ? { target, feePaid: now.collected.RENTAL_FEE } : null;
       });
-      if (res.count > 0) {
+      if (advanced) {
         this.logger.log(
-          `Rental ${rental.rentalNumber}: ${feePaid} TZS of the rental fee received (down payment ${downPaymentDue}) — advanced to ${target}`,
+          `Rental ${rental.rentalNumber}: ${advanced.feePaid} TZS of the rental fee received (down payment ${downPaymentDue}) — advanced to ${advanced.target}`,
         );
       }
     }

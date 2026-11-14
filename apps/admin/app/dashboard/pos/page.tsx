@@ -30,7 +30,10 @@ import HeldSalesModal from './components/HeldSalesModal';
 import LayawayModal from './components/LayawayModal';
 import ExchangeModal from './components/ExchangeModal';
 import SyncStatusBadge from '@/components/offline/SyncStatusBadge';
-import PosRentalMode from '@/components/pos-rental/PosRentalMode';
+import dynamic from 'next/dynamic';
+// Walk-in POS rentals are NOT released until R5: the screen is loaded only
+// when the server reports posRentalsReleased (never in this release).
+const PosRentalMode = dynamic(() => import('@/components/pos-rental/PosRentalMode'), { ssr: false });
 import { useAuth } from '@/contexts/AuthContext';
 
 const NEEDS_INTERNET = 'Needs internet';
@@ -63,6 +66,13 @@ export default function PosPage() {
       return null;
     }
   });
+  // Walk-in POS rentals: shown ONLY when the server says they are released
+  // (GET /pos/capabilities → posRentalsReleased; false until R5). Never
+  // cached, never assumed: unknown / offline / an older API = not shown.
+  const [posRentalsReleased, setPosRentalsReleased] = useState(false);
+  // Before R5: "open an existing (online) booking" only — payments, hand-over,
+  // return. Same rule: only when the server says so.
+  const [posRentalServicing, setPosRentalServicing] = useState(false);
   useEffect(() => {
     if (!online || !capsKey) return;
     let cancelled = false;
@@ -70,6 +80,8 @@ export default function PosPage() {
       .posGetCapabilities()
       .then((caps) => {
         if (cancelled) return;
+        setPosRentalsReleased(caps?.posRentalsReleased === true);
+        setPosRentalServicing(caps?.posRentalServicing === true);
         const v = !!caps?.canConfirmManualPayments;
         setCanConfirmManual(v);
         try { window.localStorage.setItem(capsKey, String(v)); } catch { /* storage blocked */ }
@@ -108,6 +120,9 @@ export default function PosPage() {
   const [showExchange, setShowExchange] = useState(false);
   // POS rental MVP: Sale (default, unchanged) or walk-in Rental mode.
   const [mode, setMode] = useState<'SALE' | 'RENTAL'>('SALE');
+  // Not released → always Sale (also if the server stops reporting it).
+  const rentalTab = posRentalsReleased || posRentalServicing;
+  const rentalMode = rentalTab && mode === 'RENTAL';
 
   // Load session on mount
   useEffect(() => {
@@ -391,6 +406,7 @@ export default function PosPage() {
           {/* Online / offline + sync status (POS has no TopBar) */}
           <SyncStatusBadge compact />
 
+          {rentalTab && (
           <div className="flex rounded-lg border border-[hsl(var(--border))] overflow-hidden text-xs" role="tablist">
             {(['SALE', 'RENTAL'] as const).map((m) => (
               <button
@@ -401,10 +417,11 @@ export default function PosPage() {
                 onClick={() => setMode(m)}
                 className={`px-3 py-1.5 ${mode === m ? 'bg-brand-gold text-white' : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]'}`}
               >
-                {m === 'SALE' ? 'Sale' : 'Rental'}
+                {m === 'SALE' ? 'Sale' : posRentalsReleased ? 'Rental' : 'Rental bookings'}
               </button>
             ))}
           </div>
+          )}
 
           <button
             onClick={() => setShowHeldSales(true)}
@@ -466,10 +483,10 @@ export default function PosPage() {
         </div>
       </div>
 
-      {mode === 'RENTAL' && <PosRentalMode sessionId={session.id} online={online} />}
+      {rentalMode && <PosRentalMode sessionId={session.id} online={online} servicingOnly={!posRentalsReleased} />}
 
       {/* Main Content - Two Panels (sale mode; kept mounted so the cart survives a mode switch) */}
-      <div className={`flex-1 flex overflow-hidden ${mode === 'RENTAL' ? 'hidden' : ''}`}>
+      <div className={`flex-1 flex overflow-hidden ${rentalMode ? 'hidden' : ''}`}>
         {/* Left Panel - Product Search */}
         <div className="w-1/2 border-r border-[hsl(var(--border))] flex flex-col">
           <ProductSearch onAddToCart={addToCart} categories={categories} catalog={catalog} offline={offline} />

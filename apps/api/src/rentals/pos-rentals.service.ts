@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { posRentalsEnabled, posRentalsNotReleased } from './pos-rental-release';
 import {
   ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsEmail, IsIn, IsNumber, IsOptional, IsString,
   Matches, Max, MaxLength, Min, ValidateNested,
@@ -275,6 +276,8 @@ export class PosRentalsService {
       },
     });
     if (!r) throw new NotFoundException('Rental not found');
+    // Before R5 only ONLINE bookings are serviced here (walk-in creation is refused).
+    if (!posRentalsEnabled() && r.channel !== 'ONLINE') throw posRentalsNotReleased();
     return r;
   }
 
@@ -358,6 +361,10 @@ export class PosRentalsService {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
         const r = await tx.rentalOrder.findFirst({ where: { id: rentalId, tenantId }, include: { payments: true, refundRequests: true } });
         if (!r) throw new NotFoundException('Rental not found');
+        // Same rule as load(): before R5 only ONLINE bookings are serviced here.
+        // recordPayment reads the booking itself (under the payment lock), so it
+        // must refuse a non-ONLINE booking here, before any payment row is written.
+        if (!posRentalsEnabled() && r.channel !== 'ONLINE') throw posRentalsNotReleased();
         if (['CANCELLED', 'CLOSED', 'REJECTED', 'ID_REJECTED'].includes(r.status)) {
           throw new BadRequestException(`This booking is ${r.status}; no payment can be taken.`);
         }

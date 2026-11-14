@@ -7,6 +7,8 @@ import { RequiresPermission } from '../auth/decorators/requires-permission.decor
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ReviewerTwoFactorGuard } from '../id-verification/reviewer-two-factor.guard';
+import { PosRentalsReleaseGuard } from './pos-rentals-release.guard';
+import { PosRentalServicingRoute } from './pos-rental-release';
 import {
   PosAddressDto,
   PosCreateRentalDto,
@@ -23,8 +25,14 @@ import {
  * Walk-in POS rentals (POS rental MVP, M3). Admin-only; every route has its
  * own permission. Separate from POS sales / layaways (/pos/*). Online only:
  * the admin app never queues these offline.
+ *
+ * NOT RELEASED until R5: PosRentalsReleaseGuard runs FIRST and answers 404
+ * POS_RENTALS_NOT_RELEASED to every caller (SUPER_ADMIN and platform admins
+ * included) while POS_RENTALS_RELEASED is false (pos-rental-release.ts) —
+ * except the @PosRentalServicingRoute() routes that act on an existing
+ * (online) booking, which keep their normal guards and permissions.
  */
-@UseGuards(JwtAuthGuard, ModuleGuard, AdminGuard, PermissionGuard)
+@UseGuards(PosRentalsReleaseGuard, JwtAuthGuard, ModuleGuard, AdminGuard, PermissionGuard)
 @RequiresModule('rentals')
 @Controller('pos-rentals')
 export class PosRentalsController {
@@ -67,12 +75,14 @@ export class PosRentalsController {
   }
 
   @Get('lookup/:rentalNumber')
+  @PosRentalServicingRoute()
   @RequiresPermission('rentals:view')
   lookup(@Param('rentalNumber') rentalNumber: string) {
     return this.pos.lookup(rentalNumber);
   }
 
   @Get(':id')
+  @PosRentalServicingRoute()
   @RequiresPermission('rentals:view')
   detail(@Param('id') id: string) {
     return this.pos.detail(id);
@@ -86,6 +96,7 @@ export class PosRentalsController {
   }
 
   @Post(':id/payments')
+  @PosRentalServicingRoute()
   @RequiresPermission('rentals:record-payment')
   pay(@Param('id') id: string, @Body() dto: PosRentalPaymentDto, @CurrentUser() user: any) {
     return this.pos.recordPayment(id, dto, user);
@@ -98,18 +109,21 @@ export class PosRentalsController {
   }
 
   @Get(':id/receipts/:paymentId')
+  @PosRentalServicingRoute()
   @RequiresPermission('rentals:view')
   receipt(@Param('id') id: string, @Param('paymentId') paymentId: string) {
     return this.pos.receipt(id, paymentId);
   }
 
   @Post(':id/handover')
+  @PosRentalServicingRoute()
   @RequiresPermission('rentals:release')
   handover(@Param('id') id: string, @Body() dto: PosHandoverDto, @CurrentUser() user: any) {
     return this.pos.handover(id, dto, user);
   }
 
   @Post(':id/return')
+  @PosRentalServicingRoute()
   @RequiresPermission('rentals:update-status')
   recordReturn(@Param('id') id: string, @Body() dto: PosReturnDto, @CurrentUser() user: any) {
     return this.pos.recordReturn(id, dto, user);
