@@ -67,7 +67,7 @@ export default function Footer() {
       'privacy-policy': t('footer.privacyPolicy'),
     };
 
-    // The pages endpoint is public and returns all non-deleted pages
+    // Public endpoint: published pages only (slug/title fields); the filter below is kept as a belt-and-braces check
     api.get<any[]>('/cms/pages')
       .then((pages: any[]) => {
         if (!Array.isArray(pages)) return;
