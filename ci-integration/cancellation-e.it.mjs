@@ -71,7 +71,7 @@ async function booking(start, pay = [['RENTAL_FEE', 100000]]) {
   return b.data.id;
 }
 const cancel = (id, token = tok.cashier) => call('PATCH', `/rentals/${id}/status`, { token, body: { status: 'CANCELLED', cancellationReason: 'CUSTOMER_REQUEST', cancellationNote: 'round 25D E test' } });
-const reqs = (id) => sql(`SELECT coalesce(string_agg(component || ':' || amount::int || ':' || status || ':' || CASE WHEN "requestedById" LIKE 'SYSTEM:%' THEN "requestedById" ELSE 'staff' END, ',' ORDER BY "createdAt", component), '') FROM "RentalRefundRequest" WHERE "rentalOrderId" = '${id}' AND kind = 'CANCELLATION'`);
+const reqs = (id) => sql(`SELECT coalesce(string_agg(component || ':' || amount::int || ':' || status || ':' || CASE WHEN "requestedById" LIKE 'SYSTEM:%' THEN "requestedById" ELSE 'staff' END, ',' ORDER BY "createdAt", CASE component WHEN 'RENTAL_FEE' THEN 0 WHEN 'DEPOSIT' THEN 1 ELSE 2 END, component), '') FROM "RentalRefundRequest" WHERE "rentalOrderId" = '${id}' AND kind = 'CANCELLATION'`);
 const requested = (id) => Number(sql(`SELECT COALESCE(sum(amount), 0)::int FROM "RentalRefundRequest" WHERE "rentalOrderId" = '${id}' AND kind = 'CANCELLATION' AND status NOT IN ('REJECTED', 'FAILED')`));
 const received = (id) => Number(sql(`SELECT COALESCE(sum(amount), 0)::int FROM "Payment" WHERE "rentalOrderId" = '${id}' AND status = 'COMPLETED'`));
 const ledger = async (id) => (await call('GET', `/rental-money/rentals/${id}/ledger`, { token: tok.finance })).data;
