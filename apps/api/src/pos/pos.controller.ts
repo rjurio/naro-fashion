@@ -61,6 +61,15 @@ export class PosController {
     return this.posService.getSessions(page ? +page : 1, limit ? +limit : 20);
   }
 
+  // R4 shift reconciliation (read-only, financial). The service decides the
+  // view: reports:view → MANAGER (everything, incl. the shop's open
+  // liabilities); the shift's OWN cashier → CASHIER (their drawer, without the
+  // shop-wide sections); anyone else → 403; another shop's shift → 404.
+  @Get('sessions/:id/reconciliation')
+  getSessionReconciliation(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.posService.getSessionReconciliation(id, user);
+  }
+
   @Get('sessions/:id/summary')
   getSessionSummary(@Param('id') id: string) {
     return this.posService.getSessionSummary(id);
