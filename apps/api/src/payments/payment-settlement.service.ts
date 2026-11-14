@@ -2,6 +2,7 @@ import { rentalBalances } from '../rentals/rental-ledger';
 import { Injectable, Logger } from '@nestjs/common';
 import { hasApprovedId } from '../id-verification/id-approval';
 import { freezeSnapshot } from '../rentals/checklist/checklist-core';
+import { requestCancellationRefunds, SYSTEM_REQUESTER } from '../rentals/cancellation';
 import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -355,7 +356,19 @@ export class PaymentSettlementService {
   /** True when the booking is CANCELLED (decided under the money locks); flags REFUND_DUE if money is held. */
   private async flagLateMoneyOnCancelled(rental: any, tenantId: string): Promise<boolean> {
     try {
-      const out = await this.prisma.$transaction((tx: any) => flagRefundDueIfHeld(tx, tenantId, rental.id));
+      const out = await this.prisma.$transaction(async (tx: any) => {
+        const flagged = await flagRefundDueIfHeld(tx, tenantId, rental.id);
+        // Cancellation workflow: money received on a CANCELLED booking also
+        // becomes a full refund REQUEST (only the not-yet-requested part).
+        // Same transaction, same locks (advisory locks re-enter in a session).
+        const created = flagged.cancelled
+          ? await requestCancellationRefunds(tx, tenantId, rental.id, SYSTEM_REQUESTER.LATE_PAYMENT, rental.cancellationReason ?? 'LATE_PAYMENT')
+          : [];
+        return { ...flagged, created };
+      });
+      if (out.created.length) {
+        this.logger.warn(`Rental ${rental.rentalNumber}: late payment on a cancelled booking -> refund request(s) ${out.created.map((c: any) => `${c.component} ${c.amount}`).join(', ')}`);
+      }
       if (out.cancelled && out.held > 0) {
         this.logger.warn(`REVIEW: rental ${rental.rentalNumber} is CANCELLED but holds ${out.held} TZS of payments — refund review (REFUND_DUE).`);
       }

@@ -142,7 +142,7 @@ export class RentalsController {
     @Body() dto: UpdateRentalStatusDto,
     @CurrentUser() user: any,
   ) {
-    return this.rentalsService.updateStatus(id, dto.status, dto.expectedStatus, user, dto.returnedAt);
+    return this.rentalsService.updateStatus(id, dto.status, dto.expectedStatus, user, dto.returnedAt, { reason: dto.cancellationReason, note: dto.cancellationNote });
   }
 
   @UseGuards(AdminGuard, PermissionGuard)

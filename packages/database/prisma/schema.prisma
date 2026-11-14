@@ -955,6 +955,13 @@ model RentalOrder {
   notes            String?
   isReadyForPickup Boolean  @default(false)
 
+  // Cancellation (round 25C F): why, by whom, when. The money is handled
+  // separately as CANCELLATION refund requests (rentals/cancellation.ts).
+  cancellationReason String? // CUSTOMER_REQUEST | SHOP | PAYMENT_EXPIRED | ID_FAILED | DUPLICATE | NO_SHOW | OTHER | UNSPECIFIED
+  cancellationNote   String?
+  cancelledAt        DateTime?
+  cancelledById      String? // admin id; null = the hold-expiry job
+
   // Unconfirmed-booking deadline (rentals/rental-hold.ts). holdState says why
   // the booking is held; holdExpiresAt is the explicit deadline (null = the
   // clock is paused for staff ID review, or no down payment is due). Only

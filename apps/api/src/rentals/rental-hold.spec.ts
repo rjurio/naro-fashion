@@ -224,7 +224,8 @@ describe('SchedulerService.handleExpiredRentalHolds (expiry job)', () => {
         findMany: jest.fn(async () => opts.inflight ?? []),
         aggregate: jest.fn(async ({ where }: any) => ({ _sum: { amount: where.status === 'COMPLETED' ? net : 0 } })),
       },
-      customerIDDocument: { findMany: jest.fn(async () => []) },
+      customerIDDocument: { findMany: jest.fn(async () => []), findFirst: jest.fn(async () => null) },
+      refundRequest: { findMany: jest.fn(async () => []), create: jest.fn(async ({ data }: any) => ({ id: 'rq1', ...data })) },
     };
     const prisma: any = {
       rentalOrder: {
@@ -588,9 +589,17 @@ describe('staff actions: extend a hold, cancel with money held (REFUND_DUE liabi
     const tx: any = {
       $executeRaw: jest.fn(),
       customerIDDocument: { findFirst: jest.fn(async () => (opts.approved === false ? null : { id: 'd1' })) },
-      rentalOrder: { updateMany: jest.fn(async () => ({ count: opts.cas ?? 1 })) },
-      // round 25D E: the cancellation reads the money held inside its transaction
-      payment: { aggregate: jest.fn(async ({ where }: any) => ({ _sum: { amount: where.status === 'COMPLETED' ? opts.net ?? 0 : 0 } })) },
+      // Round 25C F: cancelling runs in a transaction that also raises the refund requests.
+      rentalOrder: {
+        updateMany: jest.fn(async () => ({ count: opts.cas ?? 1 })),
+        findFirst: jest.fn(async () => ({ ...rental, status: 'CANCELLED', totalRentalPrice: 1000, damageDeposit: 0, downPaymentAmount: 250 })),
+      },
+      payment: {
+        findMany: jest.fn(async () => (opts.net ? [{ amount: opts.net, status: 'COMPLETED', component: 'RENTAL_FEE' }] : [])),
+        // R1 (#37): the cancellation reads the money held under its locks
+        aggregate: jest.fn(async ({ where }: any) => ({ _sum: { amount: where.status === 'COMPLETED' ? opts.net ?? 0 : 0 } })),
+      },
+      refundRequest: { findMany: jest.fn(async () => []), create: jest.fn(async ({ data }: any) => ({ id: 'rq1', ...data })) },
     };
     const prisma: any = {
       rentalOrder: { findFirst: jest.fn(async () => rental), updateMany: jest.fn(async () => ({ count: opts.cas ?? 1 })) },
@@ -623,16 +632,18 @@ describe('staff actions: extend a hold, cancel with money held (REFUND_DUE liabi
     await expect(make(base, { cas: 0 }).svc.extendHold('r1', { until: inDays(1), note: 'x' })).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('cancelling a booking that holds money flags it REFUND_DUE (audited); without money it is a plain cancel', async () => {
+  it('cancelling a booking that holds money flags it REFUND_DUE (audited) and raises a full refund REQUEST in the same transaction; without money it is a plain cancel', async () => {
     const withMoney = make({ ...base, status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT' }, { net: 50 });
-    await withMoney.svc.updateStatus('r1', 'CANCELLED');
-    // round 25D E: decided and written inside one transaction, under the booking's money locks
-    expect(withMoney.tx.$executeRaw).toHaveBeenCalledTimes(2);
-    expect(withMoney.tx.rentalOrder.updateMany.mock.calls[0][0].data).toMatchObject({ status: 'CANCELLED', holdState: 'REFUND_DUE', holdExpiresAt: null });
-    expect(withMoney.audit.log).toHaveBeenCalledWith('UPDATE_STATUS', 'Rental', 'r1', expect.objectContaining({ to: 'CANCELLED', holdState: 'REFUND_DUE' }));
+    await withMoney.svc.updateStatus('r1', 'CANCELLED', undefined, { id: 'staff1' }, undefined, { reason: 'CUSTOMER_REQUEST', note: 'wedding postponed' });
+    expect(withMoney.tx.rentalOrder.updateMany.mock.calls[0][0].data).toMatchObject({
+      status: 'CANCELLED', holdState: 'REFUND_DUE', holdExpiresAt: null, cancellationReason: 'CUSTOMER_REQUEST', cancellationNote: 'wedding postponed', cancelledById: 'staff1',
+    });
+    expect(withMoney.tx.refundRequest.create.mock.calls[0][0].data).toMatchObject({ kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 50, retainedAmount: 0, requestedById: 'staff1' });
+    expect(withMoney.audit.log).toHaveBeenCalledWith('UPDATE_STATUS', 'Rental', 'r1', expect.objectContaining({ to: 'CANCELLED', holdState: 'REFUND_DUE', cancellationReason: 'CUSTOMER_REQUEST' }));
     const noMoney = make({ ...base, status: 'ID_VERIFIED', holdState: 'AWAITING_DOWN_PAYMENT' }, { net: 0 });
     await noMoney.svc.updateStatus('r1', 'CANCELLED');
-    expect(noMoney.tx.rentalOrder.updateMany.mock.calls[0][0].data).toEqual({ status: 'CANCELLED' });
+    expect(noMoney.tx.rentalOrder.updateMany.mock.calls[0][0].data).toMatchObject({ status: 'CANCELLED', cancellationReason: 'UNSPECIFIED', cancelledById: null });
+    expect(noMoney.tx.refundRequest.create).not.toHaveBeenCalled();
   });
 
   it('routes: extend needs rentals:update-status', () => {
@@ -777,7 +788,8 @@ describe('round 25D E (R1): REFUND_DUE is decided under the money locks, from a 
     jest.spyOn(svc, 'sumCompleted').mockResolvedValue(50);
     jest.spyOn((svc as any).logger, 'warn').mockImplementation(() => undefined);
     await svc.updateRentalPaymentStatus('r1', 't1');
-    expect(prisma.$executeRaw).toHaveBeenCalledTimes(2);
+    // payment:rental + refund:rental (R1), + the request helper's re-entrant refund lock (cancellation workflow)
+    expect(prisma.$executeRaw.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(prisma.rentalOrder.updateMany).toHaveBeenCalledTimes(1);
     expect(prisma.rentalOrder.updateMany.mock.calls[0][0].data).toEqual({ holdState: 'REFUND_DUE', holdExpiresAt: null });
   });
@@ -797,9 +809,10 @@ describe('a payment completing on a booking the expiry job already released', ()
         findMany: jest.fn(async () => [{ amount: 250 }]),
       },
       customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'd1' })) },
+      refundRequest: { findMany: jest.fn(async () => []), create: jest.fn() },
       $executeRaw: jest.fn(),
     };
-    prisma.$transaction = jest.fn(async (cb: any) => cb(prisma));
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     const svc = new PaymentSettlementService(prisma);
     jest.spyOn(svc, 'sumCompleted').mockResolvedValue(250);
     const warn = jest.spyOn((svc as any).logger, 'warn').mockImplementation(() => undefined);
@@ -809,5 +822,36 @@ describe('a payment completing on a booking the expiry job already released', ()
     expect(u.where).toMatchObject({ id: 'r1', tenantId: 't1', status: 'CANCELLED' });
     expect(u.data).toEqual({ holdState: 'REFUND_DUE', holdExpiresAt: null }); // status stays CANCELLED
     expect(warn.mock.calls[0][0]).toMatch(/REVIEW: rental RNT-1 is CANCELLED .*refund review/);
+  });
+
+  it('round 25D E: a cancellation committing concurrently (status read BEFORE the lock is stale) — the check re-reads under the refund lock, requests the new money and never advances the booking', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { PaymentSettlementService } = require('../payments/payment-settlement.service');
+    const base = { id: 'r1', rentalNumber: 'RNT-2', downPaymentAmount: 100, totalRentalPrice: 400, damageDeposit: 200, lateFee: 0, userId: 'u1', tenantId: 't1' };
+    let reads = 0;
+    const prisma: any = {
+      // 1st read (outside the lock): still DOWN_PAYMENT_PAID; afterwards (under the lock): CANCELLED.
+      rentalOrder: { findFirst: jest.fn(async () => ({ ...base, status: reads++ === 0 ? 'DOWN_PAYMENT_PAID' : 'CANCELLED' })), updateMany: jest.fn(async () => ({ count: 1 })) },
+      payment: {
+        findMany: jest.fn(async () => [{ amount: 100, status: 'COMPLETED', component: 'RENTAL_FEE' }, { amount: 50, status: 'COMPLETED', component: null }]),
+        // R1 (#37): the money held is read under the locks
+        aggregate: jest.fn(async ({ where }: any) => ({ _sum: { amount: where?.status === 'REFUNDED' ? 0 : 150 } })),
+      },
+      customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'd1' })) },
+      // The cancellation already requested the 100 it counted; the 50 arrived after its count.
+      refundRequest: { findMany: jest.fn(async () => [{ component: 'RENTAL_FEE', amount: 100, retainedAmount: 0, status: 'REQUESTED' }]), create: jest.fn(async ({ data }: any) => ({ id: 'q2', ...data })) },
+      $executeRaw: jest.fn(),
+    };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
+    const svc = new PaymentSettlementService(prisma);
+    jest.spyOn(svc, 'sumCompleted').mockResolvedValue(150);
+    jest.spyOn((svc as any).logger, 'warn').mockImplementation(() => undefined);
+    await svc.updateRentalPaymentStatus('r1', 't1');
+    expect(prisma.$executeRaw).toHaveBeenCalled(); // the booking's refund lock
+    expect(prisma.refundRequest.create).toHaveBeenCalledTimes(1);
+    expect(prisma.refundRequest.create.mock.calls[0][0].data).toMatchObject({ kind: 'CANCELLATION', component: 'RENTAL_FEE', amount: 50, requestedById: 'SYSTEM:LATE_PAYMENT' });
+    // only the REFUND_DUE flag is written — the booking is never advanced
+    expect(prisma.rentalOrder.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.rentalOrder.updateMany.mock.calls[0][0].data).toEqual({ holdState: 'REFUND_DUE', holdExpiresAt: null });
   });
 });
