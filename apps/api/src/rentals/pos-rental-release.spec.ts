@@ -122,6 +122,30 @@ describe('every walk-in /pos-rentals route is refused first, for every caller', 
     const err = await svc.detail('r1').catch((e: any) => e);
     expect(notReleased(err)).toBe(true);
   });
+
+  it('taking a payment on a booking that is not ONLINE is refused before any payment row is written', async () => {
+    const booking = { id: 'r1', channel: 'POS', status: 'DOWN_PAYMENT_PAID', rentalNumber: 'RNT-1', totalRentalPrice: 400000, downPaymentAmount: 100000, damageDeposit: 200000, lateFee: 0, payments: [], refundRequests: [] };
+    const tx: any = {
+      $executeRaw: jest.fn(async () => 1),
+      rentalOrder: { findFirst: jest.fn(async () => booking) },
+      payment: { create: jest.fn() },
+    };
+    const prisma: any = {
+      posSession: { findFirst: jest.fn(async () => ({ id: 's1' })) },
+      payment: { findFirst: jest.fn(async () => null) },
+      $transaction: jest.fn(async (fn: any) => fn(tx)),
+    };
+    const audit = { log: jest.fn() };
+    const settlement = { updateRentalPaymentStatus: jest.fn() };
+    const svc: any = new (PosRentalsService as any)(prisma, { requireId: 't1' }, audit, {}, {}, settlement);
+    const err = await svc
+      .recordPayment('r1', { component: 'RENTAL_FEE', sessionId: 's1', tenders: [{ method: 'CASH', amount: 1000 }] }, { id: 'a1', role: 'SUPER_ADMIN', isAdmin: true })
+      .catch((e: any) => e);
+    expect(notReleased(err)).toBe(true);
+    expect(tx.payment.create).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+    expect(settlement.updateRentalPaymentStatus).not.toHaveBeenCalled();
+  });
 });
 
 describe('defence in depth: the shared booking path refuses a POS booking', () => {
