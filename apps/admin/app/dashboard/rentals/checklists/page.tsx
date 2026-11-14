@@ -13,6 +13,10 @@ interface ChecklistItem {
   labelSwahili?: string;
   itemType: string;
   sortOrder: number;
+  quantity?: number;
+  isMandatory?: boolean;
+  requiresCondition?: boolean;
+  instructions?: string | null;
 }
 
 interface ChecklistTemplate {
@@ -22,6 +26,9 @@ interface ChecklistTemplate {
   isDefault: boolean;
   isActive: boolean;
   items: ChecklistItem[];
+  productId?: string | null;
+  categoryId?: string | null;
+  version?: number;
   createdAt: string;
   usageCount?: number;
 }
@@ -29,7 +36,14 @@ interface ChecklistTemplate {
 interface FormItem {
   label: string;
   labelSwahili: string;
+  /** DISPATCH = checked at hand-over AND return; RETURN = return only. */
+  itemType: 'DISPATCH' | 'RETURN';
+  quantity: string;
+  isMandatory: boolean;
+  requiresCondition: boolean;
+  instructions: string;
 }
+const newItem = (): FormItem => ({ label: '', labelSwahili: '', itemType: 'DISPATCH', quantity: '1', isMandatory: true, requiresCondition: true, instructions: '' });
 
 interface TemplateForm {
   name: string;
@@ -37,6 +51,10 @@ interface TemplateForm {
   type: 'DISPATCH' | 'RETURN';
   isDefault: boolean;
   items: FormItem[];
+  /** R3: which bookings get this list (most specific wins: product → category → shop default). */
+  scope: 'SHOP' | 'CATEGORY' | 'PRODUCT';
+  productId: string;
+  categoryId: string;
 }
 
 const emptyForm: TemplateForm = {
@@ -44,7 +62,10 @@ const emptyForm: TemplateForm = {
   description: '',
   type: 'DISPATCH',
   isDefault: false,
-  items: [{ label: '', labelSwahili: '' }],
+  items: [newItem()],
+  scope: 'SHOP',
+  productId: '',
+  categoryId: '',
 };
 
 export default function ChecklistsPage() {
@@ -56,9 +77,24 @@ export default function ChecklistsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<TemplateForm>({ ...emptyForm, items: [{ label: '', labelSwahili: '' }] });
+  const [form, setForm] = useState<TemplateForm>({ ...emptyForm, items: [newItem()] });
   const [saving, setSaving] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [products, setProducts] = useState<{ id: string; name: string }[]>([]);
+  const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
+
+  // Scope pickers (loaded once, when the editor opens).
+  const loadScopeOptions = async () => {
+    if (products.length || categories.length) return;
+    try {
+      const [p, c] = await Promise.all([adminApi.getProducts({ limit: '200' }), adminApi.getCategories()]);
+      const list = (p?.data ?? p?.items ?? p ?? []) as any[];
+      setProducts(list.filter((x) => x.availabilityMode !== 'PURCHASE_ONLY').map((x) => ({ id: x.id, name: x.name })));
+      setCategories(((c ?? []) as any[]).flatMap((x) => [x, ...(x.children ?? [])]).map((x) => ({ id: x.id, name: x.name ?? x.nameEn })));
+    } catch {
+      /* pickers stay empty; shop-default templates still work */
+    }
+  };
 
   useEffect(() => {
     const fetchChecklists = async () => {
@@ -102,8 +138,9 @@ export default function ChecklistsPage() {
 
   const openCreate = () => {
     setEditingId(null);
-    setForm({ ...emptyForm, items: [{ label: '', labelSwahili: '' }] });
+    setForm({ ...emptyForm, items: [newItem()] });
     setShowModal(true);
+    loadScopeOptions();
   };
 
   const openEdit = (template: ChecklistTemplate) => {
@@ -114,21 +151,28 @@ export default function ChecklistsPage() {
       type: (template.items?.[0]?.itemType as 'DISPATCH' | 'RETURN') || 'DISPATCH',
       isDefault: template.isDefault,
       items: (template.items || []).length > 0
-        ? template.items.map((i) => ({ label: i.label, labelSwahili: i.labelSwahili || '' }))
-        : [{ label: '', labelSwahili: '' }],
+        ? template.items.map((i) => ({
+          label: i.label, labelSwahili: i.labelSwahili || '', itemType: (i.itemType === 'RETURN' ? 'RETURN' : 'DISPATCH') as FormItem['itemType'],
+          quantity: String(i.quantity ?? 1), isMandatory: i.isMandatory !== false, requiresCondition: i.requiresCondition !== false, instructions: i.instructions || '',
+        }))
+        : [newItem()],
+      scope: template.productId ? 'PRODUCT' : template.categoryId ? 'CATEGORY' : 'SHOP',
+      productId: template.productId || '',
+      categoryId: template.categoryId || '',
     });
     setShowModal(true);
+    loadScopeOptions();
   };
 
   const addItem = () => {
-    setForm((f) => ({ ...f, items: [...f.items, { label: '', labelSwahili: '' }] }));
+    setForm((f) => ({ ...f, items: [...f.items, newItem()] }));
   };
 
   const removeItem = (index: number) => {
     setForm((f) => ({ ...f, items: f.items.filter((_, i) => i !== index) }));
   };
 
-  const updateItem = (index: number, field: keyof FormItem, value: string) => {
+  const updateItem = (index: number, field: keyof FormItem, value: string | boolean) => {
     setForm((f) => ({
       ...f,
       items: f.items.map((item, i) => (i === index ? { ...item, [field]: value } : item)),
@@ -139,18 +183,26 @@ export default function ChecklistsPage() {
     if (!form.name.trim()) { toast.warning('Template name is required'); return; }
     const validItems = form.items.filter((i) => i.label.trim());
     if (validItems.length === 0) { toast.warning('Add at least one checklist item'); return; }
+    if (form.scope === 'PRODUCT' && !form.productId) { toast.warning('Choose the product'); return; }
+    if (form.scope === 'CATEGORY' && !form.categoryId) { toast.warning('Choose the category'); return; }
 
     setSaving(true);
     try {
       const payload = {
         name: form.name.trim(),
         description: form.description.trim() || undefined,
-        isDefault: form.isDefault,
+        isDefault: form.scope === 'SHOP' ? form.isDefault : false,
+        productId: form.scope === 'PRODUCT' ? form.productId : null,
+        categoryId: form.scope === 'CATEGORY' ? form.categoryId : null,
         items: validItems.map((item, index) => ({
           label: item.label.trim(),
           labelSwahili: item.labelSwahili.trim() || undefined,
-          itemType: form.type,
+          itemType: item.itemType,
           sortOrder: index,
+          quantity: Math.max(1, parseInt(item.quantity, 10) || 1),
+          isMandatory: item.isMandatory,
+          requiresCondition: item.requiresCondition,
+          instructions: item.instructions.trim() || undefined,
         })),
       };
 
@@ -185,7 +237,7 @@ export default function ChecklistsPage() {
         <div>
           <h1 className="text-2xl font-bold text-[hsl(var(--foreground))]">Checklist Templates</h1>
           <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">
-            Manage dispatch and return checklists for rental items
+            What staff must check when an item is handed over and when it comes back. Each booking keeps the list it was confirmed with; edits apply to bookings confirmed afterwards.
           </p>
         </div>
         <Button onClick={openCreate}>
@@ -331,7 +383,10 @@ export default function ChecklistsPage() {
                             <span className="text-xs text-[hsl(var(--muted-foreground))] mt-1 w-5 text-right">{idx + 1}.</span>
                             <CheckCircle2 className="w-5 h-5 text-emerald-500 mt-0.5 flex-shrink-0" />
                             <div className="flex-1">
-                              <span className="text-sm text-[hsl(var(--foreground))]">{item.label}</span>
+                              <span className="text-sm text-[hsl(var(--foreground))]">{item.label}{(item.quantity ?? 1) > 1 ? ` × ${item.quantity}` : ''}</span>
+                              {item.isMandatory === false && <span className="ml-2 text-xs rounded bg-[hsl(var(--muted))] px-1">optional</span>}
+                              {item.itemType === 'RETURN' && <span className="ml-2 text-xs rounded bg-purple-100 dark:bg-purple-900/40 px-1">return only</span>}
+                              {item.instructions && <p className="text-xs text-[hsl(var(--muted-foreground))]">{item.instructions}</p>}
                               {item.labelSwahili && (
                                 <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))] italic">
                                   ({item.labelSwahili})
@@ -398,42 +453,37 @@ export default function ChecklistsPage() {
                 />
               </div>
 
-              {/* Type & Default */}
-              <div className="flex flex-col sm:flex-row gap-4">
-                <div className="flex-1">
-                  <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1.5">
-                    Type <span className="text-red-500">*</span>
-                  </label>
-                  <div className="flex gap-2">
-                    {(['DISPATCH', 'RETURN'] as const).map((t) => (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => setForm((f) => ({ ...f, type: t }))}
-                        className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-medium border transition-colors ${
-                          form.type === t
-                            ? t === 'DISPATCH'
-                              ? 'bg-blue-100 border-blue-300 text-blue-800 dark:bg-blue-900/30 dark:border-blue-700 dark:text-blue-400'
-                              : 'bg-purple-100 border-purple-300 text-purple-800 dark:bg-purple-900/30 dark:border-purple-700 dark:text-purple-400'
-                            : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]'
-                        }`}
-                      >
-                        {t === 'DISPATCH' ? 'Dispatch' : 'Return'}
-                      </button>
-                    ))}
-                  </div>
+              {/* Applies to (R3): product → category → shop default */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-[hsl(var(--foreground))]">Applies to <span className="text-red-500">*</span></label>
+                <div className="flex flex-wrap gap-2">
+                  {([['SHOP', 'Shop default'], ['CATEGORY', 'A category'], ['PRODUCT', 'One product']] as const).map(([k, l]) => (
+                    <button key={k} type="button" onClick={() => setForm((f) => ({ ...f, scope: k }))}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium border ${form.scope === k ? 'bg-brand-gold/15 border-brand-gold text-[hsl(var(--foreground))]' : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))]'}`}>{l}</button>
+                  ))}
                 </div>
-                <div className="flex items-end pb-1">
+                {form.scope === 'PRODUCT' && (
+                  <select aria-label="Product" value={form.productId} onChange={(e) => setForm((f) => ({ ...f, productId: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm">
+                    <option value="">Choose a rental product…</option>
+                    {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                )}
+                {form.scope === 'CATEGORY' && (
+                  <select aria-label="Category" value={form.categoryId} onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm">
+                    <option value="">Choose a category…</option>
+                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                )}
+                {form.scope === 'SHOP' && (
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={form.isDefault}
-                      onChange={(e) => setForm((f) => ({ ...f, isDefault: e.target.checked }))}
-                      className="w-4 h-4 rounded border-[hsl(var(--border))] text-brand-gold focus:ring-brand-gold"
-                    />
-                    <span className="text-sm text-[hsl(var(--foreground))]">Set as default</span>
+                    <input type="checkbox" checked={form.isDefault} onChange={(e) => setForm((f) => ({ ...f, isDefault: e.target.checked }))}
+                      className="w-4 h-4 rounded border-[hsl(var(--border))] text-brand-gold focus:ring-brand-gold" />
+                    <span className="text-sm text-[hsl(var(--foreground))]">Use for every rental product without its own or its category&apos;s list</span>
                   </label>
-                </div>
+                )}
+                <p className="text-xs text-[hsl(var(--muted-foreground))]">A product with no list at all can&apos;t be handed over without an approved exception.</p>
               </div>
 
               {/* Checklist Items */}
@@ -477,6 +527,27 @@ export default function ChecklistsPage() {
                           placeholder="Maelezo (Swahili) - optional"
                           className="w-full px-3 py-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))] text-sm focus:outline-none focus:ring-2 focus:ring-brand-gold/50 focus:border-brand-gold"
                         />
+                        <div className="flex flex-wrap items-center gap-3 text-xs">
+                          <select aria-label={`Item ${index + 1} stage`} value={item.itemType} onChange={(e) => updateItem(index, 'itemType', e.target.value)}
+                            className="px-2 py-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
+                            <option value="DISPATCH">Hand-over and return</option>
+                            <option value="RETURN">Return only</option>
+                          </select>
+                          <label className="flex items-center gap-1">Qty
+                            <input aria-label={`Item ${index + 1} quantity`} type="number" min={1} value={item.quantity} onChange={(e) => updateItem(index, 'quantity', e.target.value)}
+                              className="w-14 px-2 py-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))]" />
+                          </label>
+                          <label className="flex items-center gap-1"><input type="checkbox" checked={item.isMandatory} onChange={(e) => updateItem(index, 'isMandatory', e.target.checked)} /> Mandatory</label>
+                          <label className="flex items-center gap-1"><input type="checkbox" checked={item.requiresCondition} onChange={(e) => updateItem(index, 'requiresCondition', e.target.checked)} /> Record condition</label>
+                        </div>
+                        <input
+                          type="text"
+                          aria-label={`Item ${index + 1} instructions`}
+                          value={item.instructions}
+                          onChange={(e) => updateItem(index, 'instructions', e.target.value)}
+                          placeholder="What to check (optional), e.g. hem, zip, beading"
+                          className="w-full px-3 py-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))] text-xs"
+                        />
                       </div>
                       {form.items.length > 1 && (
                         <button
@@ -501,7 +572,7 @@ export default function ChecklistsPage() {
                       if (count > 0) {
                         setForm((f) => ({
                           ...f,
-                          items: [...f.items, ...Array.from({ length: count }, () => ({ label: '', labelSwahili: '' }))],
+                          items: [...f.items, ...Array.from({ length: count }, () => (newItem()))],
                         }));
                       }
                       e.target.value = '';

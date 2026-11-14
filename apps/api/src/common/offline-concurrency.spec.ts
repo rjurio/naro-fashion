@@ -1,3 +1,4 @@
+import { completeChecklistMocks } from '../rentals/checklist/checklist.test-helper';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { validate } from 'class-validator';
@@ -261,6 +262,8 @@ describe('Rentals — expectedStatus', () => {
       },
       // The customer holds an approved National ID (needed to hand over the item).
       customerIDDocument: { findFirst: jest.fn(async () => ({ id: 'doc1' })) },
+      // R3: a complete checklist (the gate has its own tests).
+      ...completeChecklistMocks(() => prisma),
     };
     const svc = new RentalsService(prisma, tenantContext, audit);
     // POS rental MVP (M3): the handover gate (full fee + deposit + address +

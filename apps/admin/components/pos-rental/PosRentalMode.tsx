@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Search, WifiOff } from 'lucide-react';
 import { adminApi } from '@/lib/api';
 import { useToast } from '@/contexts/ToastContext';
+import ChecklistPanel from '@/components/rental-checklist/ChecklistPanel';
 
 /**
  * Walk-in POS rental mode (POS rental MVP, M4). Every action is an online API
@@ -358,6 +359,14 @@ function BookingCard({ rental, sessionId, busy, run, refresh, servicingOnly = fa
             <input key={k} data-testid={`rental-addr-${k}`} value={addr[k]} onChange={(e) => setAddr({ ...addr, [k]: e.target.value })} placeholder={k} className={inputCls} />
           ))}
           <Btn data-testid="rental-addr-save" busy={busy === 'addr'} disabled={!addr.street || !addr.city || !addr.region} onClick={() => run('addr', async () => { await adminApi.posRentalAddAddress(rental.user.id, addr); await refresh(); })}>Save address</Btn>
+        </div>
+      )}
+
+      {/* R3: the mandatory checklist — hand-over is refused until it is complete; the deposit waits for the return inspection. */}
+      {['DOWN_PAYMENT_PAID', 'FULLY_PAID', 'READY_FOR_PICKUP', 'RETURNED', 'INSPECTION'].includes(rental.status) && (
+        <div className="rounded-lg border border-[hsl(var(--border))] p-2" data-testid="pos-checklist">
+          <p className="text-xs font-semibold mb-1">{['RETURNED', 'INSPECTION'].includes(rental.status) ? 'Return inspection' : 'Hand-over checklist'}</p>
+          <ChecklistPanel key={`${rental.id}:${rental.status}`} rentalId={rental.id} compact onChanged={() => refresh()} />
         </div>
       )}
 

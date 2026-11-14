@@ -23,6 +23,7 @@ import { PERMISSIONS_KEY } from '../auth/decorators/requires-permission.decorato
 import { PermissionGuard } from '../auth/guards/permission.guard';
 import { MANAGER_DEFAULT_GRANTS } from '../permissions/permissions.service';
 import { MANAGER_EXCLUDED } from '../roles/system-roles.seeder';
+import { completeChecklistMocks } from './checklist/checklist.test-helper';
 
 const tenant = { requireId: 't1' } as any;
 
@@ -77,7 +78,8 @@ function rentalsFixture(rental: any, opts: { approved: boolean; claim?: number }
     rentalPolicy: { findFirst: jest.fn(async () => null) },
     // cancelling checks whether money is held (REFUND_DUE); none in these scenarios
     payment: { aggregate: jest.fn(async () => ({ _sum: { amount: 0 } })) },
-    $executeRaw: jest.fn(),
+    // R3: closing needs a complete return inspection (tested in checklist specs); also provides $executeRaw.
+    ...completeChecklistMocks(() => prisma),
   };
   // round 25D E: the cancellation's money check + write run in one transaction under the money locks
   prisma.$transaction = jest.fn(async (cb: any) => cb(prisma));
