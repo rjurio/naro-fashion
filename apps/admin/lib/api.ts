@@ -1532,6 +1532,43 @@ class AdminApiClient {
   adjustStock(data: any) {
     return this.post<any>('/inventory/adjust', data);
   }
+  // Round 25F E: independent approvals
+  listInventoryAdjustmentRequests(status?: string) {
+    return this.get<any[]>(`/inventory/adjustment-requests${status ? `?status=${encodeURIComponent(status)}` : ''}`);
+  }
+  approveInventoryAdjustment(id: string, note?: string) {
+    return this.patch<any>(`/inventory/adjustment-requests/${id}/approve`, { note });
+  }
+  rejectInventoryAdjustment(id: string, note?: string) {
+    return this.patch<any>(`/inventory/adjustment-requests/${id}/reject`, { note });
+  }
+  withdrawInventoryAdjustment(id: string) {
+    return this.patch<any>(`/inventory/adjustment-requests/${id}/withdraw`, {});
+  }
+  getInventoryApprovalThresholds() {
+    return this.get<any>('/inventory/approval-thresholds');
+  }
+  requestPaymentReversal(paymentId: string, reason: string) {
+    return this.post<any>(`/pos/payments/${paymentId}/reverse`, { reason });
+  }
+  listPaymentReversalRequests(status?: string) {
+    return this.get<any[]>(`/pos/reversal-requests${status ? `?status=${encodeURIComponent(status)}` : ''}`);
+  }
+  approvePaymentReversal(id: string, note?: string) {
+    return this.patch<any>(`/pos/reversal-requests/${id}/approve`, { note });
+  }
+  rejectPaymentReversal(id: string, note?: string) {
+    return this.patch<any>(`/pos/reversal-requests/${id}/reject`, { note });
+  }
+  withdrawPaymentReversal(id: string) {
+    return this.patch<any>(`/pos/reversal-requests/${id}/withdraw`, {});
+  }
+  listManualConfirmations(filter: 'UNREVIEWED' | 'REVIEWED' | 'ALL' = 'UNREVIEWED') {
+    return this.get<any[]>(`/pos/manual-confirmations?filter=${filter}`);
+  }
+  reviewManualConfirmation(paymentId: string, outcome: 'OK' | 'QUERIED', note?: string) {
+    return this.post<any>(`/pos/manual-confirmations/${paymentId}/review`, { outcome, note });
+  }
 
   // ===== Expense Categories =====
   getExpenseCategories(params?: Record<string, string>) {

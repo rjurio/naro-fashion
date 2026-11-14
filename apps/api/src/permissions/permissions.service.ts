@@ -65,6 +65,8 @@ const PERMISSIONS = [
   // inventory
   { code: 'inventory:view', name: 'View Inventory', module: 'inventory', action: 'view' },
   { code: 'inventory:manage', name: 'Manage Inventory', module: 'inventory', action: 'manage' },
+  // Round 25F E: second person for write-offs / decreasing stock corrections. Never auto-granted.
+  { code: 'inventory:approve', name: 'Approve stock write-offs and decreases', module: 'inventory', action: 'approve' },
   // reports
   { code: 'reports:view', name: 'View Reports', module: 'reports', action: 'view' },
   { code: 'reports:export', name: 'Export Reports', module: 'reports', action: 'export' },

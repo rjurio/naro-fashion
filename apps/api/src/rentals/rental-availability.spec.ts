@@ -90,6 +90,9 @@ function makeDb(opts: FakeOpts = {}) {
     layaway: { findMany: jest.fn(async ({ where }: any) => state.layaways.filter((l) => l.status === where.status)) },
     // National ID (PR #16): the booking reads the customer's approved ID (and, without one, their documents for the hold) inside the transaction.
     customerIDDocument: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    // Round 25F E: no owner threshold set → a write-off becomes an approval request.
+    siteSetting: { findMany: jest.fn(async () => []) },
+    inventoryAdjustmentRequest: { create: jest.fn(async ({ data }: any) => ({ id: 'adj1', status: 'REQUESTED', ...data })) },
   };
 
   const held = new Map<string, Promise<void>>();
@@ -131,8 +134,18 @@ function makeDb(opts: FakeOpts = {}) {
         else otherVariant.stock += data.stock.increment;
         return {};
       }),
+      // PR #42 port: inventory writes are a guarded updateMany (never below 0).
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const cur = where.id === 'v1' ? state.stock : otherVariant.stock;
+        if (typeof where.stock === 'number' && where.stock !== cur) return { count: 0 };
+        if (where.stock?.gte !== undefined && cur < where.stock.gte) return { count: 0 };
+        state.writes += 1;
+        const next = typeof data.stock === 'number' ? data.stock : cur + data.stock.increment;
+        if (where.id === 'v1') state.stock = next; else otherVariant.stock = next;
+        return { count: 1 };
+      }),
     },
-    product: { update: jest.fn(async () => ({})) },
+    product: { update: jest.fn(async () => ({})), updateMany: jest.fn(async () => ({ count: 1 })) },
     inventoryTransaction: {
       ...reads.inventoryTransaction,
       create: jest.fn(async ({ data }: any) => {
@@ -414,7 +427,9 @@ describe('inventory adjustments cannot quietly clear a rental restriction', () =
     const db = makeDb({ stock: 10 });
     db.sell(at(-1));
     await db.inventory.adjustStock({ productId: 'p1', variantId: 'v1', type: 'ADJUSTMENT', quantity: 3 } as any, 'admin-7');
-    await db.inventory.adjustStock({ productId: 'p1', variantId: 'v1', type: 'DAMAGE', quantity: 1 } as any, 'admin-7');
+    // Round 25F E: a write-off needs a reason and (no threshold set) becomes an approval request.
+    const dmg: any = await db.inventory.adjustStock({ productId: 'p1', variantId: 'v1', type: 'DAMAGE', quantity: 1, note: 'stain on the bodice' } as any, 'admin-7');
+    expect(dmg.status).toBe('PENDING_APPROVAL');
     expect(await advertised(db, 30)).toBe(false);
     expect(await bookingOutcome(db, 30)).toBe('SOLD_NO_VERIFIED_RESTOCK');
   });

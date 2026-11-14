@@ -61,6 +61,7 @@ export default function InventoryPage() {
     productId: '',
     variantId: '',
     type: 'RESTOCK',
+    direction: 'INCREASE',
     quantity: '',
     note: '',
   });
@@ -150,13 +151,20 @@ export default function InventoryPage() {
     }
     setSaving(true);
     try {
-      await adminApi.adjustStock({ ...adjustForm, quantity: Number(adjustForm.quantity) });
-      toast.success('Stock adjusted successfully');
+      const { direction, ...rest } = adjustForm;
+      const res: any = await adminApi.adjustStock({
+        ...rest,
+        quantity: Number(adjustForm.quantity),
+        ...(adjustForm.type === 'ADJUSTMENT' ? { direction } : {}),
+      });
+      // Round 25F E: write-offs and decreases above the owner's threshold wait for a second person.
+      if (res?.status === 'PENDING_APPROVAL') toast.success('Sent for approval: another person with inventory approval must confirm it (Approvals page).');
+      else toast.success('Stock adjusted successfully');
       setAdjustModal(false);
-      setAdjustForm({ productId: '', variantId: '', type: 'RESTOCK', quantity: '', note: '' });
+      setAdjustForm({ productId: '', variantId: '', type: 'RESTOCK', direction: 'INCREASE', quantity: '', note: '' });
       loadInventory();
-    } catch {
-      toast.error('Failed to adjust stock');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to adjust stock');
     } finally {
       setSaving(false);
     }
@@ -574,7 +582,7 @@ export default function InventoryPage() {
         isOpen={adjustModal}
         onClose={() => {
           setAdjustModal(false);
-          setAdjustForm({ productId: '', variantId: '', type: 'RESTOCK', quantity: '', note: '' });
+          setAdjustForm({ productId: '', variantId: '', type: 'RESTOCK', direction: 'INCREASE', quantity: '', note: '' });
         }}
         title="Adjust Stock"
         size="md"
@@ -645,6 +653,24 @@ export default function InventoryPage() {
               <option value="DAMAGE">Damage (-)</option>
             </select>
           </FormField>
+          {adjustForm.type === 'ADJUSTMENT' && (
+            <FormField label="Direction" required>
+              <select
+                value={adjustForm.direction}
+                onChange={(e) => setAdjustForm((f) => ({ ...f, direction: e.target.value }))}
+                className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-gold/50"
+                data-testid="adjust-direction"
+              >
+                <option value="INCREASE">Increase (+)</option>
+                <option value="DECREASE">Decrease (-)</option>
+              </select>
+            </FormField>
+          )}
+          {(adjustForm.type === 'DAMAGE' || (adjustForm.type === 'ADJUSTMENT' && adjustForm.direction === 'DECREASE')) && (
+            <p className="text-xs text-muted-foreground" data-testid="decrease-approval-hint">
+              A write-off or decrease needs a reason. Above the shop&apos;s threshold (or always, if none is set) it is sent to a second person for approval.
+            </p>
+          )}
           <FormField label="Quantity" required>
             <input
               type="number"

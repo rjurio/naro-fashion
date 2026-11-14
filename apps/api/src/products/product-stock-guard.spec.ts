@@ -31,7 +31,7 @@ function world(initial: Array<{ id: string; stock: number; sku?: string }>) {
     sizeGuide: { findFirst: jest.fn(async () => ({ id: 'sg1' })) },
     productVariant: {
       findMany: jest.fn(async () => {
-        const rows = [...variants.values()].map((v) => ({ id: v.id, sku: v.sku, stock: v.stock }));
+        const rows = [...variants.values()].map((v) => ({ id: v.id, sku: v.sku, stock: v.stock, isActive: v.isActive }));
         if (midSave) { const f = midSave; midSave = null; f(); }
         return rows;
       }),
@@ -144,13 +144,24 @@ describe('product form never overwrites stock (API-level guard)', () => {
     await w.service.update('p1', { variants: [
       { id: 'v1', name: 'S', price: 100 },
       { name: 'XL', price: 150, stock: 3 },
-    ] } as any, 'owner-id');
+    ] } as any, { id: 'owner-id', isAdmin: true, role: 'SUPER_ADMIN', tenantId: 't1' });
     const created = [...w.variants.values()].find((v) => v.name === 'XL')!;
     expect(created.stock).toBe(3);
     expect(w.ledger).toEqual([expect.objectContaining({
       type: 'ADJUSTMENT', quantityBefore: 0, quantityChange: 3, quantityAfter: 3,
       variantId: created.id, performedBy: 'owner-id', reference: 'product-form:new-variant', tenantId: 't1',
     })]);
+  });
+
+  it('PR #42 port: opening stock of a NEW size without inventory:manage → 403 INVENTORY_PERMISSION_REQUIRED, nothing written', async () => {
+    const w = world([{ id: 'v1', stock: 2 }]);
+    const e: any = await err(w.service.update('p1', { variants: [
+      { id: 'v1', name: 'S', price: 100 },
+      { name: 'XL', price: 150, stock: 3 },
+    ] } as any, 'owner-id'));
+    expect(e.getResponse().code).toBe('INVENTORY_PERMISSION_REQUIRED');
+    expect([...w.variants.values()].find((v) => v.name === 'XL')).toBeUndefined();
+    expect(w.ledger).toHaveLength(0);
   });
 
   it('a new variant without stock (or with junk / negative stock) starts at 0 and writes no ledger row', async () => {
@@ -162,7 +173,8 @@ describe('product form never overwrites stock (API-level guard)', () => {
 
   it('removing a variant that still holds stock disables it instead of deleting it (stock record kept)', async () => {
     const w = world([{ id: 'keep', stock: 1 }, { id: 'withStock', stock: 4 }, { id: 'empty', stock: 0 }]);
-    await w.service.update('p1', { variants: [{ id: 'keep', name: 'S', price: 1 }] } as any);
+    // PR #42 (5efa247): taking an active stocked size out of the form needs inventory:manage (SUPER_ADMIN holds it).
+    await w.service.update('p1', { variants: [{ id: 'keep', name: 'S', price: 1 }] } as any, { id: 'owner', isAdmin: true, role: 'SUPER_ADMIN' } as any);
     expect(w.writes).toContain('variant.disable:withStock');
     expect(w.writes).toContain('variant.delete:empty');
     expect(w.variants.get('withStock')).toMatchObject({ stock: 4, isActive: false });
@@ -182,6 +194,15 @@ describe('product form never overwrites stock (API-level guard)', () => {
     w.variants.get('off')!.isActive = false;
     await w.service.update('p1', { variants: [{ id: 'on', name: 'S', price: 1 }, { id: 'off', name: 'M', price: 1, isActive: true }] } as any);
     expect(w.variants.get('off')).toMatchObject({ isActive: true, stock: 5 });
+    // Taking it out of sale again is an inventory action (PR #42): it needs inventory:manage.
+    await expect(w.service.update('p1', { variants: [{ id: 'on', name: 'S', price: 1 }] } as any)).rejects.toMatchObject({ status: 403 });
+    await w.service.update('p1', { variants: [{ id: 'on', name: 'S', price: 1 }] } as any, { id: 'owner', isAdmin: true, role: 'SUPER_ADMIN' } as any);
+    expect(w.variants.get('off')).toMatchObject({ isActive: false, stock: 5 });
+  });
+
+  it('PR #42 port: leaving out a size that is ALREADY disabled changes nothing, so it needs no inventory permission', async () => {
+    const w = world([{ id: 'on', stock: 2 }, { id: 'off', stock: 5 }]);
+    w.variants.get('off')!.isActive = false;
     await w.service.update('p1', { variants: [{ id: 'on', name: 'S', price: 1 }] } as any);
     expect(w.variants.get('off')).toMatchObject({ isActive: false, stock: 5 });
   });
@@ -196,7 +217,8 @@ describe('product form never overwrites stock (API-level guard)', () => {
 
   it('the authorised path is unchanged: Inventory → adjust still writes stock atomically with a ledger row', () => {
     const inv = readFileSync(join(__dirname, '..', 'inventory', 'inventory.service.ts'), 'utf8');
-    expect(inv).toMatch(/stock: \{ increment: quantityChange \}/);
+    // Round 25F E: a compare-and-swap on the stock read inside the transaction.
+    expect(inv).toMatch(/productVariant\.updateMany\(\{\s*where: \{ id: c\.variantId, tenantId, stock: quantityBefore \}/);
     expect(inv).toMatch(/inventoryTransaction\.create/);
   });
 });

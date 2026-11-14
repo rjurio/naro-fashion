@@ -12,8 +12,9 @@ import { InventoryService } from './inventory.service';
 describe('InventoryService.adjustStock — performedBy attribution', () => {
   function makeService() {
     const txClient = {
-      productVariant: { update: jest.fn().mockResolvedValue({}) },
-      product: { update: jest.fn().mockResolvedValue({}) },
+      // Round 25F E: the stock is read and compare-and-swapped inside the transaction.
+      productVariant: { findFirst: jest.fn().mockResolvedValue({ stock: 10 }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      product: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       inventoryTransaction: {
         create: jest.fn().mockImplementation((args: any) => Promise.resolve(args.data)),
       },
@@ -70,6 +71,6 @@ describe('InventoryService.adjustStock — performedBy attribution', () => {
       undefined,
     );
     expect(txClient.inventoryTransaction.create).toHaveBeenCalledTimes(1);
-    expect(txClient.inventoryTransaction.create.mock.calls[0][0].data.performedBy).toBeUndefined();
+    expect(txClient.inventoryTransaction.create.mock.calls[0][0].data.performedBy).toBeNull();
   });
 });
