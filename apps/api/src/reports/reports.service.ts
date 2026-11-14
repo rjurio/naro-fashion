@@ -64,8 +64,8 @@ export class ReportsService {
       const key = (RENTAL_COMPONENTS as readonly string[]).includes(p.component ?? '') ? (p.component as keyof typeof collected) : 'UNALLOCATED';
       (p.status === 'COMPLETED' ? collected : refunded)[key] += Number(p.amount);
     }
-    const retainedAgg = await this.prisma.rentalRefundRequest.aggregate({
-      where: { tenantId, status: 'PAID', paidAt: { gte: start, lte: end } },
+    const retainedAgg = await this.prisma.refundRequest.aggregate({
+      where: { tenantId, subject: 'RENTAL', status: 'PAID', paidAt: { gte: start, lte: end } },
       _sum: { retainedAmount: true },
     });
     const retained = Number(retainedAgg._sum.retainedAmount ?? 0);
@@ -87,8 +87,8 @@ export class ReportsService {
       depositsHeld += b.held.DEPOSIT;
       if (r.status === 'CANCELLED') heldOnCancelled += b.totalHeld;
     }
-    const approvedAgg = await this.prisma.rentalRefundRequest.aggregate({
-      where: { tenantId, status: 'APPROVED' },
+    const approvedAgg = await this.prisma.refundRequest.aggregate({
+      where: { tenantId, subject: 'RENTAL', status: 'APPROVED' },
       _sum: { amount: true },
     });
     const r2 = (n: number) => Math.round(n * 100) / 100;

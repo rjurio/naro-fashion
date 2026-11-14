@@ -37,6 +37,7 @@ import { InventoryModule } from './inventory/inventory.module';
 import { ReportsModule } from './reports/reports.module';
 import { EventsModule } from './events/events.module';
 import { PosModule } from './pos/pos.module';
+import { RefundsModule } from './refunds/refunds.module';
 import { PromoCodesModule } from './promo-codes/promo-codes.module';
 import { NewsletterModule } from './newsletter/newsletter.module';
 import { SizeGuidesModule } from './size-guides/size-guides.module';
@@ -102,6 +103,7 @@ import { AppThrottlerGuard } from './health/app-throttler.guard';
     ReportsModule,
     EventsModule,
     PosModule,
+    RefundsModule,
     PromoCodesModule,
     NewsletterModule,
     SizeGuidesModule,

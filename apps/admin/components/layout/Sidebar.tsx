@@ -17,6 +17,7 @@ import {
   CalendarClock,
   ClipboardCheck,
   ClipboardList,
+  RotateCcw,
   FileText,
   Zap,
   Gift,
@@ -94,6 +95,7 @@ const navItems: NavItem[] = [
     ],
   },
   { label: 'Orders', href: '/dashboard/orders', icon: ShoppingCart },
+  { label: 'Refunds', href: '/dashboard/refunds', icon: RotateCcw },
   { label: 'Customers', href: '/dashboard/customers', icon: Users },
   {
     label: 'Rentals',

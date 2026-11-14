@@ -144,6 +144,7 @@ function makeService(order: any, opts: { claimCount?: number; session?: any } = 
     order: {
       findFirst: jest.fn().mockResolvedValue(order),
       update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       create: jest.fn().mockResolvedValue({ id: 'new-order' }),
     },
     orderItem: {
@@ -159,6 +160,7 @@ function makeService(order: any, opts: { claimCount?: number; session?: any } = 
     inventoryTransaction: { create: jest.fn().mockResolvedValue({}) },
     payment: { create: jest.fn().mockResolvedValue({}) },
     posExchange: { create: jest.fn().mockImplementation((a: any) => Promise.resolve(a.data)) },
+    refundRequest: { create: jest.fn().mockResolvedValue({ id: 'rr-x' }), findMany: jest.fn().mockResolvedValue([]) },
   };
   const session = opts.session === undefined ? { id: 'sess-1', openingCash: 0 } : opts.session;
   const prisma: any = {
@@ -174,7 +176,7 @@ function makeService(order: any, opts: { claimCount?: number; session?: any } = 
 describe('PosService.refundSale', () => {
   it('refunds a discounted sale at the net amount paid and passes the cap', async () => {
     const { service, tx } = makeService(makeOrder());
-    const res = await service.refundSale('order-1', { refundMethod: 'CASH' } as any, 'cashier');
+    const res = await service.executeSaleRefund('order-1', { refundMethod: 'CASH' } as any, 'cashier', 'rr1');
     expect(res.refundAmount).toBe(24300); // not 30,000 (unitPrice × qty)
     expect(res.isFullRefund).toBe(true);
     const pay = tx.payment.create.mock.calls[0][0].data;
@@ -185,10 +187,10 @@ describe('PosService.refundSale', () => {
 
   it('claims refundedQuantity with an atomic guarded increment inside the tx', async () => {
     const { service, tx } = makeService(makeOrder());
-    await service.refundSale(
+    await service.executeSaleRefund(
       'order-1',
       { refundMethod: 'MPESA', items: [{ orderItemId: 'item-1', quantity: 2 }] } as any,
-      'cashier',
+      'cashier', 'rr1',
     );
     const args = tx.orderItem.updateMany.mock.calls[0][0];
     expect(args.where.refundedQuantity).toEqual({ lte: 1 }); // quantity 3 − 2
@@ -199,10 +201,10 @@ describe('PosService.refundSale', () => {
   it('fails (rolls back) when a concurrent refund already claimed the units', async () => {
     const { service, tx } = makeService(makeOrder(), { claimCount: 0 });
     await expect(
-      service.refundSale(
+      service.executeSaleRefund(
         'order-1',
         { refundMethod: 'MPESA', items: [{ orderItemId: 'item-1', quantity: 1 }] } as any,
-        'cashier',
+        'cashier', 'rr1',
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(tx.payment.create).not.toHaveBeenCalled();
@@ -211,7 +213,7 @@ describe('PosService.refundSale', () => {
   it('rejects a cash refund with no open shift', async () => {
     const { service } = makeService(makeOrder(), { session: null });
     await expect(
-      service.refundSale('order-1', { refundMethod: 'CASH' } as any, 'cashier'),
+      service.executeSaleRefund('order-1', { refundMethod: 'CASH' } as any, 'cashier', 'rr1'),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -220,10 +222,10 @@ describe('PosService.refundSale', () => {
     order.items[0].refundedQuantity = 2;
     const { service } = makeService(order);
     await expect(
-      service.refundSale(
+      service.executeSaleRefund(
         'order-1',
         { refundMethod: 'MPESA', items: [{ orderItemId: 'item-1', quantity: 2 }] } as any,
-        'cashier',
+        'cashier', 'rr1',
       ),
     ).rejects.toThrow(/remaining 1/);
   });
@@ -267,10 +269,12 @@ describe('PosService.createExchange', () => {
     expect(claim.where.refundedQuantity).toEqual({ lte: 2 });
     expect(claim.data.refundedQuantity).toEqual({ increment: 1 });
     expect(ex.returnTotal).toBe(8100);
-    // Customer is owed → REFUNDED payment on the original order, drawer-tagged.
-    const pay = tx.payment.create.mock.calls[0][0].data;
-    expect(pay).toMatchObject({ orderId: 'order-1', status: 'REFUNDED', amount: 8100, method: 'CASH' });
-    expect(pay.gatewayResponse.posSessionId).toBe('sess-1');
+    // R1b: customer is owed → a refund REQUEST on the original order (no money
+    // moves at the till; approval + payout by others), never a REFUNDED row.
+    expect(tx.payment.create).not.toHaveBeenCalled();
+    const req = tx.refundRequest.create.mock.calls[0][0].data;
+    expect(req).toMatchObject({ orderId: 'order-1', subject: 'POS_SALE', kind: 'EXCHANGE_DIFFERENCE', amount: 8100, status: 'REQUESTED', requestedById: 'cashier' });
+    expect(ex.refundRequestId).toBe('rr-x');
   });
 
   it('a concurrent exchange of the same line loses (claim count 0)', async () => {
@@ -282,10 +286,13 @@ describe('PosService.createExchange', () => {
 describe('PosService.closeSession — expected cash', () => {
   it('= opening + net cash in − cash refunded, keyed by the session tag', async () => {
     const session = { id: 'sess-1', openingCash: 10000, tenantId: 't1', notes: null };
+    let written: any = {};
+    let closeWhere: any = null;
     const prisma: any = {
       posSession: {
-        findFirst: jest.fn().mockResolvedValue(session),
-        update: jest.fn().mockImplementation((a: any) => Promise.resolve(a.data)),
+        // 1st read: the open shift; 2nd read: the row after the shop-scoped close.
+        findFirst: jest.fn().mockImplementationOnce(() => Promise.resolve(session)).mockImplementation(() => Promise.resolve({ ...session, ...written })),
+        updateMany: jest.fn().mockImplementation((a: any) => { written = a.data; closeWhere = a.where; return Promise.resolve({ count: 1 }); }),
       },
       payment: {
         aggregate: jest
@@ -298,6 +305,7 @@ describe('PosService.closeSession — expected cash', () => {
     const res: any = await service.closeSession('cashier', { closingCash: 52000 } as any);
     expect(res.expectedCash).toBe(52000);
     expect(res.cashDifference).toBe(0);
+    expect(closeWhere).toEqual({ id: 'sess-1', tenantId: 't1', status: 'OPEN' });
     const [inArgs, outArgs] = prisma.payment.aggregate.mock.calls.map((c: any) => c[0]);
     expect(inArgs.where).toMatchObject({
       tenantId: 't1',
