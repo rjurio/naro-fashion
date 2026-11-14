@@ -17,6 +17,7 @@ import {
 } from '../payments/payment-provider.types';
 import { CreateOrderRefundDto, ORDER_REFUND_METHODS, RequestOrderRefundDto } from './dto/create-order-refund.dto';
 import { OPEN_REFUND_STATUSES, openClaimedAmount, REFUND_KINDS } from '../refunds/refund-rules';
+import { duplicateReference, payerOpenShift } from '../refunds/payout-controls';
 import {
   PARTIALLY_REFUNDED,
   REFUNDABLE_PAYMENT_STATUSES,
@@ -193,11 +194,12 @@ export class OrderRefundsService {
    */
   async executeRefund(orderId: string, dto: CreateOrderRefundDto, user: any, refundRequestId: string) {
     const tenantId = this.tenantContext.requireId;
-    let cashSessionId: string | null = null;
-    if (dto.method === 'CASH') {
-      const session = await this.prisma.posSession.findFirst({ where: { adminUserId: user?.id ?? '', status: 'OPEN', tenantId }, select: { id: true } });
-      if (!session) throw new BadRequestException('A cash payout needs your OPEN POS shift (the cash leaves your drawer).');
-      cashSessionId = session.id;
+    // The payer's own open shift: required for cash (the cash leaves their
+    // drawer); recorded for a non-cash payout too when they have one, so shift
+    // reconciliation attributes it (expected cash counts CASH rows only).
+    const shiftId = user?.id ? await payerOpenShift(this.prisma, tenantId, user.id) : null;
+    if (dto.method === 'CASH' && !shiftId) {
+      throw new BadRequestException('A cash payout needs your OPEN POS shift (the cash leaves your drawer).');
     }
     const performedById: string | undefined = user?.id;
     const performedByName =
@@ -256,7 +258,7 @@ export class OrderRefundsService {
               where: { tenantId, transactionRef: reference },
               select: { id: true },
             });
-            if (clash) throw new ConflictException(`Reference "${reference}" is already used by another payment.`);
+            if (clash) throw duplicateReference(reference);
           }
 
           // Resolve the gateway BEFORE any write so an unsupported provider
@@ -302,10 +304,12 @@ export class OrderRefundsService {
               refundRequestId,
               gatewayResponse: {
                 kind: ORDER_REFUND_KIND,
+                refundRequestId,
                 refundedBy: performedById ?? null,
+                paidByAdminId: performedById ?? null,
                 refundedByName: performedByName,
                 note,
-                ...(cashSessionId ? { posSessionId: cashSessionId } : {}),
+                ...(shiftId ? { posSessionId: shiftId } : {}),
               },
             },
           });
@@ -339,9 +343,12 @@ export class OrderRefundsService {
                 providerTransactionId: gw.refundReference ?? null,
                 gatewayResponse: {
                   kind: ORDER_REFUND_KIND,
+                  refundRequestId,
                   refundedBy: performedById ?? null,
+                  paidByAdminId: performedById ?? null,
                   refundedByName: performedByName,
                   note,
+                  ...(shiftId ? { posSessionId: shiftId } : {}),
                   gateway: gw.rawResponse ?? null,
                 },
               },
@@ -369,13 +376,15 @@ export class OrderRefundsService {
       );
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new ConflictException(`Reference "${reference}" is already used by another payment.`);
+        throw duplicateReference(reference ?? '(none)');
       }
       throw err;
     }
 
     await this.auditService.log('REFUND', 'Order', orderId, {
       orderNumber: result.orderNumber,
+      refundRequestId,
+      posSessionId: shiftId,
       paymentId: result.payment.id,
       amount,
       method: dto.method,

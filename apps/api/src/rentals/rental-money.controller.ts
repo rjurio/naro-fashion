@@ -4,6 +4,7 @@ import { ModuleGuard } from '../auth/guards/module.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { PermissionGuard } from '../auth/guards/permission.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { REFUND_PAYOUT_PERMISSIONS } from '../refunds/payout-permission';
 import { RequiresModule } from '../auth/decorators/requires-module.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import {
@@ -20,7 +21,8 @@ import {
  * Rental money ledger + refund workflow (POS rental MVP, M1). Admin-only.
  *   request  rentals:refund-request
  *   approve / reject  refunds:approve (a different person from the requester)
- *   pay / fail  payments:manage (records the manual payout or its failure)
+ *   pay / fail  refunds:payout or payments:manage (records the manual payout or its
+ *               failure; never the requester, the approver or a deduction decider)
  */
 @UseGuards(JwtAuthGuard, ModuleGuard, AdminGuard, PermissionGuard)
 @RequiresModule('rentals')
@@ -60,7 +62,7 @@ export class RentalMoneyController {
   }
 
   @Get('refund-requests')
-  @RequiresPermission('rentals:refund-request', 'refunds:approve', 'payments:manage')
+  @RequiresPermission('rentals:refund-request', 'refunds:approve', ...REFUND_PAYOUT_PERMISSIONS)
   list(@Query('status') status?: string) {
     return this.money.listRequests(status);
   }
@@ -78,13 +80,13 @@ export class RentalMoneyController {
   }
 
   @Patch('refund-requests/:id/pay')
-  @RequiresPermission('payments:manage')
+  @RequiresPermission(...REFUND_PAYOUT_PERMISSIONS)
   pay(@Param('id') id: string, @Body() dto: PayRentalRefundDto, @CurrentUser() user: any) {
     return this.money.pay(id, dto, user);
   }
 
   @Patch('refund-requests/:id/fail')
-  @RequiresPermission('payments:manage')
+  @RequiresPermission(...REFUND_PAYOUT_PERMISSIONS)
   fail(@Param('id') id: string, @Body() dto: FailRentalRefundDto, @CurrentUser() user: any) {
     return this.money.fail(id, dto, user);
   }

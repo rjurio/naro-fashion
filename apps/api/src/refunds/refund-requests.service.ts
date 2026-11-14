@@ -1,4 +1,5 @@
-import { assertPayerIndependent } from './separation';
+import { assertIndependentlyApproved, assertPayerIndependent } from './separation';
+import { assertReferenceUnused, assertWithinApproved, duplicateReference, payerOpenShift, payoutReference } from './payout-controls';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
@@ -29,14 +30,14 @@ export class ListRefundsQuery {
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
-const normRef = (r?: string | null) => (r && r.trim() ? r.trim().toUpperCase().replace(/\s+/g, '') : null);
 
 /**
  * The ONE refund workflow for every subject (R1b). Rental requests keep their
  * tested service (RentalMoneyService) and are delegated to it; order, POS-sale
  * and layaway requests are handled here with exactly the same rules:
  *  - approve / reject: `refunds:approve`, never the requester (403 SELF_APPROVAL);
- *  - pay: `payments:manage`, never the requester (403 PAYOUT_BY_REQUESTER);
+ *  - pay / fail: `refunds:payout` (payout-only) or `payments:manage`; never the
+ *    requester (403 PAYOUT_BY_REQUESTER) nor the approver (403 PAYOUT_BY_APPROVER);
  *    claimed APPROVED → PAYING (compare-and-swap) so a double click or a
  *    second payer can't pay twice; the payout row is linked one-to-one
  *    (Payment.refundRequestId unique); cash leaves the PAYER's own open shift;
@@ -135,10 +136,8 @@ export class RefundRequestsService {
     const r = await this.get(id);
     if (r.subject === 'RENTAL') {
       // Cash leaves the payer's own open shift (RentalMoneyService checks it belongs to them).
-      const s = dto.method === 'CASH'
-        ? await this.prisma.posSession.findFirst({ where: { adminUserId: actor.id, status: 'OPEN', tenantId: this.tenantId }, select: { id: true } })
-        : null;
-      return this.rentalMoney.pay(id, { method: dto.method, reference: dto.reference, sessionId: s?.id }, actor);
+      const s = dto.method === 'CASH' ? await payerOpenShift(this.prisma, this.tenantId, actor.id) : null;
+      return this.rentalMoney.pay(id, { method: dto.method, reference: dto.reference, sessionId: s ?? undefined }, actor);
     }
     if (r.requestedById === actor.id) {
       await this.audit.log('REFUND_PAYOUT_DENIED', 'RefundRequest', id, { reason: 'PAYOUT_BY_REQUESTER' });
@@ -146,17 +145,26 @@ export class RefundRequestsService {
     }
     // Round 25E D (G2): nor the person who approved it.
     await assertPayerIndependent(r as any, actor.id, this.audit);
-    if (r.status !== 'APPROVED') throw new ConflictException('Only an APPROVED request can be paid. Reload.');
-    const reference = normRef(dto.reference);
+    // Only an independently approved request (approver on record, not the requester).
+    assertIndependentlyApproved(r);
+    const approved = r2(Number(r.amount));
+    // Format checked here (malformed → 400 PAYOUT_REFERENCE_INVALID); a missing
+    // non-cash reference is reported with the other payout problems (PAYOUT_INVALID).
+    const reference = payoutReference(dto.method, dto.reference, 0);
     const problems = payoutProblems({ method: dto.method, reference, originalMethods: await this.originalMethods(r), verificationNote: dto.verificationNote });
     if (problems.length) throw new BadRequestException({ statusCode: 400, code: 'PAYOUT_INVALID', problems, message: `Payout refused: ${problems.join('; ')}.` });
+    await assertReferenceUnused(this.prisma, this.tenantId, reference, id);
+    // The payer's own open shift: required for cash (the cash leaves their
+    // drawer), recorded for non-cash when they have one (shift reconciliation).
+    const shiftId = await payerOpenShift(this.prisma, this.tenantId, actor.id);
+    if (dto.method === 'CASH' && !shiftId) throw new BadRequestException('A cash payout needs your OPEN POS shift (the cash leaves your drawer).');
 
     // Claim: only one payer, only once.
     const claim = await this.prisma.refundRequest.updateMany({ where: { id, tenantId: this.tenantId, status: 'APPROVED' }, data: { status: 'PAYING' } });
-    if (claim.count !== 1) throw new ConflictException('This refund is already being paid or was changed. Reload.');
+    if (claim.count !== 1) throw new ConflictException({ statusCode: 409, code: 'NOT_APPROVED', message: 'This refund is already being paid or was changed. Reload.' });
     try {
       let paymentId: string;
-      let paid = Number(r.amount);
+      let paid = approved;
       if (r.subject === 'ORDER') {
         const out: any = await this.orderRefunds.executeRefund(
           r.orderId!, { amount: paid, method: dto.method, reference: reference ?? undefined, note: r.reason } as any, actor, id,
@@ -164,11 +172,14 @@ export class RefundRequestsService {
         paymentId = out.refund.id;
       } else if (r.kind === REFUND_KINDS.POS_RETURN) {
         const l: any = r.lines ?? {};
+        // The sale return is re-valued at payout; it may never pay out more
+        // than was approved (checked inside the sale's transaction).
         const out = await this.pos.executeSaleRefund(
-          r.orderId!, { items: l.items, refundMethod: dto.method, reason: l.reason ?? r.reason, note: l.note ?? undefined } as any, actor.id, id, reference,
+          r.orderId!, { items: l.items, refundMethod: dto.method, reason: l.reason ?? r.reason, note: l.note ?? undefined } as any, actor.id, id, reference, approved,
         );
         paymentId = out.paymentId;
-        paid = Number(out.refundAmount);
+        paid = r2(Number(out.refundAmount));
+        assertWithinApproved(paid, approved);
         await this.prisma.refundRequest.updateMany({
           where: { id, tenantId: this.tenantId },
           data: {
@@ -180,7 +191,7 @@ export class RefundRequestsService {
           },
         });
       } else {
-        paymentId = await this.moneyOnlyPayout(r, dto.method, reference, dto.verificationNote ?? null, actor.id);
+        paymentId = await this.moneyOnlyPayout(r, dto.method, reference, dto.verificationNote ?? null, actor.id, shiftId);
       }
       await this.prisma.refundRequest.updateMany({
         where: { id, tenantId: this.tenantId, status: 'PAYING' },
@@ -188,27 +199,26 @@ export class RefundRequestsService {
       });
       if (r.layawayId) await this.prisma.layaway.updateMany({ where: { id: r.layawayId, tenantId: this.tenantId }, data: { financialDisposition: 'REFUNDED' } });
       await this.audit.log('REFUND_PAID', 'RefundRequest', id, {
-        subject: r.subject, kind: r.kind, amount: paid, method: dto.method, reference, paymentId, verificationNote: dto.verificationNote ?? null,
+        subject: r.subject, kind: r.kind, amount: paid, approvedAmount: approved, method: dto.method, reference, paymentId,
+        posSessionId: shiftId, requestedById: r.requestedById, approvedById: r.approvedById, paidById: actor.id,
+        verificationNote: dto.verificationNote ?? null,
       });
       return this.get(id);
     } catch (e: any) {
       await this.prisma.refundRequest.updateMany({ where: { id, tenantId: this.tenantId, status: 'PAYING' }, data: { status: 'APPROVED' } });
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        throw new ConflictException('That payout reference is already used. Nothing was paid.');
+        throw duplicateReference(reference ?? '(none)');
       }
       throw e;
     }
   }
 
   /** Exchange differences, layaway cancellations and retries: a linked payout row, nothing else. */
-  private async moneyOnlyPayout(r: any, method: string, reference: string | null, verificationNote: string | null, payerId: string): Promise<string> {
+  private async moneyOnlyPayout(
+    r: any, method: string, reference: string | null, verificationNote: string | null, payerId: string, shiftId: string | null,
+  ): Promise<string> {
     const tenantId = this.tenantId;
-    let sessionId: string | null = null;
-    if (method === 'CASH') {
-      const s = await this.prisma.posSession.findFirst({ where: { adminUserId: payerId, status: 'OPEN', tenantId }, select: { id: true } });
-      if (!s) throw new BadRequestException('A cash payout needs your OPEN POS shift (the cash leaves your drawer).');
-      sessionId = s.id;
-    }
+    if (method === 'CASH' && !shiftId) throw new BadRequestException('A cash payout needs your OPEN POS shift (the cash leaves your drawer).');
     return this.prisma.$transaction(async (tx) => {
       const key = r.orderId ? `refund:order:${r.orderId}` : `refund:layaway:${r.layawayId}`;
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
@@ -219,12 +229,17 @@ export class RefundRequestsService {
       ]);
       const room = r2(Number(inAgg._sum.amount ?? 0) - Number(outAgg._sum.amount ?? 0));
       if (Number(r.amount) > room + 0.001) {
-        throw new ConflictException(`Only ${room} TZS is still held for this ${r.orderId ? 'sale' : 'layaway'}; nothing paid.`);
+        throw new ConflictException({
+          statusCode: 409, code: 'PAYOUT_EXCEEDS_HELD', message: `Only ${room} TZS is still held for this ${r.orderId ? 'sale' : 'layaway'}; nothing paid.`,
+        });
       }
       const row = await tx.payment.create({
         data: {
           tenantId, ...target, amount: Number(r.amount), method, status: 'REFUNDED', transactionRef: reference, refundRequestId: r.id,
-          gatewayResponse: { kind: r.kind, payerId, posSessionId: sessionId, exchangeNumber: r.exchangeNumber ?? null, verificationNote } as any,
+          gatewayResponse: {
+            kind: r.kind, refundRequestId: r.id, payerId, paidByAdminId: payerId, posSessionId: shiftId,
+            exchangeNumber: r.exchangeNumber ?? null, verificationNote,
+          } as any,
         },
       });
       return row.id;
@@ -246,7 +261,10 @@ export class RefundRequestsService {
       if (r.orderId) await tx.order.updateMany({ where: { id: r.orderId, tenantId: this.tenantId }, data: { paymentStatus: 'REFUND_PENDING' } });
       if (r.layawayId) await tx.layaway.updateMany({ where: { id: r.layawayId, tenantId: this.tenantId }, data: { financialDisposition: 'REFUND_FAILED' } });
     });
-    await this.audit.log('REFUND_FAILED', 'RefundRequest', id, { subject: r.subject, kind: r.kind, amount: Number(r.amount), reason: dto.reason });
+    await this.audit.log('REFUND_FAILED', 'RefundRequest', id, {
+      subject: r.subject, kind: r.kind, amount: Number(r.amount), method: r.payoutMethod, reference: r.payoutReference,
+      paymentId: r.payout?.id ?? null, paidById: r.paidById, failedById: actor.id, reason: dto.reason,
+    });
     return this.get(id);
   }
 

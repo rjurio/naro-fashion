@@ -38,7 +38,7 @@ describe('RefundRequestsService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         create: jest.fn(),
       },
-      payment: { findMany: jest.fn().mockResolvedValue([{ method: 'CASH' }]) },
+      payment: { findMany: jest.fn().mockResolvedValue([{ method: 'CASH' }]), findFirst: jest.fn().mockResolvedValue(null) },
       posSession: { findFirst: jest.fn().mockResolvedValue({ id: 'shift-1' }) },
       layaway: { updateMany: jest.fn() },
       ...over,
@@ -50,7 +50,7 @@ describe('RefundRequestsService', () => {
     const s = new RefundRequestsService(prisma, { requireId: 't1' } as any, audit as any, orderRefunds as any, pos as any, rentalMoney as any);
     return { s, prisma, audit, orderRefunds, pos, rentalMoney };
   }
-  const order = { id: 'r1', tenantId: 't1', subject: 'ORDER', kind: 'ORDER_REFUND', orderId: 'o1', layawayId: null, amount: 1000, reason: 'damaged', status: 'APPROVED', requestedById: 'cashier' };
+  const order = { id: 'r1', tenantId: 't1', subject: 'ORDER', kind: 'ORDER_REFUND', orderId: 'o1', layawayId: null, amount: 1000, reason: 'damaged', status: 'APPROVED', requestedById: 'cashier', approvedById: 'manager' };
 
   it('the requester can never approve (403, audited) and never pay out (403, audited)', async () => {
     const a = make({ ...order, status: 'REQUESTED' });
@@ -89,7 +89,7 @@ describe('RefundRequestsService', () => {
   it('pay POS_RETURN: the restock + refund run at payout with the stored lines; the actual amount is recorded', async () => {
     const m = make({ ...order, subject: 'POS_SALE', kind: 'POS_RETURN', lines: { items: [{ orderItemId: 'i1', quantity: 1 }], reason: 'size' } });
     await m.s.pay('r1', { method: 'CASH' }, { id: 'finance' });
-    expect(m.pos.executeSaleRefund).toHaveBeenCalledWith('o1', expect.objectContaining({ items: [{ orderItemId: 'i1', quantity: 1 }], refundMethod: 'CASH' }), 'finance', 'r1', null);
+    expect(m.pos.executeSaleRefund).toHaveBeenCalledWith('o1', expect.objectContaining({ items: [{ orderItemId: 'i1', quantity: 1 }], refundMethod: 'CASH' }), 'finance', 'r1', null, 1000);
     const paidCall = m.prisma.refundRequest.updateMany.mock.calls.find((c: any) => c[0].data?.status === 'PAID');
     expect(paidCall[0].data.amount).toBe(900);
     const disp = m.prisma.refundRequest.updateMany.mock.calls.find((c: any) => c[0].data?.lines);

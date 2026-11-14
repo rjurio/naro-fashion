@@ -161,6 +161,7 @@ function makeService(order: any, opts: { claimCount?: number; session?: any } = 
     payment: { create: jest.fn().mockResolvedValue({}) },
     posExchange: { create: jest.fn().mockImplementation((a: any) => Promise.resolve(a.data)) },
     refundRequest: { create: jest.fn().mockResolvedValue({ id: 'rr-x' }), findMany: jest.fn().mockResolvedValue([]) },
+    $executeRaw: jest.fn().mockResolvedValue(1),
   };
   const session = opts.session === undefined ? { id: 'sess-1', openingCash: 0 } : opts.session;
   const prisma: any = {

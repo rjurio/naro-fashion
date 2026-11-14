@@ -1,7 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
-const PERMISSIONS = [
+export const PERMISSIONS = [
   // products
   { code: 'products:view', name: 'View Products', module: 'products', action: 'view' },
   { code: 'products:create', name: 'Create Products', module: 'products', action: 'create' },
@@ -34,6 +34,11 @@ const PERMISSIONS = [
   { code: 'rentals:release', name: 'Hand Over Rental Items', module: 'rentals', action: 'release' },
   { code: 'rentals:refund-request', name: 'Request Rental Refunds', module: 'rentals', action: 'refund-request' },
   { code: 'refunds:approve', name: 'Approve Refunds (second person)', module: 'payments', action: 'approve-refund' },
+  // Payout-only: record the payout (or payout failure) of a refund someone
+  // else requested and a third person approved. Nothing else: no request,
+  // approval, payment edits, reversals or payment-method settings. Never
+  // auto-granted (MANAGER_EXCLUDED); payments:manage keeps the same payout routes.
+  { code: 'refunds:payout', name: 'Pay Out Approved Refunds (payout only)', module: 'payments', action: 'payout-refund' },
   { code: 'rentals:manage-inventory', name: 'Manage Rental Units', module: 'rentals', action: 'manage-inventory' },
   // R2: the independent reviewer who approves a physical count before a product switches to per-gown availability.
   // R1 rollback safety switch (break-glass; never auto-granted).

@@ -83,6 +83,7 @@ describe('POS refunds after a reversal', () => {
       productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findFirst: jest.fn().mockResolvedValue({ stock: 1 }) },
       inventoryTransaction: { create: jest.fn() },
       payment: { create: jest.fn() },
+      $executeRaw: jest.fn().mockResolvedValue(1),
     };
     const prisma: any = { posSession: { findFirst: jest.fn().mockResolvedValue({ id: 's1' }) }, $transaction: jest.fn((cb: any) => cb(tx)) };
     return { svc: new PosService(prisma, { requireId: T } as any), tx };
