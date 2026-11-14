@@ -94,11 +94,13 @@ describe('rental refund payout: the requester can never pay it out', () => {
     expect(svc.prisma.posSession.findFirst).not.toHaveBeenCalled();
   });
 
-  it('a different person (here the approver) passes the separation check', async () => {
+  it('round 25E D (G2): the APPROVER cannot pay it out either (PAYOUT_BY_APPROVER); a third person passes the separation checks', async () => {
     const svc = money(approved);
-    svc.prisma.posSession.findFirst.mockResolvedValue(null); // stops at the shift check, after the separation check
-    const err: any = await svc.pay('rr1', { method: 'CASH', sessionId: 's1' }, { id: 'owner-1' }).catch((e: any) => e);
-    expect(err?.getResponse?.().code).not.toBe('PAYOUT_BY_REQUESTER');
+    const asApprover: any = await svc.pay('rr1', { method: 'CASH', sessionId: 's1' }, { id: 'owner-1' }).catch((e: any) => e);
+    expect(asApprover?.getResponse?.().code).toBe('PAYOUT_BY_APPROVER');
+    svc.prisma.posSession.findFirst.mockResolvedValue(null); // stops at the shift check, after the separation checks
+    const third: any = await svc.pay('rr1', { method: 'CASH', sessionId: 's1' }, { id: 'finance-3' }).catch((e: any) => e);
+    expect(['PAYOUT_BY_REQUESTER', 'PAYOUT_BY_APPROVER']).not.toContain(third?.getResponse?.().code);
     expect(svc.prisma.posSession.findFirst).toHaveBeenCalled();
   });
 });

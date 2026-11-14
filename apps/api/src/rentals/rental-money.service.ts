@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TenantContext } from '../tenant/tenant.context';
 import { AuditService } from '../audit/audit.service';
 import { claimsOverpayment, overpaymentRefundableNow, refundableNow, rentalBalances, RENTAL_COMPONENTS } from './rental-ledger';
+import { assertNotDeductionDecider, assertPayerIndependent } from '../refunds/separation';
 import { normalizeReference } from '../pos/payment-verification';
 import { assertDepositSettleable, declareGatePassed, lockChecklist } from './checklist/checklist-core';
 
@@ -189,6 +190,8 @@ export class RentalMoneyService {
       await this.audit.log('REFUND_APPROVAL_DENIED', 'RefundRequest', id, { reason: 'SELF_APPROVAL' });
       throw new ForbiddenException({ statusCode: 403, code: 'SELF_APPROVAL', message: 'A refund must be approved by a different person than the one who requested it.' });
     }
+    // Round 25E D (G3): whoever decided the deduction doesn't approve keeping the money.
+    await assertNotDeductionDecider(this.prisma, this.tenantContext.requireId, r, actor.id, 'approve', this.audit);
     if (r.kind === 'DEPOSIT_RETURN') {
       // R3: re-checked at approval (a later return correction can reopen a discrepancy).
       const rental = await this.prisma.rentalOrder.findFirst({ where: { id: r.rentalOrderId, tenantId: this.tenantContext.requireId }, select: { status: true } });
@@ -225,12 +228,15 @@ export class RentalMoneyService {
     const tenantId = this.tenantContext.requireId;
     const req = await this.loadRequest(id);
     // Separation of duties: whoever asked for the refund never hands the
-    // money out. (The approver may pay out: with one owner a three-person
-    // rule would make every payout impossible.)
+    // money out, and (round 25E D, G2) neither does whoever approved it; the
+    // person who decided a deposit deduction doesn't pay out the refund that
+    // keeps it (G3).
     if (req.requestedById === actor.id) {
       await this.audit.log('REFUND_PAYOUT_DENIED', 'RefundRequest', id, { reason: 'PAYOUT_BY_REQUESTER' });
       throw new ForbiddenException({ statusCode: 403, code: 'PAYOUT_BY_REQUESTER', message: 'The person who requested a refund cannot also pay it out.' });
     }
+    await assertPayerIndependent(req as any, actor.id, this.audit);
+    await assertNotDeductionDecider(this.prisma, tenantId, req as any, actor.id, 'pay', this.audit);
     const reference = dto.reference ? normalizeReference(dto.reference) : null;
     if (dto.method !== 'CASH' && Number(req.amount) > 0 && !reference) {
       throw new BadRequestException('Mobile-money and bank payouts need the payout reference (4–64 letters/digits).');
